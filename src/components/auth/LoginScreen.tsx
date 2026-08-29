@@ -13,7 +13,7 @@ import { useERP } from '@/lib/erp/provider'
 export function LoginScreen() {
   const router = useRouter()
   const { currentUser, loading, login } = useERP()
-  const [identifier, setIdentifier] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -31,7 +31,7 @@ export function LoginScreen() {
     setError(null)
 
     try {
-      await login(identifier, password)
+      await login(email, password)
       router.replace('/admin/dashboard')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to log in.')
@@ -89,17 +89,18 @@ export function LoginScreen() {
           <section className="mx-auto w-full max-w-sm">
             <div className="space-y-2">
               <h2 className="text-3xl font-semibold tracking-tight text-foreground">Sign in</h2>
-              <p className="text-sm text-muted-foreground">Use your phone number or login ID with the password set by admin.</p>
+              <p className="text-sm text-muted-foreground">Use the email and password set by admin.</p>
             </div>
 
             <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Login ID or phone</label>
+                <label className="text-sm font-medium text-foreground">Email</label>
                 <Input
-                  value={identifier}
-                  onChange={(event) => setIdentifier(event.target.value)}
-                  placeholder="Login ID or phone"
-                  autoComplete="username"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  type="email"
+                  placeholder="you@company.com"
+                  autoComplete="email"
                   className="h-11 rounded-xl"
                   required
                 />

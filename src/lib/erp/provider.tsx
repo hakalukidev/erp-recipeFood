@@ -8,7 +8,13 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { onValue, ref, set, update } from 'firebase/database'
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  type User as FirebaseUser,
+} from 'firebase/auth'
+import { get, onValue, ref, set, update } from 'firebase/database'
 
 import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
@@ -41,7 +47,7 @@ import {
   hasPermission as hasPermissionCheck,
   toArray,
 } from '@/lib/erp/utils'
-import { database } from '@/lib/firebase/config'
+import { auth, database } from '@/lib/firebase/config'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -52,7 +58,7 @@ type ERPContextValue = {
   users: UserRecord[]
   currentUser: UserRecord | null
   currentPermissions: string[]
-  login: (identifier: string, password: string) => Promise<UserRecord>
+  login: (email: string, password: string) => Promise<UserRecord>
   logout: () => void
   switchUser: (userId: string) => void
   createUser: (input: UserInput) => Promise<void>
@@ -334,8 +340,31 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => getStoredCurrentUserId())
 
+  // Realtime Database rules require `auth != null`, so the app must actually
+  // be signed in with Firebase Auth (via `login`, below) before it can read
+  // any data. Track the Firebase Auth session here...
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null)
+
   useEffect(() => {
+    if (!auth) return
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user)
+    })
+
+    return () => unsubscribe()
+  }, [])
+
+  // ...and only subscribe to `erp` data once someone is actually signed in.
+  useEffect(() => {
+    if (!firebaseUser) {
+      setData(null)
+      setLoading(false)
+      return
+    }
+
     let unsubscribe = () => undefined
+    setLoading(true)
 
     try {
       const db = getDatabaseOrThrow()
@@ -358,7 +387,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     return () => unsubscribe()
-  }, [])
+  }, [firebaseUser])
 
   const users = useMemo(() => {
     return [...toArray(data?.users)].sort((left, right) => left.name.localeCompare(right.name))
@@ -413,25 +442,37 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.orders])
 
-  async function login(identifier: string, password: string) {
-    if (!data) {
-      throw new Error('Authentication data is still loading.')
+  async function login(email: string, password: string) {
+    if (!auth) {
+      throw new Error('Firebase Authentication is not configured.')
     }
 
-    const normalizedIdentifier = normalizeLookup(identifier)
-    const normalizedPhoneIdentifier = normalizePhoneLookup(identifier)
-    const authenticatedUser = users.find((entry) => {
-      const loginIdMatches = normalizeLookup(entry.loginId) === normalizedIdentifier
-      const phoneMatches = normalizePhoneLookup(entry.phone) === normalizedPhoneIdentifier
+    const normalizedEmail = normalizeLookup(email)
 
-      return (loginIdMatches || phoneMatches) && entry.password === password
-    })
+    try {
+      await signInWithEmailAndPassword(auth, normalizedEmail, password)
+    } catch {
+      throw new Error('Invalid email or password.')
+    }
+
+    // Firebase Auth only proves *who* signed in — role/permissions still
+    // live in `erp/users`. Read it directly (rather than relying on the
+    // reactive `users` state, which may not have loaded yet right after
+    // sign-in) so the account can be matched and validated immediately.
+    const db = getDatabaseOrThrow()
+    const usersSnapshot = await get(ref(db, 'erp/users'))
+    const usersRecord = (usersSnapshot.val() as Record<string, UserRecord> | null) ?? {}
+    const authenticatedUser = Object.values(usersRecord).find(
+      (entry) => normalizeLookup(entry.email) === normalizedEmail
+    )
 
     if (!authenticatedUser) {
-      throw new Error('Invalid login ID, phone number, or password.')
+      await signOut(auth)
+      throw new Error('This account is not set up in the system. Contact an admin.')
     }
 
     if (authenticatedUser.status !== 'active') {
+      await signOut(auth)
       throw new Error('This account is inactive.')
     }
 
@@ -444,6 +485,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   function logout() {
     setCurrentUserId(null)
     persistCurrentUserId(null)
+    if (auth) {
+      void signOut(auth)
+    }
   }
 
   async function writeActivity(action: string, module: string, message: string) {
