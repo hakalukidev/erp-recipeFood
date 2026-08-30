@@ -451,7 +451,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     try {
       await signInWithEmailAndPassword(auth, normalizedEmail, password)
-    } catch {
+    } catch (reason) {
+      console.error('[login] Firebase Auth sign-in failed:', reason)
       throw new Error('Invalid email or password.')
     }
 
