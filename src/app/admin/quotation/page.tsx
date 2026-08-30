@@ -33,9 +33,9 @@ type QuotationItem = {
 const COMPANY_PHONE = '+88 01897914480-83'
 const COMPANY_PHONE_TEL = '+8801897914480'
 const COMPANY_ADDRESS = '92, Wise Market, Nawabpur Road, Dhaka-1100'
-const COMPANY_EMAIL = 'info@muazbd.com'
-const COMPANY_WEBSITE = 'www.muazbd.com'
-const COMPANY_FACEBOOK = 'www.facebook.com/muaztechnology'
+const COMPANY_EMAIL = 'info@recipefood.com'
+const COMPANY_WEBSITE = 'www.recipefood.com'
+const COMPANY_FACEBOOK = 'www.facebook.com/recipefood'
 
 const defaultNotes = `1. The price quotation is including:
    * Transportation
@@ -273,7 +273,7 @@ export default function QuotationPage() {
       .map((line) => `<p class="${line.trim().startsWith('*') ? 'note-sub' : 'note-line'}">${escapeHtml(line)}</p>`)
       .join('')
 
-    const logoUrl = `${window.location.origin}/muaz_technology.png`
+    const logoUrl = `${window.location.origin}/recipefood_technology.png`
 
     return `
       <!doctype html>
@@ -323,7 +323,7 @@ export default function QuotationPage() {
                   <div class="header">
                     <div class="brand">
                       <div class="brand-top">
-                        <img src="${escapeHtml(logoUrl)}" alt="Muaz Technology logo" />
+                        <img src="${escapeHtml(logoUrl)}" alt="RecipeFood logo" />
                       </div>
                       <p>Phone : <a href="tel:${COMPANY_PHONE_TEL}">${escapeHtml(COMPANY_PHONE)}</a></p>
                       <p>Address : ${escapeHtml(COMPANY_ADDRESS)}</p>

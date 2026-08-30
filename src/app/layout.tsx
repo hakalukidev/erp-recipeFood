@@ -4,12 +4,12 @@ import { ERPProvider } from '@/lib/erp/provider'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Muaz Technology | ERP System',
+  title: 'RecipeFood | ERP System',
   description: 'Enterprise Resource Planning System',
   icons: {
-    icon: '/muaz_icon.png',
-    shortcut: '/muaz_icon.png',
-    apple: '/muaz_icon.png',
+    icon: '/recipefood_icon.png',
+    shortcut: '/recipefood_icon.png',
+    apple: '/recipefood_icon.png',
   },
 }
 
