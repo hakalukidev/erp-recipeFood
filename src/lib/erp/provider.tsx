@@ -35,6 +35,7 @@ import type {
   RoleRecord,
   SellerInput,
   SellerTransactionInput,
+  SettingsInput,
   SupplierInput,
   SupplierRecord,
   TaskInput,
@@ -101,6 +102,7 @@ type ERPContextValue = {
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
+  saveSettings: (input: SettingsInput) => Promise<void>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -203,6 +205,7 @@ function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
     due: Number(customer.due ?? 0),
     supportStatus: customer.supportStatus ?? 'none',
     supportNote: customer.supportNote || '',
+    isWholesale: customer.isWholesale ?? false,
     createdAt: customer.createdAt || now,
     updatedAt: customer.updatedAt || customer.createdAt || now,
   }
@@ -267,6 +270,7 @@ function normalizeOrderRecord(order: OrderRecord): OrderRecord {
     paymentDueDate: order.paymentDueDate || order.deliveryDate || now,
     dueReference: order.dueReference ?? '',
     overdueNotified: order.overdueNotified ?? false,
+    priceMode: order.priceMode ?? 'retail',
   }
 }
 
@@ -400,6 +404,7 @@ function normalizeCustomerInput(input: CustomerInput) {
     supportStatus: input.supportStatus ?? 'none',
     supportNote: input.supportNote?.trim() ?? '',
     isPremium: input.isPremium ?? false,
+    isWholesale: input.isWholesale ?? false,
     leadSource: input.leadSource ?? 'local-marketing',
     reminderCustomer: input.reminderCustomer ?? false,
     previousBillNumber: input.previousBillNumber?.trim() ?? '',
@@ -910,6 +915,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const normalized = normalizeCustomerInput({
       ...input,
       isPremium: input.isPremium ?? existingCustomer?.isPremium ?? false,
+      isWholesale: input.isWholesale ?? existingCustomer?.isWholesale ?? false,
       leadSource: input.leadSource ?? existingCustomer?.leadSource ?? 'local-marketing',
       reminderCustomer: input.reminderCustomer ?? existingCustomer?.reminderCustomer ?? false,
     })
@@ -1142,6 +1148,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const orderDate = input.orderDate?.trim() || now
     const defaultDueDate = new Date(orderDate)
     defaultDueDate.setDate(defaultDueDate.getDate() + 15)
+    const priceMode = input.priceMode ?? (customer.isWholesale ? 'wholesale' : 'retail')
 
     const updates: Record<string, unknown> = {
       [`orders/${orderId}`]: {
@@ -1153,6 +1160,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         salesPersonName: currentUser.name,
         status: 'pending',
         paymentStatus: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
+        priceMode,
         total,
         subtotal,
         discount,
@@ -1262,12 +1270,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const paid = Math.min(Math.max(input.paid, 0), total)
     const due = total - paid
     const now = new Date().toISOString()
+    const priceMode = input.priceMode ?? (customer.isWholesale ? 'wholesale' : 'retail')
 
     const updates: Record<string, unknown> = {
       [`orders/${orderId}/billNumber`]: input.billNumber?.trim() || order.billNumber,
       [`orders/${orderId}/customerId`]: customer.id,
       [`orders/${orderId}/customerName`]: customer.name,
       [`orders/${orderId}/paymentStatus`]: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
+      [`orders/${orderId}/priceMode`]: priceMode,
       [`orders/${orderId}/total`]: total,
       [`orders/${orderId}/subtotal`]: subtotal,
       [`orders/${orderId}/discount`]: discount,
@@ -1671,6 +1681,38 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  async function saveSettings(input: SettingsInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before changing settings.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'users:edit')) {
+      throw new Error('You do not have permission to change business settings.')
+    }
+
+    const companyName = input.companyName.trim()
+    if (!companyName) {
+      throw new Error('Company name is required.')
+    }
+
+    if (input.returnWindowDays < 0) {
+      throw new Error('Return window cannot be negative.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const settings = {
+      companyName,
+      currency: input.currency.trim() || 'BDT',
+      timezone: input.timezone.trim() || 'Asia/Dhaka',
+      returnWindowDays: input.returnWindowDays,
+      refundPolicy: input.refundPolicy,
+      restockOnReturn: input.restockOnReturn,
+    }
+
+    await set(ref(db, 'erp/settings'), settings)
+    await writeActivity('settings_updated', 'settings', `${currentUser.name} updated business and return policy settings.`)
+  }
+
   async function saveInvestor(input: InvestorInput, investorId?: string) {
     if (!data) return
     const name = input.name.trim()
@@ -1952,6 +1994,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveCourier,
       updateCourierStatus,
       deleteCourier,
+      saveSettings,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
   )

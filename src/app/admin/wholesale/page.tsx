@@ -1,5 +1,5 @@
-import { ManagementScreen } from '@/components/admin/ManagementScreen';
+import { WholesaleScreen } from '@/components/admin/WholesaleScreen'
 
 export default function WholesalePage() {
-  return <ManagementScreen section="Wholesale" />;
+  return <WholesaleScreen />
 }

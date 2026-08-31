@@ -69,6 +69,7 @@ export type CustomerRecord = {
   supportStatus: 'none' | 'needed' | 'in-progress' | 'resolved'
   supportNote: string
   isPremium: boolean
+  isWholesale?: boolean
   leadSource?: 'facebook' | 'local-marketing' | 'visiting-customer'
   reminderCustomer?: boolean
   previousBillNumber?: string
@@ -115,6 +116,8 @@ export type OrderItem = {
   purchasePrice: number
 }
 
+export type PriceMode = 'retail' | 'wholesale'
+
 export type OrderRecord = {
   id: string
   billNumber: string
@@ -124,6 +127,7 @@ export type OrderRecord = {
   salesPersonName: string
   status: OrderStatus
   paymentStatus: PaymentStatus
+  priceMode: PriceMode
   total: number
   subtotal?: number
   discount?: number
@@ -188,10 +192,15 @@ export type ActivityRecord = {
   createdAt: string
 }
 
+export type RefundPolicy = 'cash' | 'store-credit' | 'exchange'
+
 export type SettingsRecord = {
   companyName: string
   currency: string
   timezone: string
+  returnWindowDays: number
+  refundPolicy: RefundPolicy
+  restockOnReturn: boolean
 }
 
 export type ExpenseRecord = {
@@ -322,6 +331,7 @@ export type CustomerInput = {
   supportStatus?: CustomerRecord['supportStatus']
   supportNote?: string
   isPremium?: boolean
+  isWholesale?: boolean
   leadSource?: CustomerRecord['leadSource']
   reminderCustomer?: boolean
   previousBillNumber?: string
@@ -369,6 +379,7 @@ export type OrderInput = {
   orderDate?: string
   paymentDueDate?: string
   dueReference?: OrderRecord['dueReference']
+  priceMode?: PriceMode
 }
 
 export type ExpenseInput = {
@@ -427,6 +438,15 @@ export type TaskInput = {
   priority: TaskPriority
   assigneeId: string
   dueDate: string
+}
+
+export type SettingsInput = {
+  companyName: string
+  currency: string
+  timezone: string
+  returnWindowDays: number
+  refundPolicy: RefundPolicy
+  restockOnReturn: boolean
 }
 
 export type UserInput = {

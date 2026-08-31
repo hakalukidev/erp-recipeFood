@@ -40,6 +40,7 @@ type CustomerFormState = {
   supportNote: string
   leadSource: NonNullable<CustomerRecord['leadSource']>
   reminderCustomer: boolean
+  isWholesale: boolean
   previousBillNumber: string
   previousPurchaseDetails: string
   previousPurchaseAmount: string
@@ -55,6 +56,7 @@ const emptyCustomerForm: CustomerFormState = {
   supportNote: '',
   leadSource: 'facebook',
   reminderCustomer: false,
+  isWholesale: false,
   previousBillNumber: '',
   previousPurchaseDetails: '',
   previousPurchaseAmount: '',
@@ -100,6 +102,7 @@ function formFromCustomer(customer: CustomerRecord): CustomerFormState {
     supportNote: customer.supportNote,
     leadSource: customer.leadSource ?? 'local-marketing',
     reminderCustomer: customer.reminderCustomer ?? false,
+    isWholesale: customer.isWholesale ?? false,
     previousBillNumber: customer.previousBillNumber ?? '',
     previousPurchaseDetails: customer.previousPurchaseDetails ?? '',
     previousPurchaseAmount: customer.previousPurchaseAmount ? String(customer.previousPurchaseAmount) : '',
@@ -245,6 +248,7 @@ export default function CustomersPage() {
       supportNote: customerForm.supportNote,
       leadSource: customerForm.leadSource,
       reminderCustomer: customerForm.reminderCustomer,
+      isWholesale: customerForm.isWholesale,
       previousBillNumber: customerForm.previousBillNumber,
       previousPurchaseDetails: customerForm.previousPurchaseDetails,
       previousPurchaseAmount: Number(customerForm.previousPurchaseAmount) || 0,
@@ -442,6 +446,11 @@ export default function CustomersPage() {
                               {customer.reminderCustomer && !hasOrders ? (
                                 <Badge className="bg-sky-500/15 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300">
                                   Reminder
+                                </Badge>
+                              ) : null}
+                              {customer.isWholesale ? (
+                                <Badge className="bg-violet-500/15 text-violet-700 hover:bg-violet-500/15 dark:text-violet-300">
+                                  Wholesale
                                 </Badge>
                               ) : null}
                             </div>
@@ -645,6 +654,26 @@ export default function CustomersPage() {
                     </span>
                     Add as reminder customer
                   </button>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Pricing</p>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerForm((current) => ({ ...current, isWholesale: !current.isWholesale }))}
+                    className={cn(
+                      'flex h-10 w-full items-center rounded-md border px-3 text-left text-sm transition-colors',
+                      customerForm.isWholesale ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background'
+                    )}
+                    aria-pressed={customerForm.isWholesale}
+                  >
+                    <span className={cn('mr-2 flex h-4 w-4 items-center justify-center rounded border', customerForm.isWholesale && 'border-primary bg-primary text-primary-foreground')}>
+                      {customerForm.isWholesale ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                    Wholesale customer
+                  </button>
+                  <p className="text-xs text-muted-foreground">
+                    New sales for this customer default to each product&apos;s wholesale price.
+                  </p>
                 </div>
               </div>
             </div>

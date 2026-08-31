@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation'
+import { TaskBoardScreen } from '@/components/admin/TaskBoardScreen'
 
 export default function AdminTasksPage() {
-  redirect('/admin/sales')
+  return <TaskBoardScreen />
 }

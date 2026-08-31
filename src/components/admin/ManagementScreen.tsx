@@ -10,11 +10,8 @@ import {
   EyeOutlined,
   FileTextOutlined,
   PlusOutlined,
-  ProductOutlined,
   SearchOutlined,
   SettingOutlined,
-  ShopOutlined,
-  ShoppingCartOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { Button, Card, Col, Input, Progress, Row, Select, Space, Table, Tag, Typography } from 'antd';
@@ -34,14 +31,9 @@ const { Title, Text } = Typography;
 
 type Section =
   | 'Admins'
-  | 'Analytics'
   | 'Accounts'
-  | 'Store'
-  | 'Orders'
-  | 'Wholesale'
   | 'Pages'
-  | 'Settings'
-  | 'User Order';
+  | 'Settings';
 
 type RowData = {
   key: string;
@@ -74,19 +66,6 @@ const configs: Record<Section, {
       { key: '3', name: 'Shuvo', type: 'Support', status: 'Inactive', amount: 'Orders', updated: 'Jun 30' },
     ],
   },
-  Analytics: {
-    title: 'Analytics Overview',
-    description: 'Track orders, revenue, conversion and operational performance.',
-    action: 'Export Analytics',
-    icon: <BarChartOutlined />,
-    tableTitle: 'Analytics Summary',
-    chartTitle: 'Performance Trend',
-    rows: [
-      { key: '1', name: 'Website Visitors', type: 'Traffic', status: 'Growing', amount: '12,450', updated: 'Live' },
-      { key: '2', name: 'Order Conversion', type: 'Sales', status: 'Stable', amount: '8.4%', updated: 'Today' },
-      { key: '3', name: 'Campaign ROI', type: 'Marketing', status: 'Healthy', amount: '3.2x', updated: 'Today' },
-    ],
-  },
   Accounts: {
     title: 'Accounts',
     description: 'Monitor payments, expenses, balances and account entries.',
@@ -98,45 +77,6 @@ const configs: Record<Section, {
       { key: '1', name: 'Account Balance', type: 'Balance', status: 'Open', amount: '500000 TK', updated: 'Today' },
       { key: '2', name: 'Office Cost', type: 'Expense', status: 'Reviewed', amount: '0 TK', updated: 'Today' },
       { key: '3', name: 'Courier Payment', type: 'Payment', status: 'Pending', amount: '0 TK', updated: 'Today' },
-    ],
-  },
-  Store: {
-    title: 'Store Management',
-    description: 'Manage categories, products, purchases, returns and inventory.',
-    action: 'Add Product',
-    icon: <ShopOutlined />,
-    tableTitle: 'Store Items',
-    chartTitle: 'Store Stock Trend',
-    rows: [
-      { key: '1', name: "Men's Jacket", type: 'Category', status: 'Active', amount: '257 pcs', updated: 'Today' },
-      { key: '2', name: 'Punjabi', type: 'Category', status: 'Active', amount: '120 pcs', updated: 'Today' },
-      { key: '3', name: 'Tracksuit', type: 'Category', status: 'Low Stock', amount: '0 pcs', updated: 'Today' },
-    ],
-  },
-  Orders: {
-    title: 'Orders',
-    description: 'Process customer orders, shipment status and delivery updates.',
-    action: 'Create Order',
-    icon: <ShoppingCartOutlined />,
-    tableTitle: 'Order List',
-    chartTitle: 'Order Flow',
-    rows: [
-      { key: '1', name: 'ORD-1001', type: 'Online', status: 'Pending', amount: '2,500 TK', updated: 'Today' },
-      { key: '2', name: 'ORD-1002', type: 'Store', status: 'Ready', amount: '1,200 TK', updated: 'Today' },
-      { key: '3', name: 'ORD-1003', type: 'Courier', status: 'Shipped', amount: '3,900 TK', updated: 'Yesterday' },
-    ],
-  },
-  Wholesale: {
-    title: 'Wholesale',
-    description: 'Manage wholesale customers, bulk orders and business payments.',
-    action: 'New Wholesale',
-    icon: <ProductOutlined />,
-    tableTitle: 'Wholesale Orders',
-    chartTitle: 'Wholesale Payment Trend',
-    rows: [
-      { key: '1', name: 'Dhaka Retail Hub', type: 'Bulk Order', status: 'Active', amount: '120000 TK', updated: 'Today' },
-      { key: '2', name: 'Chittagong Partner', type: 'Dealer', status: 'Pending', amount: '85000 TK', updated: 'Jun 30' },
-      { key: '3', name: 'Sylhet Zone', type: 'Wholesale', status: 'Completed', amount: '65000 TK', updated: 'Jun 28' },
     ],
   },
   Pages: {
@@ -163,19 +103,6 @@ const configs: Record<Section, {
       { key: '1', name: 'Business Profile', type: 'General', status: 'Configured', amount: 'RecipeFood', updated: 'Today' },
       { key: '2', name: 'Notification Rules', type: 'System', status: 'Active', amount: '8 Rules', updated: 'Today' },
       { key: '3', name: 'User Access', type: 'Security', status: 'Reviewed', amount: '3 Roles', updated: 'Yesterday' },
-    ],
-  },
-  'User Order': {
-    title: 'User Order',
-    description: 'View and manage user-wise orders, statuses and recent activity.',
-    action: 'New User Order',
-    icon: <ShoppingCartOutlined />,
-    tableTitle: 'User Orders',
-    chartTitle: 'User Order Trend',
-    rows: [
-      { key: '1', name: 'Rahat', type: 'Customer', status: 'Pending', amount: '0 Orders', updated: 'Today' },
-      { key: '2', name: 'Ritu', type: 'Customer', status: 'Ready', amount: '0 Orders', updated: 'Today' },
-      { key: '3', name: 'Shuvo', type: 'Customer', status: 'Completed', amount: '0 Orders', updated: 'Today' },
     ],
   },
 };
@@ -219,7 +146,7 @@ export function ManagementScreen({ section }: { section: Section }) {
   ];
 
   return (
-    <AdminShell active={section === 'User Order' ? 'Orders' : section}>
+    <AdminShell active={section}>
       <section className="page-head management-head">
         <div>
           <Title level={3}>{config.title}</Title>

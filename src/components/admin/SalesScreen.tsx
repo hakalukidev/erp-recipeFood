@@ -207,6 +207,7 @@ export function SalesScreen() {
       deliveryDate: orderForm.deliveryDate,
       paymentDueDate: orderForm.paymentDueDate,
       dueReference: orderForm.dueReference,
+      priceMode: (selectedCustomer?.isWholesale ? 'wholesale' : 'retail') as OrderRecord['priceMode'],
     }
 
     try {
@@ -620,7 +621,14 @@ export function SalesScreen() {
                 <TableBody>
                   {filteredOrders.map((order) => (
                     <TableRow key={order.id} className={cn(order.due > 0 ? 'bg-rose-500/5 dark:bg-rose-500/10' : '')}>
-                      <TableCell className="font-medium">{order.billNumber}</TableCell>
+                      <TableCell className="font-medium">
+                        {order.billNumber}
+                        {order.priceMode === 'wholesale' ? (
+                          <Badge variant="outline" className="ml-2 rounded-full border-violet-200 bg-violet-500/10 text-[10px] text-violet-700 dark:border-violet-900 dark:text-violet-300">
+                            Wholesale
+                          </Badge>
+                        ) : null}
+                      </TableCell>
                       <TableCell>
                         <p className="font-semibold">{order.customerName}</p>
                       </TableCell>
@@ -729,6 +737,11 @@ export function SalesScreen() {
                   }}
                   createNewLabel="Create customer"
                 />
+                {selectedCustomer?.isWholesale ? (
+                  <Badge variant="outline" className="rounded-full border-violet-200 bg-violet-500/10 text-violet-700 dark:border-violet-900 dark:text-violet-300">
+                    Wholesale customer — product prices default to wholesale price
+                  </Badge>
+                ) : null}
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -763,12 +776,19 @@ export function SalesScreen() {
                         <Combobox
                           options={productOptions}
                           value={item.productId}
-                          onChange={(value) => setOrderForm((current) => ({
-                            ...current,
-                            items: current.items.map((entry, itemIndex) => itemIndex === index
-                              ? { ...entry, productId: value, unitPrice: String(products.find((product) => product.id === value)?.sellingPrice ?? '') }
-                              : entry),
-                          }))}
+                          onChange={(value) => setOrderForm((current) => {
+                            const selectedProduct = products.find((product) => product.id === value)
+                            const unitPrice = selectedCustomer?.isWholesale
+                              ? selectedProduct?.wholesalePrice ?? selectedProduct?.sellingPrice
+                              : selectedProduct?.sellingPrice
+
+                            return {
+                              ...current,
+                              items: current.items.map((entry, itemIndex) => itemIndex === index
+                                ? { ...entry, productId: value, unitPrice: String(unitPrice ?? '') }
+                                : entry),
+                            }
+                          })}
                           placeholder="Select a product"
                           searchPlaceholder="Search products..."
                           onCreateNew={(typedText) => {

@@ -86,7 +86,8 @@
         }
       },
       "roles": {
-        ".read": "auth != null"
+        ".read": "auth != null",
+        ".write": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('users:edit').val() === true"
       },
       "permissions": {
         ".read": "auth != null"
@@ -108,7 +109,8 @@
         ".write": "auth != null"
       },
       "settings": {
-        ".read": "auth != null"
+        ".read": "auth != null",
+        ".write": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('users:edit').val() === true"
       },
       "meta": {
         ".read": "auth != null"
