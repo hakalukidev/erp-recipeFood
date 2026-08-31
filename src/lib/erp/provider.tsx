@@ -15,6 +15,7 @@ import {
   type User as FirebaseUser,
 } from 'firebase/auth'
 import { get, onValue, ref, set, update } from 'firebase/database'
+import toast from 'react-hot-toast'
 
 import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
@@ -25,11 +26,13 @@ import type {
   ERPData,
   ExpenseInput,
   InvestorInput,
+  LoginHistoryRecord,
   OrderInput,
   OrderRecord,
   ProductInput,
   ProductRecord,
   PurchaseInput,
+  RoleRecord,
   SellerInput,
   SellerTransactionInput,
   SupplierInput,
@@ -47,7 +50,13 @@ import {
   hasPermission as hasPermissionCheck,
   toArray,
 } from '@/lib/erp/utils'
-import { auth, database } from '@/lib/firebase/config'
+import {
+  auth,
+  createManagedUser,
+  database,
+  sendUserPasswordReset,
+  SYNTHETIC_EMAIL_DOMAIN,
+} from '@/lib/firebase/config'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -60,10 +69,10 @@ type ERPContextValue = {
   currentPermissions: string[]
   login: (email: string, password: string) => Promise<UserRecord>
   logout: () => void
-  switchUser: (userId: string) => void
   createUser: (input: UserInput) => Promise<void>
   updateUser: (userId: string, input: UserInput) => Promise<void>
   deleteUser: (userId: string) => Promise<void>
+  sendPasswordReset: (email: string) => Promise<void>
   hasPermission: (permission: string) => boolean
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
@@ -96,6 +105,49 @@ type ERPContextValue = {
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
 const CURRENT_USER_STORAGE_KEY = 'ims-current-user'
+const SESSION_EXPIRES_STORAGE_KEY = 'ims-session-expires-at'
+
+// No backend can force-expire a Firebase session, so idle/absolute timeouts
+// are enforced here on the client and simply call the existing `logout()`.
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000
+const IDLE_WARNING_MS = 60 * 1000
+const ABSOLUTE_SESSION_MS = 12 * 60 * 60 * 1000
+const SESSION_CHECK_INTERVAL_MS = 30 * 1000
+
+// Maps role ids from before the Super Admin/MD/Manager/Sales Officer/
+// Accounts rename onto their closest new equivalent, applied automatically
+// the next time an account with a legacy roleId logs in.
+const LEGACY_ROLE_ID_MAP: Record<string, string> = {
+  admin: 'super_admin',
+  store_manager: 'manager',
+  sales_person: 'sales_officer',
+  accountant: 'accounts',
+}
+
+// Every top-level key under `erp/` — each gets its own database-rules path
+// and therefore its own listener (see the data-loading effect below).
+const ERP_TOP_LEVEL_KEYS = [
+  'permissions',
+  'roles',
+  'users',
+  'warehouses',
+  'suppliers',
+  'customers',
+  'products',
+  'orders',
+  'purchases',
+  'tasks',
+  'notifications',
+  'activities',
+  'loginHistory',
+  'expenses',
+  'sellers',
+  'sellerTransactions',
+  'couriers',
+  'investors',
+  'settings',
+  'meta',
+] as const satisfies readonly (keyof ERPData)[]
 
 function normalizeLookup(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
@@ -120,6 +172,24 @@ function mergeRecordMap<T extends { id: string }>(defaults: Record<string, T>, c
   }
 
   return merged
+}
+
+// Guards against a role whose `permissions` was persisted in the old
+// array-of-ids shape (or is missing entirely) before permissions became a
+// `{ [id]: true }` map — coerces it into the current shape in memory.
+function normalizeRoleMap(roles: Record<string, RoleRecord>): Record<string, RoleRecord> {
+  return Object.fromEntries(
+    Object.entries(roles).map(([id, role]) => {
+      if (Array.isArray(role.permissions)) {
+        const permissions = Object.fromEntries(
+          (role.permissions as unknown as string[]).map((permissionId) => [permissionId, true as const])
+        )
+        return [id, { ...role, permissions }]
+      }
+
+      return [id, { ...role, permissions: role.permissions ?? {} }]
+    })
+  )
 }
 
 function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
@@ -211,7 +281,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
 
   return {
     permissions: DEFAULT_ERP_DATA.permissions,
-    roles: mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles),
+    roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
     users: source.users ?? {},
     warehouses: source.warehouses ?? {},
     suppliers: normalizeSupplierMap(source.suppliers),
@@ -222,6 +292,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     tasks: source.tasks ?? {},
     notifications: source.notifications ?? {},
     activities: source.activities ?? {},
+    loginHistory: source.loginHistory ?? {},
     expenses: source.expenses ?? {},
     sellers: source.sellers ?? {},
     sellerTransactions: source.sellerTransactions ?? {},
@@ -257,6 +328,29 @@ function persistCurrentUserId(userId: string | null) {
   }
 
   window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY)
+}
+
+function getStoredSessionExpiresAt() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const raw = window.localStorage.getItem(SESSION_EXPIRES_STORAGE_KEY)
+  const parsed = raw ? Number(raw) : null
+  return parsed && !Number.isNaN(parsed) ? parsed : null
+}
+
+function persistSessionExpiresAt(expiresAt: number | null) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  if (expiresAt) {
+    window.localStorage.setItem(SESSION_EXPIRES_STORAGE_KEY, String(expiresAt))
+    return
+  }
+
+  window.localStorage.removeItem(SESSION_EXPIRES_STORAGE_KEY)
 }
 
 function getDatabaseOrThrow() {
@@ -334,11 +428,25 @@ function normalizeSupplierInput(input: SupplierInput) {
   }
 }
 
+function getInitialCurrentUserId() {
+  const storedExpiresAt = getStoredSessionExpiresAt()
+
+  // A session left open in a closed tab shouldn't silently resume past its
+  // absolute expiry once the app is reopened.
+  if (storedExpiresAt && storedExpiresAt < Date.now()) {
+    persistCurrentUserId(null)
+    persistSessionExpiresAt(null)
+    return null
+  }
+
+  return getStoredCurrentUserId()
+}
+
 export function ERPProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<ERPData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => getStoredCurrentUserId())
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => getInitialCurrentUserId())
 
   // Realtime Database rules require `auth != null`, so the app must actually
   // be signed in with Firebase Auth (via `login`, below) before it can read
@@ -356,6 +464,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // ...and only subscribe to `erp` data once someone is actually signed in.
+  //
+  // This subscribes to each top-level module path individually (rather than
+  // one listener on `erp` as a whole) because database rules are only
+  // granted per module path — Firebase requires an explicit `.read` grant
+  // somewhere between the root and the *exact* path being listened to, and
+  // won't partially satisfy a shallow listener from grants on its children.
+  // A permission-denied on any one slice (e.g. finance, for a role without
+  // `finance:view`) is expected and just leaves that slice empty, not a
+  // failure of the whole workspace.
   useEffect(() => {
     if (!firebaseUser) {
       setData(null)
@@ -363,30 +480,48 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    let unsubscribe = () => undefined
-    setLoading(true)
-
+    let cancelled = false
+    let db
     try {
-      const db = getDatabaseOrThrow()
-      const erpRef = ref(db, 'erp')
-
-      unsubscribe = onValue(
-        erpRef,
-        (snapshot) => {
-          setData(normalizeERPData(snapshot.val() as ERPData | null))
-          setLoading(false)
-        },
-        (reason) => {
-          setError(reason.message)
-          setLoading(false)
-        }
-      )
+      db = getDatabaseOrThrow()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Firebase Realtime Database is unavailable.')
       setLoading(false)
+      return
     }
 
-    return () => unsubscribe()
+    setLoading(true)
+    const raw: Partial<Record<(typeof ERP_TOP_LEVEL_KEYS)[number], unknown>> = {}
+    const loadedKeys = new Set<string>()
+
+    function commit() {
+      if (cancelled) return
+      setData(normalizeERPData(raw as ERPData))
+      if (loadedKeys.size >= ERP_TOP_LEVEL_KEYS.length) {
+        setLoading(false)
+      }
+    }
+
+    const unsubscribes = ERP_TOP_LEVEL_KEYS.map((key) =>
+      onValue(
+        ref(db, `erp/${key}`),
+        (snapshot) => {
+          raw[key] = snapshot.val()
+          loadedKeys.add(key)
+          commit()
+        },
+        () => {
+          raw[key] = null
+          loadedKeys.add(key)
+          commit()
+        }
+      )
+    )
+
+    return () => {
+      cancelled = true
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
+    }
   }, [firebaseUser])
 
   const users = useMemo(() => {
@@ -399,6 +534,56 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   )
 
   const currentPermissions = useMemo(() => getPermissions(data, currentUser), [currentUser, data])
+
+  // Idle timeout + absolute session expiry. There's no backend session to
+  // force-expire here, so this just watches for activity/elapsed time on
+  // the client and calls the same `logout()` a manual click would.
+  useEffect(() => {
+    if (!currentUser || typeof window === 'undefined') {
+      return
+    }
+
+    let lastActivityAt = Date.now()
+    let warned = false
+
+    const registerActivity = () => {
+      lastActivityAt = Date.now()
+      warned = false
+    }
+
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'] as const
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, registerActivity, { passive: true }))
+
+    const intervalId = window.setInterval(() => {
+      const now = Date.now()
+      const sessionExpiresAt = getStoredSessionExpiresAt()
+
+      if (sessionExpiresAt && now >= sessionExpiresAt) {
+        toast('Your session expired. Please log in again.')
+        logout()
+        return
+      }
+
+      const idleFor = now - lastActivityAt
+
+      if (idleFor >= IDLE_TIMEOUT_MS) {
+        toast('You were logged out after being idle.')
+        logout()
+        return
+      }
+
+      if (!warned && idleFor >= IDLE_TIMEOUT_MS - IDLE_WARNING_MS) {
+        warned = true
+        toast('You will be logged out soon due to inactivity.')
+      }
+    }, SESSION_CHECK_INTERVAL_MS)
+
+    return () => {
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, registerActivity))
+      window.clearInterval(intervalId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser])
 
   useEffect(() => {
     if (!data) {
@@ -429,7 +614,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           'Payment overdue',
           `${order.customerName}'s payment of ${order.due} for ${order.billNumber} is past the due date.`,
           'critical',
-          ['admin', 'accountant']
+          ['super_admin', 'accounts']
         )
       }
     }
@@ -449,23 +634,51 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const normalizedEmail = normalizeLookup(email)
 
+    let firebaseUserCredential
     try {
-      await signInWithEmailAndPassword(auth, normalizedEmail, password)
+      firebaseUserCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password)
     } catch (reason) {
       console.error('[login] Firebase Auth sign-in failed:', reason)
       throw new Error('Invalid email or password.')
     }
 
-    // Firebase Auth only proves *who* signed in — role/permissions still
-    // live in `erp/users`. Read it directly (rather than relying on the
-    // reactive `users` state, which may not have loaded yet right after
-    // sign-in) so the account can be matched and validated immediately.
+    const uid = firebaseUserCredential.user.uid
     const db = getDatabaseOrThrow()
-    const usersSnapshot = await get(ref(db, 'erp/users'))
-    const usersRecord = (usersSnapshot.val() as Record<string, UserRecord> | null) ?? {}
-    const authenticatedUser = Object.values(usersRecord).find(
-      (entry) => normalizeLookup(entry.email) === normalizedEmail
-    )
+
+    // User records are keyed by Firebase Auth uid — this is what lets
+    // database rules check "does the caller's own role have permission X"
+    // with a cheap keyed lookup. Try the direct path first.
+    const uidSnapshot = await get(ref(db, `erp/users/${uid}`))
+    let authenticatedUser = uidSnapshot.val() as UserRecord | null
+
+    if (!authenticatedUser) {
+      // Legacy account created before uid-keying — find it by email under
+      // its old random key, then migrate it to the uid-keyed path so this
+      // fallback is only ever needed once per account.
+      const usersSnapshot = await get(ref(db, 'erp/users'))
+      const usersRecord = (usersSnapshot.val() as Record<string, UserRecord> | null) ?? {}
+      const legacyEntry = Object.entries(usersRecord).find(
+        ([, entry]) => normalizeLookup(entry.email) === normalizedEmail
+      )
+
+      if (legacyEntry) {
+        const [legacyId, legacyRecord] = legacyEntry
+        authenticatedUser = {
+          ...legacyRecord,
+          id: uid,
+          roleId: LEGACY_ROLE_ID_MAP[legacyRecord.roleId] ?? legacyRecord.roleId,
+        }
+        delete (authenticatedUser as Partial<UserRecord> & { password?: string }).password
+
+        const updates: Record<string, unknown> = {
+          [`users/${uid}`]: authenticatedUser,
+        }
+        if (legacyId !== uid) {
+          updates[`users/${legacyId}`] = null
+        }
+        await update(ref(db, 'erp'), updates)
+      }
+    }
 
     if (!authenticatedUser) {
       await signOut(auth)
@@ -479,6 +692,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     setCurrentUserId(authenticatedUser.id)
     persistCurrentUserId(authenticatedUser.id)
+    const sessionExpiresAt = Date.now() + ABSOLUTE_SESSION_MS
+    persistSessionExpiresAt(sessionExpiresAt)
+
+    const roleName = DEFAULT_ERP_DATA.roles[authenticatedUser.roleId]?.name ?? authenticatedUser.roleId
+    const loginHistoryId = createId('login')
+    await update(ref(db, 'erp/loginHistory'), {
+      [loginHistoryId]: {
+        id: loginHistoryId,
+        userId: authenticatedUser.id,
+        userName: authenticatedUser.name,
+        roleId: authenticatedUser.roleId,
+        roleName,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        createdAt: new Date().toISOString(),
+      } satisfies LoginHistoryRecord,
+    })
 
     return authenticatedUser
   }
@@ -486,6 +715,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   function logout() {
     setCurrentUserId(null)
     persistCurrentUserId(null)
+    persistSessionExpiresAt(null)
     if (auth) {
       void signOut(auth)
     }
@@ -581,7 +811,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Product added',
         `${product.name} has been added to inventory by ${currentUser?.name ?? 'Admin'}.`,
         'info',
-        ['admin', 'store_manager', 'sales_person']
+        ['super_admin', 'manager', 'sales_officer']
       )
     } else {
       if (existingProduct.stockQty !== product.stockQty) {
@@ -589,14 +819,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           'Stock adjusted',
           `${product.name} stock level was adjusted from ${existingProduct.stockQty} to ${product.stockQty} by ${currentUser?.name ?? 'Admin'}.`,
           'warning',
-          ['admin', 'store_manager']
+          ['super_admin', 'manager']
         )
       } else {
         await writeNotification(
           'Product details updated',
           `${product.name} details were updated by ${currentUser?.name ?? 'Admin'}.`,
           'info',
-          ['admin', 'store_manager']
+          ['super_admin', 'manager']
         )
       }
     }
@@ -606,7 +836,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Low stock alert',
         `${product.name} is already at or below its minimum stock (${product.stockQty}/${product.minStock}).`,
         'warning',
-        ['admin', 'store_manager']
+        ['super_admin', 'manager']
       )
     }
 
@@ -632,7 +862,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Product deleted',
       `${product.name} was deleted from inventory by ${currentUser?.name ?? 'Admin'}.`,
       'warning',
-      ['admin', 'store_manager']
+      ['super_admin', 'manager']
     )
   }
 
@@ -858,7 +1088,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Purchase recorded',
       `Restocked ${product.name} by ${input.quantity} units from ${supplier.name} by ${currentUser?.name ?? 'Admin'}.`,
       'info',
-      ['admin', 'store_manager', 'accountant']
+      ['super_admin', 'manager', 'accounts']
     )
   }
 
@@ -953,7 +1183,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'New sales order',
       `Order ${orderId} created for ${customer.name} by ${currentUser?.name ?? 'Admin'}. Awaiting fulfillment.`,
       'info',
-      ['admin', 'sales_person', 'accountant']
+      ['super_admin', 'sales_officer', 'accounts']
     )
 
     for (const [productId, quantity] of requestedByProduct) {
@@ -964,7 +1194,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Low stock alert',
         `${product.name} needs replenishment after the latest sale (${nextStock}/${product.minStock}).`,
         'warning',
-        ['admin', 'store_manager']
+        ['super_admin', 'manager']
       )
     }
   }
@@ -1071,7 +1301,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Sales order edited',
       `Order ${order.billNumber} was edited by ${currentUser?.name ?? 'Admin'}.`,
       'info',
-      ['admin', 'sales_person', 'accountant']
+      ['super_admin', 'sales_officer', 'accounts']
     )
   }
 
@@ -1118,7 +1348,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Sales order cancelled',
       `Order ${order.billNumber} was cancelled by ${currentUser?.name ?? 'Admin'}. Stock has been returned.`,
       'warning',
-      ['admin', 'sales_person', 'accountant']
+      ['super_admin', 'sales_officer', 'accounts']
     )
   }
 
@@ -1152,7 +1382,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Order status updated',
       `Order ${orderId} status was updated to "${status}" by ${currentUser?.name ?? 'Admin'}.`,
       'info',
-      ['admin', 'sales_person', 'accountant']
+      ['super_admin', 'sales_officer', 'accounts']
     )
 
     if (status === 'shipped') {
@@ -1185,7 +1415,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           'Shipment created',
           `Order ${order.billNumber} was marked shipped — add the courier service to complete the shipment record.`,
           'info',
-          ['admin', 'sales_person']
+          ['super_admin', 'sales_officer']
         )
       }
     }
@@ -1226,7 +1456,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'New task assigned',
       `Task "${input.title}" was assigned to ${assignee.name} by ${currentUser?.name ?? 'Admin'}.`,
       'info',
-      ['admin', assignee.roleId]
+      ['super_admin', assignee.roleId]
     )
   }
 
@@ -1235,8 +1465,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before creating users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can create new users.')
+    if (!hasPermissionCheck(data, currentUser, 'users:create')) {
+      throw new Error('You do not have permission to create new users.')
+    }
+
+    if (!input.password) {
+      throw new Error('A password is required to create a new user.')
     }
 
     const normalizedLoginId = normalizeLookup(input.loginId)
@@ -1256,27 +1490,35 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Selected role does not exist.')
     }
 
+    const email = `${normalizedLoginId}@${SYNTHETIC_EMAIL_DOMAIN}`
+
+    let uid: string
+    try {
+      uid = await createManagedUser(email, input.password)
+    } catch (reason) {
+      console.error('[createUser] Firebase Auth account creation failed:', reason)
+      throw new Error('Unable to create a login for this user. Try a different login ID.')
+    }
+
     const db = getDatabaseOrThrow()
-    const id = createId('user')
     const user: UserRecord = {
-      id,
+      id: uid,
       name: input.name.trim(),
       loginId: normalizedLoginId,
-      email: `${normalizedLoginId}@local`,
+      email,
       phone: normalizedPhone,
-      password: input.password,
       roleId: input.roleId,
       title: input.title.trim(),
       status: 'active',
     }
 
-    await update(ref(db, 'erp/users'), { [id]: user })
-    await writeActivity('user_created', 'admin', `Created user ${user.name} with ${data.roles[user.roleId]?.name ?? user.roleId} access.`)
+    await update(ref(db, 'erp/users'), { [uid]: user })
+    await writeActivity('user_created', 'users', `Created user ${user.name} with ${data.roles[user.roleId]?.name ?? user.roleId} access.`)
     await writeNotification(
       'New user registered',
       `User ${user.name} was registered as ${data?.roles[user.roleId]?.name || user.roleId} by ${currentUser?.name ?? 'Admin'}.`,
       'info',
-      ['admin']
+      ['super_admin']
     )
   }
 
@@ -1285,8 +1527,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before updating users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can update users.')
+    if (!hasPermissionCheck(data, currentUser, 'users:edit')) {
+      throw new Error('You do not have permission to update users.')
     }
 
     const existing = data.users[userId]
@@ -1319,16 +1561,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const updatedUser: UserRecord = {
       ...existing,
       name: input.name.trim(),
+      // loginId is a display/uniqueness field only — the account's actual
+      // Firebase Auth email can't be changed without an Admin SDK, so it
+      // deliberately stays whatever it was set to at creation time.
       loginId: normalizedLoginId,
-      email: `${normalizedLoginId}@local`,
       phone: normalizedPhone,
       roleId: input.roleId,
       title: input.title.trim(),
-      password: input.password ? input.password : existing.password,
     }
 
     await update(ref(db, `erp/users/${userId}`), updatedUser)
-    await writeActivity('user_updated', 'admin', `Updated user ${updatedUser.name}.`)
+    await writeActivity('user_updated', 'users', `Updated user ${updatedUser.name}.`)
   }
 
   async function deleteUser(userId: string) {
@@ -1336,8 +1579,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before deleting users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can delete users.')
+    if (!hasPermissionCheck(data, currentUser, 'users:delete')) {
+      throw new Error('You do not have permission to delete users.')
     }
 
     if (userId === currentUser.id) {
@@ -1353,7 +1596,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await update(ref(db, 'erp'), {
       [`users/${userId}`]: null,
     })
-    await writeActivity('user_deleted', 'admin', `Deleted user ${existing.name}.`)
+    await writeActivity('user_deleted', 'users', `Deleted user ${existing.name}.`)
+  }
+
+  async function sendPasswordReset(email: string) {
+    if (!currentUser) {
+      throw new Error('You need to log in before resetting a password.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'users:edit')) {
+      throw new Error('You do not have permission to reset user passwords.')
+    }
+
+    await sendUserPasswordReset(email)
   }
 
   async function updateTaskStatus(taskId: string, status: TaskRecord['status']) {
@@ -1635,7 +1890,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Courier update',
         `${courier.customerName}'s shipment (${courier.billNumber}) is now ${status.replace('-', ' ')}.`,
         'info',
-        ['admin', 'sales_person', 'accountant']
+        ['super_admin', 'sales_officer', 'accounts']
       )
     }
   }
@@ -1655,11 +1910,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
   }
 
-  function switchUser(userId: string) {
-    setCurrentUserId(userId)
-    persistCurrentUserId(userId)
-  }
-
   const value = useMemo<ERPContextValue>(
     () => ({
       data,
@@ -1670,10 +1920,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       currentPermissions,
       login,
       logout,
-      switchUser,
       createUser,
       updateUser,
       deleteUser,
+      sendPasswordReset,
       hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
       saveProduct,
       deleteProduct,

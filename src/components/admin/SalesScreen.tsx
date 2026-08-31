@@ -508,11 +508,13 @@ export function SalesScreen() {
               <CardDescription>Filter the full order trail, export data, or start a new sale.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" className="rounded-xl" onClick={handleExport}>
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Export data
-              </Button>
-              {hasPermission('manage_orders') ? (
+              {hasPermission('orders:export') ? (
+                <Button variant="outline" className="rounded-xl" onClick={handleExport}>
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Export data
+                </Button>
+              ) : null}
+              {hasPermission('orders:create') ? (
                 <Button
                   className="rounded-xl"
                   onClick={() => {
@@ -634,7 +636,7 @@ export function SalesScreen() {
                       <TableCell>
                         {order.status === 'cancelled' ? (
                           <Badge variant="outline" className="border-rose-500/40 text-rose-600 dark:text-rose-400">Cancelled</Badge>
-                        ) : hasPermission('manage_orders') ? (
+                        ) : hasPermission('orders:approve') ? (
                           <Select value={order.status} onValueChange={(value) => void updateOrderStatus(order.id, value as typeof order.status)}>
                             <SelectTrigger className="w-40">
                               <SelectValue />
@@ -654,12 +656,12 @@ export function SalesScreen() {
                       <TableCell>{formatDate(order.deliveryDate)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          {hasPermission('manage_orders') && order.status === 'pending' ? (
+                          {hasPermission('orders:edit') && order.status === 'pending' ? (
                             <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditOrder(order)} aria-label={`Edit order ${order.billNumber}`}>
                               <PencilLine className="h-4 w-4" />
                             </Button>
                           ) : null}
-                          {hasPermission('manage_orders') && order.status !== 'cancelled' ? (
+                          {hasPermission('orders:approve') && order.status !== 'cancelled' ? (
                             <Button variant="outline" size="icon" className="h-9 w-9 text-rose-600 hover:text-rose-600 dark:text-rose-400" onClick={() => void handleCancelOrder(order)} aria-label={`Cancel order ${order.billNumber}`}>
                               <Ban className="h-4 w-4" />
                             </Button>

@@ -8,7 +8,7 @@ export type RoleRecord = {
   id: string
   name: string
   description: string
-  permissions: string[]
+  permissions: Record<string, true>
 }
 
 export type UserRecord = {
@@ -17,10 +17,19 @@ export type UserRecord = {
   loginId: string
   email: string
   phone: string
-  password: string
   roleId: string
   title: string
   status: 'active' | 'inactive'
+}
+
+export type LoginHistoryRecord = {
+  id: string
+  userId: string
+  userName: string
+  roleId: string
+  roleName: string
+  userAgent: string
+  createdAt: string
 }
 
 export type WarehouseRecord = {
@@ -254,6 +263,7 @@ export type ERPData = {
   tasks: Record<string, TaskRecord>
   notifications: Record<string, NotificationRecord>
   activities: Record<string, ActivityRecord>
+  loginHistory: Record<string, LoginHistoryRecord>
   expenses: Record<string, ExpenseRecord>
   sellers: Record<string, SellerRecord>
   sellerTransactions: Record<string, SellerTransactionRecord>
@@ -423,7 +433,10 @@ export type UserInput = {
   name: string
   loginId: string
   phone: string
-  password: string
+  // Only used (and required) when creating a new user — it seeds the
+  // Firebase Auth account. Updating an existing user never touches their
+  // password; that goes through a password-reset email instead.
+  password?: string
   roleId: string
   title: string
 }

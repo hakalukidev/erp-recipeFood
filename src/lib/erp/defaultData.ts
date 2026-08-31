@@ -1,4 +1,55 @@
-import type { ERPData } from '@/lib/erp/types'
+import type { ERPData, PermissionDefinition } from '@/lib/erp/types'
+
+type ModuleAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export'
+
+const ACTION_LABELS: Record<ModuleAction, string> = {
+  view: 'View',
+  create: 'Create',
+  edit: 'Edit',
+  delete: 'Delete',
+  approve: 'Approve',
+  export: 'Export',
+}
+
+const MODULE_DEFINITIONS: Array<{
+  module: string
+  label: string
+  actions: ModuleAction[]
+}> = [
+  { module: 'dashboard', label: 'Dashboard', actions: ['view'] },
+  { module: 'products', label: 'Inventory', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'orders', label: 'Sales & orders', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
+  { module: 'customers', label: 'Customers', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'suppliers', label: 'Suppliers', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'reports', label: 'Reports', actions: ['view', 'export'] },
+  { module: 'users', label: 'Users & roles', actions: ['view', 'create', 'edit', 'delete'] },
+]
+
+export const ALL_PERMISSION_IDS: string[] = MODULE_DEFINITIONS.flatMap(({ module, actions }) =>
+  actions.map((action) => `${module}:${action}`)
+)
+
+export function toPermissionSet(ids: string[]): Record<string, true> {
+  return Object.fromEntries(ids.map((id) => [id, true as const]))
+}
+
+function buildPermissionDefinitions(): Record<string, PermissionDefinition> {
+  const definitions: Record<string, PermissionDefinition> = {}
+
+  for (const { module, label, actions } of MODULE_DEFINITIONS) {
+    for (const action of actions) {
+      const id = `${module}:${action}`
+      definitions[id] = {
+        id,
+        label: `${ACTION_LABELS[action]} ${label.toLowerCase()}`,
+        description: `${ACTION_LABELS[action]} access to the ${label} module.`,
+      }
+    }
+  }
+
+  return definitions
+}
 
 function isoNow() {
   return new Date().toISOString()
@@ -14,80 +65,79 @@ export function createDefaultERPData(): ERPData {
   const seededAt = isoNow()
 
   return {
-    permissions: {
-      view_dashboard: {
-        id: 'view_dashboard',
-        label: 'View dashboard',
-        description: 'See daily ERP analytics and operational highlights.',
-      },
-      view_products: {
-        id: 'view_products',
-        label: 'View inventory',
-        description: 'Read product, warehouse, and supplier stock information.',
-      },
-      manage_products: {
-        id: 'manage_products',
-        label: 'Manage inventory',
-        description: 'Create products and record warehouse purchases.',
-      },
-      manage_orders: {
-        id: 'manage_orders',
-        label: 'Manage orders',
-        description: 'Create sales orders and update fulfillment state.',
-      },
-      view_reports: {
-        id: 'view_reports',
-        label: 'View reports',
-        description: 'Access sales, stock, and user performance reports.',
-      },
-      view_finance: {
-        id: 'view_finance',
-        label: 'View finance',
-        description: 'See payment, due, profit, and expense related numbers.',
-      },
-    },
+    permissions: buildPermissionDefinitions(),
     roles: {
-      admin: {
-        id: 'admin',
-        name: 'Admin',
-        description: 'Full ERP access.',
-        permissions: [
-          'view_dashboard',
-          'view_products',
-          'manage_products',
-          'manage_orders',
-          'view_reports',
-          'view_finance',
-        ],
+      super_admin: {
+        id: 'super_admin',
+        name: 'Super Admin',
+        description: 'Full ERP access, including user and role management.',
+        permissions: toPermissionSet(ALL_PERMISSION_IDS),
       },
-      store_manager: {
-        id: 'store_manager',
-        name: 'Store Manager',
-        description: 'Handles stock, warehouse, and replenishment operations.',
-        permissions: [
-          'view_dashboard',
-          'view_products',
-          'manage_products',
-          'view_reports',
-        ],
+      md: {
+        id: 'md',
+        name: 'MD',
+        description: 'Business-wide visibility with order approval authority. No day-to-day data entry, no user management.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:export',
+          'orders:view', 'orders:approve', 'orders:export',
+          'customers:view', 'customers:export',
+          'suppliers:view', 'suppliers:export',
+          'finance:view', 'finance:export',
+          'reports:view', 'reports:export',
+          'users:view',
+        ]),
       },
-      sales_person: {
-        id: 'sales_person',
-        name: 'Sales Person',
-        description: 'Creates orders and follows customer delivery.',
-        permissions: ['view_dashboard', 'view_products', 'manage_orders', 'view_reports'],
+      manager: {
+        id: 'manager',
+        name: 'Manager',
+        description: 'Runs day-to-day inventory, sales, and customer/supplier operations.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:create', 'products:edit', 'products:export',
+          'orders:view', 'orders:create', 'orders:edit', 'orders:export',
+          'customers:view', 'customers:create', 'customers:edit', 'customers:export',
+          'suppliers:view', 'suppliers:create', 'suppliers:edit', 'suppliers:export',
+          'reports:view', 'reports:export',
+        ]),
       },
-      accountant: {
-        id: 'accountant',
-        name: 'Accountant',
-        description: 'Tracks revenue, dues, and margin.',
-        permissions: ['view_dashboard', 'view_reports', 'view_finance'],
+      sales_officer: {
+        id: 'sales_officer',
+        name: 'Sales Officer',
+        description: 'Creates orders and manages customer relationships.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view',
+          'orders:view', 'orders:create', 'orders:edit', 'orders:export',
+          'customers:view', 'customers:create', 'customers:edit', 'customers:export',
+          'reports:view',
+        ]),
+      },
+      accounts: {
+        id: 'accounts',
+        name: 'Accounts',
+        description: 'Tracks revenue, dues, expenses, and financial reporting.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'finance:view', 'finance:create', 'finance:edit', 'finance:export',
+          'reports:view', 'reports:export',
+          'orders:view',
+          'customers:view',
+        ]),
       },
       viewer: {
         id: 'viewer',
         name: 'Viewer',
         description: 'Read-only workspace access.',
-        permissions: ['view_dashboard', 'view_products', 'view_reports'],
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view',
+          'orders:view',
+          'customers:view',
+          'suppliers:view',
+          'finance:view',
+          'reports:view',
+        ]),
       },
     },
     users: {},
@@ -513,6 +563,7 @@ export function createDefaultERPData(): ERPData {
         createdAt: shiftDays(-1),
       },
     },
+    loginHistory: {},
     expenses: {
       exp_1001: {
         id: 'exp_1001',

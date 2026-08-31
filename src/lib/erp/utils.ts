@@ -67,11 +67,15 @@ export function getPermissions(data: ERPData | null, user: UserRecord | null) {
     return []
   }
 
-  return data.roles[user.roleId]?.permissions ?? []
+  return Object.keys(data.roles[user.roleId]?.permissions ?? {})
 }
 
 export function hasPermission(data: ERPData | null, user: UserRecord | null, permission: string) {
-  return getPermissions(data, user).includes(permission)
+  if (!data || !user) {
+    return false
+  }
+
+  return data.roles[user.roleId]?.permissions?.[permission] === true
 }
 
 export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
@@ -82,7 +86,7 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
   const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
   const notifications = rawNotifications.filter((item) => {
     if (!roleId) return true
-    if (roleId === 'admin') return true
+    if (roleId === 'super_admin') return true
     if (!item.roles || item.roles.length === 0) return true
     return item.roles.includes(roleId)
   })

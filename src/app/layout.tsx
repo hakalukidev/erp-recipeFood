@@ -1,4 +1,5 @@
 ﻿import type { Metadata } from 'next'
+import { Toaster } from 'react-hot-toast'
 import { ThemeProvider } from '@/components/theme-provider'
 import { ERPProvider } from '@/lib/erp/provider'
 import './globals.css'
@@ -23,6 +24,7 @@ export default function RootLayout({
       <body suppressHydrationWarning>
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <ERPProvider>{children}</ERPProvider>
+          <Toaster position="top-right" />
         </ThemeProvider>
       </body>
     </html>

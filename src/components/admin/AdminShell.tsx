@@ -67,70 +67,70 @@ const navigationGroups: NavigationGroup[] = [
         description: "Today's sales, alerts, and warranty claims",
         href: '/admin/dashboard',
         icon: LayoutDashboard,
-        permission: 'view_dashboard',
+        permission: 'dashboard:view',
       },
       {
         label: 'Sales & Billing',
         description: 'POS, invoices, returns, and due tracking',
         href: '/admin/sales',
         icon: ShoppingCart,
-        permission: 'manage_orders',
+        permission: 'orders:view',
       },
       {
         label: 'Inventory / Stock',
         description: 'Products, warehouses, and warranty-linked inventory',
         href: '/admin/stock/overview',
         icon: Boxes,
-        permission: 'view_products',
+        permission: 'products:view',
       },
       {
         label: 'Suppliers & Imports',
         description: 'Purchase orders, LC tracking, and landed cost',
         href: '/admin/suppliers',
         icon: Truck,
-        permission: 'view_finance',
+        permission: 'suppliers:view',
       },
       {
         label: 'Customers (CRM)',
         description: 'Customer history, support, and credit tracking',
         href: '/admin/customers',
         icon: Users,
-        permission: 'view_reports',
+        permission: 'customers:view',
       },
       {
         label: 'Price Quotation',
         description: 'Build a product price quotation and export it as PDF',
         href: '/admin/quotation',
         icon: FileText,
-        permission: 'view_products',
+        permission: 'products:view',
       },
       {
         label: 'Seller List',
         description: 'Sub-dealer ledger: taken, given, receivable, payable',
         href: '/admin/seller',
         icon: Handshake,
-        permission: 'view_finance',
+        permission: 'finance:view',
       },
       {
         label: 'Courier Update',
         description: 'Shipment status, COD amount, and bill tracking',
         href: '/admin/courier',
         icon: PackageCheck,
-        permission: 'manage_orders',
+        permission: 'orders:view',
       },
       {
         label: 'Accounting & Finance',
         description: 'Ledger, profit/loss, and multi-currency reporting',
         href: '/admin/finance',
         icon: Wallet,
-        permission: 'view_finance',
+        permission: 'finance:view',
       },
       {
         label: 'Reports',
         description: 'Sales, stock, returns, and warranty reports',
         href: '/admin/reports',
         icon: FileSpreadsheet,
-        permission: 'view_reports',
+        permission: 'reports:view',
       },
     ],
   },
@@ -142,7 +142,7 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Employee logins and permission matrix',
         href: '/admin/users',
         icon: ShieldCheck,
-        permission: 'view_reports',
+        permission: 'users:view',
       },
     ],
   },
@@ -302,7 +302,7 @@ function NotificationBell() {
 
   const notifications = Object.values(data?.notifications ?? {})
     .filter((notification) => {
-      if (!currentUser || currentUser.roleId === 'admin') return true
+      if (!currentUser || currentUser.roleId === 'super_admin') return true
       if (!notification.roles || notification.roles.length === 0) return true
       return notification.roles.includes(currentUser.roleId)
     })
