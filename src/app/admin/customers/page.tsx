@@ -31,10 +31,25 @@ import { formatCurrency, formatDate, getReadableOrderState, isPremiumCustomer, t
 import { cn } from '@/lib/utils'
 
 type CustomerFormState = {
+  customerCode: string
   name: string
   company: string
+  ownerName: string
   phone: string
   location: string
+  district: string
+  territory: string
+  salesArea: string
+  salesOfficerId: string
+  customerType: NonNullable<CustomerRecord['customerType']>
+  creditLimit: string
+  creditDays: string
+  openingBalance: string
+  paymentTerms: string
+  priceCategory: string
+  discountCategory: string
+  bankInformation: string
+  status: NonNullable<CustomerRecord['status']>
   due: string
   supportStatus: CustomerRecord['supportStatus']
   supportNote: string
@@ -47,10 +62,25 @@ type CustomerFormState = {
 }
 
 const emptyCustomerForm: CustomerFormState = {
+  customerCode: '',
   name: '',
   company: '',
+  ownerName: '',
   phone: '',
   location: '',
+  district: '',
+  territory: '',
+  salesArea: '',
+  salesOfficerId: '',
+  customerType: 'retailer',
+  creditLimit: '0',
+  creditDays: '0',
+  openingBalance: '0',
+  paymentTerms: '',
+  priceCategory: '',
+  discountCategory: '',
+  bankInformation: '',
+  status: 'active',
   due: '0',
   supportStatus: 'none',
   supportNote: '',
@@ -60,6 +90,14 @@ const emptyCustomerForm: CustomerFormState = {
   previousBillNumber: '',
   previousPurchaseDetails: '',
   previousPurchaseAmount: '',
+}
+
+const customerTypeLabels: Record<NonNullable<CustomerRecord['customerType']>, string> = {
+  retailer: 'Retailer',
+  wholesaler: 'Wholesaler',
+  distributor: 'Distributor',
+  dealer: 'Dealer',
+  corporate: 'Corporate',
 }
 
 const supportLabels: Record<CustomerRecord['supportStatus'], string> = {
@@ -93,10 +131,25 @@ function supportToneClass(status: CustomerRecord['supportStatus']) {
 
 function formFromCustomer(customer: CustomerRecord): CustomerFormState {
   return {
+    customerCode: customer.customerCode ?? '',
     name: customer.name,
     company: customer.company,
+    ownerName: customer.ownerName ?? '',
     phone: customer.phone,
     location: customer.location,
+    district: customer.district ?? '',
+    territory: customer.territory ?? '',
+    salesArea: customer.salesArea ?? '',
+    salesOfficerId: customer.salesOfficerId ?? '',
+    customerType: customer.customerType ?? 'retailer',
+    creditLimit: String(customer.creditLimit ?? 0),
+    creditDays: String(customer.creditDays ?? 0),
+    openingBalance: String(customer.openingBalance ?? 0),
+    paymentTerms: customer.paymentTerms ?? '',
+    priceCategory: customer.priceCategory ?? '',
+    discountCategory: customer.discountCategory ?? '',
+    bankInformation: customer.bankInformation ?? '',
+    status: customer.status ?? 'active',
     due: String(customer.due),
     supportStatus: customer.supportStatus,
     supportNote: customer.supportNote,
@@ -114,6 +167,11 @@ export default function CustomersPage() {
   const currency = data?.settings.currency
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
+  const salesOfficers = useMemo(() => {
+    const users = toArray(data?.users)
+    const officers = users.filter((user) => user.roleId === 'sales_officer')
+    return officers.length > 0 ? officers : users
+  }, [data?.users])
   const [query, setQuery] = useState('')
   const [supportFilter, setSupportFilter] = useState<CustomerRecord['supportStatus'] | 'all'>('all')
   const [tierFilter, setTierFilter] = useState<'all' | 'premium' | 'normal'>('all')
@@ -239,10 +297,25 @@ export default function CustomersPage() {
     setFeedback(null)
 
     const input: CustomerInput = {
+      customerCode: customerForm.customerCode,
       name: customerForm.name,
       company: customerForm.company,
+      ownerName: customerForm.ownerName,
       phone: customerForm.phone,
       location: customerForm.location,
+      district: customerForm.district,
+      territory: customerForm.territory,
+      salesArea: customerForm.salesArea,
+      salesOfficerId: customerForm.salesOfficerId,
+      customerType: customerForm.customerType,
+      creditLimit: Number(customerForm.creditLimit) || 0,
+      creditDays: Number(customerForm.creditDays) || 0,
+      openingBalance: Number(customerForm.openingBalance) || 0,
+      paymentTerms: customerForm.paymentTerms,
+      priceCategory: customerForm.priceCategory,
+      discountCategory: customerForm.discountCategory,
+      bankInformation: customerForm.bankInformation,
+      status: customerForm.status,
       due: Number(customerForm.due),
       supportStatus: customerForm.supportStatus,
       supportNote: customerForm.supportNote,
@@ -453,6 +526,16 @@ export default function CustomersPage() {
                                   Wholesale
                                 </Badge>
                               ) : null}
+                              {customer.customerType && customer.customerType !== 'retailer' ? (
+                                <Badge variant="outline" className="text-xs font-normal capitalize">
+                                  {customerTypeLabels[customer.customerType]}
+                                </Badge>
+                              ) : null}
+                              {customer.status === 'inactive' ? (
+                                <Badge className="bg-rose-500/15 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300">
+                                  Inactive
+                                </Badge>
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -468,6 +551,11 @@ export default function CustomersPage() {
                           <MapPin className="h-4 w-4 text-muted-foreground" />
                           <span>{customer.location || 'N/A'}</span>
                         </div>
+                        {customer.district || customer.territory ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {[customer.district, customer.territory].filter(Boolean).join(' · ')}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="min-w-44">
                         <div className="flex items-center gap-2">
@@ -609,7 +697,7 @@ export default function CustomersPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
-                    Company <span className="font-normal text-muted-foreground">(optional)</span>
+                    Business name <span className="font-normal text-muted-foreground">(optional)</span>
                   </p>
                   <Input
                     value={customerForm.company}
@@ -619,7 +707,7 @@ export default function CustomersPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
-                    Location <span className="font-normal text-muted-foreground">(optional)</span>
+                    Address <span className="font-normal text-muted-foreground">(optional)</span>
                   </p>
                   <Input
                     value={customerForm.location}
@@ -675,6 +763,99 @@ export default function CustomersPage() {
                     New sales for this customer default to each product&apos;s wholesale price.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Business &amp; territory</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Customer code <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.customerCode} onChange={(event) => setCustomerForm((current) => ({ ...current, customerCode: event.target.value }))} placeholder="e.g. CUS-000123" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Owner name <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.ownerName} onChange={(event) => setCustomerForm((current) => ({ ...current, ownerName: event.target.value }))} placeholder="e.g. Md. Karim Uddin" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">District <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.district} onChange={(event) => setCustomerForm((current) => ({ ...current, district: event.target.value }))} placeholder="e.g. Gazipur" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Territory <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.territory} onChange={(event) => setCustomerForm((current) => ({ ...current, territory: event.target.value }))} placeholder="e.g. Gazipur-North" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Sales area <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.salesArea} onChange={(event) => setCustomerForm((current) => ({ ...current, salesArea: event.target.value }))} placeholder="e.g. Chandana Chowrasta" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Sales officer <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Select value={customerForm.salesOfficerId || '__none__'} onValueChange={(value) => setCustomerForm((current) => ({ ...current, salesOfficerId: value === '__none__' ? '' : value }))}>
+                    <SelectTrigger><SelectValue placeholder="Not assigned" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Not assigned</SelectItem>
+                      {salesOfficers.map((user) => (
+                        <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Customer type</p>
+                  <Select value={customerForm.customerType} onValueChange={(value) => setCustomerForm((current) => ({ ...current, customerType: value as CustomerFormState['customerType'] }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(customerTypeLabels) as CustomerFormState['customerType'][]).map((type) => (
+                        <SelectItem key={type} value={type}>{customerTypeLabels[type]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Status</p>
+                  <Select value={customerForm.status} onValueChange={(value) => setCustomerForm((current) => ({ ...current, status: value as CustomerFormState['status'] }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="inactive">Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Credit &amp; pricing</p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Credit limit ({currency ?? 'BDT'})</p>
+                  <Input type="number" min="0" value={customerForm.creditLimit} onChange={(event) => setCustomerForm((current) => ({ ...current, creditLimit: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Credit days</p>
+                  <Input type="number" min="0" value={customerForm.creditDays} onChange={(event) => setCustomerForm((current) => ({ ...current, creditDays: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Opening balance ({currency ?? 'BDT'})</p>
+                  <Input type="number" min="0" value={customerForm.openingBalance} onChange={(event) => setCustomerForm((current) => ({ ...current, openingBalance: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Payment terms <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.paymentTerms} onChange={(event) => setCustomerForm((current) => ({ ...current, paymentTerms: event.target.value }))} placeholder="e.g. Net 15" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Price category <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.priceCategory} onChange={(event) => setCustomerForm((current) => ({ ...current, priceCategory: event.target.value }))} placeholder="e.g. Dealer price" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Discount category <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={customerForm.discountCategory} onChange={(event) => setCustomerForm((current) => ({ ...current, discountCategory: event.target.value }))} placeholder="e.g. Festive 5%" />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Bank information <span className="font-normal text-muted-foreground">(optional)</span></p>
+                <Textarea value={customerForm.bankInformation} onChange={(event) => setCustomerForm((current) => ({ ...current, bankInformation: event.target.value }))} placeholder="Bank name, branch, and account number" rows={2} />
               </div>
             </div>
 

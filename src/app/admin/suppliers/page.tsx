@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Check, Edit, MapPin, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { PurchaseManagementSection } from '@/components/admin/PurchaseManagementSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,11 +31,14 @@ import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SupplierFormState = {
+  supplierCode: string
   name: string
   company: string
+  contactPerson: string
   phone: string
   email: string
   location: string
+  productCategory: string
   supplierType: SupplierRecord['supplierType']
   country: string
   lcNumber: string
@@ -44,15 +48,24 @@ type SupplierFormState = {
   customsDuty: string
   otherCost: string
   currency: string
+  paymentTerms: string
+  creditDays: string
+  openingBalance: string
+  bankAccount: string
+  supplierRating: string
+  status: NonNullable<SupplierRecord['status']>
   notes: string
 }
 
 const emptySupplierForm: SupplierFormState = {
+  supplierCode: '',
   name: '',
   company: '',
+  contactPerson: '',
   phone: '',
   email: '',
   location: '',
+  productCategory: '',
   supplierType: 'local',
   country: 'Bangladesh',
   lcNumber: '',
@@ -62,6 +75,12 @@ const emptySupplierForm: SupplierFormState = {
   customsDuty: '0',
   otherCost: '0',
   currency: 'BDT',
+  paymentTerms: '',
+  creditDays: '0',
+  openingBalance: '0',
+  bankAccount: '',
+  supplierRating: '0',
+  status: 'active',
   notes: '',
 }
 
@@ -116,11 +135,14 @@ function lcToneClass(status: SupplierRecord['lcStatus']) {
 
 function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
   return {
+    supplierCode: supplier.supplierCode ?? '',
     name: supplier.name,
     company: supplier.company,
+    contactPerson: supplier.contactPerson ?? '',
     phone: supplier.phone,
     email: supplier.email,
     location: supplier.location,
+    productCategory: supplier.productCategory ?? '',
     supplierType: supplier.supplierType,
     country: supplier.country,
     lcNumber: supplier.lcNumber,
@@ -130,6 +152,12 @@ function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
     customsDuty: String(supplier.customsDuty),
     otherCost: String(supplier.otherCost),
     currency: supplier.currency,
+    paymentTerms: supplier.paymentTerms ?? '',
+    creditDays: String(supplier.creditDays ?? 0),
+    openingBalance: String(supplier.openingBalance ?? 0),
+    bankAccount: supplier.bankAccount ?? '',
+    supplierRating: String(supplier.supplierRating ?? 0),
+    status: supplier.status ?? 'active',
     notes: supplier.notes,
   }
 }
@@ -175,11 +203,14 @@ export default function SuppliersPage() {
       const matchesSearch =
         !normalizedQuery ||
         [
+          supplier.supplierCode,
           supplier.name,
           supplier.company,
+          supplier.contactPerson,
           supplier.phone,
           supplier.email,
           supplier.location,
+          supplier.productCategory,
           supplier.country,
           supplier.lcNumber,
           supplier.notes,
@@ -235,11 +266,14 @@ export default function SuppliersPage() {
     setFeedback(null)
 
     const input: SupplierInput = {
+      supplierCode: supplierForm.supplierCode,
       name: supplierForm.name,
       company: supplierForm.company,
+      contactPerson: supplierForm.contactPerson,
       phone: supplierForm.phone,
       email: supplierForm.email,
       location: supplierForm.location,
+      productCategory: supplierForm.productCategory,
       supplierType: supplierForm.supplierType,
       country: supplierForm.country,
       lcNumber: supplierForm.lcNumber,
@@ -249,6 +283,12 @@ export default function SuppliersPage() {
       customsDuty: Number(supplierForm.customsDuty),
       otherCost: Number(supplierForm.otherCost),
       currency: supplierForm.currency,
+      paymentTerms: supplierForm.paymentTerms,
+      creditDays: Number(supplierForm.creditDays),
+      openingBalance: Number(supplierForm.openingBalance),
+      bankAccount: supplierForm.bankAccount,
+      supplierRating: Number(supplierForm.supplierRating),
+      status: supplierForm.status,
       notes: supplierForm.notes,
     }
 
@@ -282,26 +322,8 @@ export default function SuppliersPage() {
     setFeedback(null)
 
     try {
-      await saveSupplier(
-        {
-          name: supplier.name,
-          company: supplier.company,
-          phone: supplier.phone,
-          email: supplier.email,
-          location: supplier.location,
-          supplierType: supplier.supplierType,
-          country: supplier.country,
-          lcNumber: supplier.lcNumber,
-          lcStatus,
-          productCost: supplier.productCost,
-          shippingCost: supplier.shippingCost,
-          customsDuty: supplier.customsDuty,
-          otherCost: supplier.otherCost,
-          currency: supplier.currency,
-          notes: supplier.notes,
-        },
-        supplier.id
-      )
+      const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = supplier
+      await saveSupplier({ ...rest, lcStatus }, supplier.id)
       setFeedback(`${supplier.name} LC status changed to ${lcStatusLabels[lcStatus]}.`)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to update LC status.')
@@ -386,15 +408,31 @@ export default function SuppliersPage() {
                     <TableRow key={supplier.id}>
                       <TableCell className="min-w-60">
                         <div>
+                          {supplier.supplierCode ? (
+                            <p className="text-xs font-medium text-muted-foreground">{supplier.supplierCode}</p>
+                          ) : null}
                           <p className="font-semibold">{supplier.name}</p>
                           <p className="text-sm text-muted-foreground">{supplier.company}</p>
-                          <Badge variant="outline" className={cn('mt-2 rounded-full', typeToneClass(supplier.supplierType))}>
-                            {supplierTypeLabels[supplier.supplierType]}
-                          </Badge>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className={cn('rounded-full', typeToneClass(supplier.supplierType))}>
+                              {supplierTypeLabels[supplier.supplierType]}
+                            </Badge>
+                            {supplier.status === 'inactive' ? (
+                              <Badge variant="outline" className="rounded-full border-border bg-muted text-muted-foreground">
+                                Inactive
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {supplier.productCategory ? (
+                            <p className="mt-2 text-xs text-muted-foreground">{supplier.productCategory}</p>
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell className="min-w-56">
                         <div className="space-y-2 text-sm">
+                          {supplier.contactPerson ? (
+                            <p className="text-xs text-muted-foreground">Contact: {supplier.contactPerson}</p>
+                          ) : null}
                           <div className="flex items-center gap-2">
                             <Phone className="h-4 w-4 text-muted-foreground" />
                             <span>{supplier.phone}</span>
@@ -478,6 +516,8 @@ export default function SuppliersPage() {
             </div>
           </CardContent>
         </Card>
+
+        <PurchaseManagementSection />
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -496,13 +536,25 @@ export default function SuppliersPage() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
+                    Supplier code <span className="font-normal text-muted-foreground">(optional)</span>
+                  </p>
+                  <Input value={supplierForm.supplierCode} onChange={(event) => setSupplierForm((current) => ({ ...current, supplierCode: event.target.value }))} placeholder="e.g. SUP-000123" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
                     Supplier name<span className="ml-0.5 text-rose-500">*</span>
                   </p>
                   <Input value={supplierForm.name} onChange={(event) => setSupplierForm((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Shenzhen Auto Parts Co." required />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
-                    Phone number<span className="ml-0.5 text-rose-500">*</span>
+                    Contact person <span className="font-normal text-muted-foreground">(optional)</span>
+                  </p>
+                  <Input value={supplierForm.contactPerson} onChange={(event) => setSupplierForm((current) => ({ ...current, contactPerson: event.target.value }))} placeholder="e.g. Md. Karim Uddin" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Mobile<span className="ml-0.5 text-rose-500">*</span>
                   </p>
                   <Input value={supplierForm.phone} onChange={(event) => setSupplierForm((current) => ({ ...current, phone: event.target.value }))} placeholder="e.g. 01711-000000" required />
                 </div>
@@ -520,9 +572,15 @@ export default function SuppliersPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
-                    Location <span className="font-normal text-muted-foreground">(optional)</span>
+                    Address <span className="font-normal text-muted-foreground">(optional)</span>
                   </p>
                   <Input value={supplierForm.location} onChange={(event) => setSupplierForm((current) => ({ ...current, location: event.target.value }))} placeholder="City / address" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Product category <span className="font-normal text-muted-foreground">(optional)</span>
+                  </p>
+                  <Input value={supplierForm.productCategory} onChange={(event) => setSupplierForm((current) => ({ ...current, productCategory: event.target.value }))} placeholder="e.g. Edible oil, Spices" />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Country</p>
@@ -596,6 +654,42 @@ export default function SuppliersPage() {
                   </div>
                 </div>
               ) : null}
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Business &amp; credit</p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Payment terms <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input value={supplierForm.paymentTerms} onChange={(event) => setSupplierForm((current) => ({ ...current, paymentTerms: event.target.value }))} placeholder="e.g. Net 30" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Credit days</p>
+                  <Input type="number" min="0" value={supplierForm.creditDays} onChange={(event) => setSupplierForm((current) => ({ ...current, creditDays: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Opening balance ({supplierForm.currency || currency})</p>
+                  <Input type="number" min="0" value={supplierForm.openingBalance} onChange={(event) => setSupplierForm((current) => ({ ...current, openingBalance: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Supplier rating <span className="font-normal text-muted-foreground">(0–5)</span></p>
+                  <Input type="number" min="0" max="5" value={supplierForm.supplierRating} onChange={(event) => setSupplierForm((current) => ({ ...current, supplierRating: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Status</p>
+                  <Select value={supplierForm.status} onValueChange={(value) => setSupplierForm((current) => ({ ...current, status: value as SupplierFormState['status'] }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="inactive">Inactive</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Bank account <span className="font-normal text-muted-foreground">(optional)</span></p>
+                <Textarea value={supplierForm.bankAccount} onChange={(event) => setSupplierForm((current) => ({ ...current, bankAccount: event.target.value }))} placeholder="Bank name, branch, and account number" rows={2} />
+              </div>
             </div>
 
             <details className="group space-y-4 rounded-2xl border border-border/70 p-4">

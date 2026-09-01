@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import {
   Ban,
   CalendarClock,
+  Check,
   ClipboardPlus,
   FileDown,
   FileSpreadsheet,
@@ -13,9 +14,12 @@ import {
   ReceiptText,
   Search,
   Trash2,
+  X,
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
+import { CollectionManagementSection } from './CollectionManagementSection'
+import { SalesReturnSection } from './SalesReturnSection'
 import { QuickCreateCustomerDialog } from './quick-create/QuickCreateCustomerDialog'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { Badge } from '@/components/ui/badge'
@@ -48,18 +52,22 @@ const emptyOrder = {
   customerId: '',
   items: [{ productId: '', quantity: '1', unitPrice: '' }],
   discount: '0',
+  promotionalDiscount: '0',
+  vat: '0',
   paid: '0',
   billNumber: '',
   orderDate: new Date().toISOString().slice(0, 10),
   deliveryDate: '',
   paymentDueDate: defaultPaymentDueDate(),
   dueReference: 'owner' as OrderRecord['dueReference'],
+  warehouseId: '',
+  remarks: '',
 }
 
 type SalesDocument = Pick<
   OrderRecord,
   'id' | 'billNumber' | 'customerId' | 'customerName' | 'salesPersonName' | 'total' | 'paid' | 'due' | 'deliveryDate' | 'createdAt' | 'items'
-> & { subtotal?: number; discount?: number }
+> & { subtotal?: number; discount?: number; promotionalDiscount?: number; vat?: number; remarks?: string }
 
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid'
 
@@ -79,13 +87,14 @@ function paymentStatusOf(order: OrderRecord): PaymentFilter {
 }
 
 export function SalesScreen() {
-  const { data, hasPermission, createOrder, updateOrder, cancelOrder, updateOrderStatus } = useERP()
+  const { data, hasPermission, createOrder, updateOrder, cancelOrder, updateOrderStatus, updateOrderApproval } = useERP()
   const orders = useMemo(
     () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.orders]
   )
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
+  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const salesPeople = useMemo(() => {
     const map = new Map<string, string>()
     orders.forEach((order) => {
@@ -112,7 +121,13 @@ export function SalesScreen() {
     0
   )
   const orderDiscount = Math.min(Math.max(Number(orderForm.discount || 0), 0), orderSubtotal)
-  const orderTotal = orderSubtotal - orderDiscount
+  const orderPromotionalDiscount = Math.min(
+    Math.max(Number(orderForm.promotionalDiscount || 0), 0),
+    orderSubtotal - orderDiscount
+  )
+  const orderVat = Math.max(Number(orderForm.vat || 0), 0)
+  const orderNetSales = orderSubtotal - orderDiscount - orderPromotionalDiscount
+  const orderTotal = orderNetSales + orderVat
   const orderDue = Math.max(orderTotal - Number(orderForm.paid || 0), 0)
 
   const customerOptions: ComboboxOption[] = useMemo(
@@ -201,6 +216,8 @@ export function SalesScreen() {
         unitPrice: Number(item.unitPrice),
       })),
       discount: Number(orderForm.discount),
+      promotionalDiscount: Number(orderForm.promotionalDiscount),
+      vat: Number(orderForm.vat),
       paid: Number(orderForm.paid),
       billNumber: orderForm.billNumber,
       orderDate: orderForm.orderDate,
@@ -208,6 +225,8 @@ export function SalesScreen() {
       paymentDueDate: orderForm.paymentDueDate,
       dueReference: orderForm.dueReference,
       priceMode: (selectedCustomer?.isWholesale ? 'wholesale' : 'retail') as OrderRecord['priceMode'],
+      warehouseId: orderForm.warehouseId,
+      remarks: orderForm.remarks,
     }
 
     try {
@@ -237,14 +256,32 @@ export function SalesScreen() {
         unitPrice: String(item.unitPrice),
       })),
       discount: String(order.discount ?? 0),
+      promotionalDiscount: String(order.promotionalDiscount ?? 0),
+      vat: String(order.vat ?? 0),
       paid: String(order.paid),
       billNumber: order.billNumber,
       orderDate: order.createdAt.slice(0, 10),
       deliveryDate: order.deliveryDate.slice(0, 10),
       paymentDueDate: order.paymentDueDate.slice(0, 10),
       dueReference: order.dueReference,
+      warehouseId: order.warehouseId ?? '',
+      remarks: order.remarks ?? '',
     })
     setNewSaleOpen(true)
+  }
+
+  async function handleApprovalChange(order: OrderRecord, approvalStatus: NonNullable<OrderRecord['approvalStatus']>) {
+    setFeedback(null)
+    try {
+      await updateOrderApproval(order.id, approvalStatus)
+      setFeedback(
+        approvalStatus === 'approved'
+          ? `Order ${order.billNumber} approved.`
+          : `Order ${order.billNumber} rejected and cancelled.`
+      )
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to update approval status.')
+    }
   }
 
   async function handleCancelOrder(order: OrderRecord) {
@@ -362,10 +399,14 @@ export function SalesScreen() {
           <div class="totals">
             <div><span>Total amount</span><strong>${formatCurrency(document.subtotal ?? document.total, currency)}</strong></div>
             <div><span>Discount</span><strong>${formatCurrency(document.discount ?? 0, currency)}</strong></div>
+            ${document.promotionalDiscount ? `<div><span>Promotional discount</span><strong>${formatCurrency(document.promotionalDiscount, currency)}</strong></div>` : ''}
+            ${document.vat ? `<div><span>VAT</span><strong>${formatCurrency(document.vat, currency)}</strong></div>` : ''}
             <div><span>Payable amount</span><strong>${formatCurrency(document.total, currency)}</strong></div>
             <div><span>Paid</span><strong>${formatCurrency(document.paid, currency)}</strong></div>
             <div class="grand"><span>Due amount</span><strong>${formatCurrency(document.due, currency)}</strong></div>
           </div>
+
+          ${document.remarks ? `<p class="section"><strong>Remarks:</strong> ${escapeHtml(document.remarks)}</p>` : ''}
 
           <p class="print-date">${issueDate}</p>
           <script>
@@ -414,10 +455,13 @@ export function SalesScreen() {
       salesPersonName: 'Sales desk',
       subtotal: orderSubtotal,
       discount: orderDiscount,
+      promotionalDiscount: orderPromotionalDiscount,
+      vat: orderVat,
       total: orderTotal,
       paid: Number(orderForm.paid || 0),
       due: orderDue,
       deliveryDate: orderForm.deliveryDate,
+      remarks: orderForm.remarks,
       createdAt: new Date().toISOString(),
       items: quotationItems.map((item) => ({
         productId: item!.product.id,
@@ -644,21 +688,53 @@ export function SalesScreen() {
                       <TableCell>
                         {order.status === 'cancelled' ? (
                           <Badge variant="outline" className="border-rose-500/40 text-rose-600 dark:text-rose-400">Cancelled</Badge>
-                        ) : hasPermission('orders:approve') ? (
-                          <Select value={order.status} onValueChange={(value) => void updateOrderStatus(order.id, value as typeof order.status)}>
-                            <SelectTrigger className="w-40">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="pending">Pending</SelectItem>
-                              <SelectItem value="ready">Ready</SelectItem>
-                              <SelectItem value="shipped">Shipped</SelectItem>
-                              <SelectItem value="completed">Completed</SelectItem>
-                              <SelectItem value="hold">Hold</SelectItem>
-                            </SelectContent>
-                          </Select>
                         ) : (
-                          <Badge variant="outline">{getReadableOrderState(order)}</Badge>
+                          <div className="space-y-2">
+                            {order.approvalStatus === 'pending' ? (
+                              hasPermission('orders:approve') ? (
+                                <div className="flex gap-1.5">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-full border-emerald-200 px-2.5 text-xs text-emerald-700 hover:text-emerald-700 dark:border-emerald-900 dark:text-emerald-300"
+                                    onClick={() => void handleApprovalChange(order, 'approved')}
+                                  >
+                                    <Check className="mr-1 h-3.5 w-3.5" /> Approve
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-full border-rose-200 px-2.5 text-xs text-rose-600 hover:text-rose-600 dark:border-rose-900 dark:text-rose-400"
+                                    onClick={() => void handleApprovalChange(order, 'rejected')}
+                                  >
+                                    <X className="mr-1 h-3.5 w-3.5" /> Reject
+                                  </Button>
+                                </div>
+                              ) : (
+                                <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300">
+                                  Awaiting approval
+                                </Badge>
+                              )
+                            ) : null}
+                            {hasPermission('orders:approve') ? (
+                              <Select value={order.status} onValueChange={(value) => void updateOrderStatus(order.id, value as typeof order.status)}>
+                                <SelectTrigger className="w-40">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="pending">Pending</SelectItem>
+                                  <SelectItem value="ready">Ready</SelectItem>
+                                  <SelectItem value="shipped">Shipped</SelectItem>
+                                  <SelectItem value="completed">Completed</SelectItem>
+                                  <SelectItem value="hold">Hold</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <Badge variant="outline">{getReadableOrderState(order)}</Badge>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell>{formatDate(order.deliveryDate)}</TableCell>
@@ -697,7 +773,8 @@ export function SalesScreen() {
           </CardContent>
         </Card>
 
-       
+        <CollectionManagementSection />
+        <SalesReturnSection />
       </div>
 
       <Dialog
@@ -817,9 +894,27 @@ export function SalesScreen() {
                   </div>
                 ))}
               </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Delivery date<span className="ml-0.5 text-rose-500">*</span></p>
+                  <Input type="date" value={orderForm.deliveryDate} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryDate: event.target.value }))} required />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Warehouse <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Select value={orderForm.warehouseId || '__none__'} onValueChange={(value) => setOrderForm((current) => ({ ...current, warehouseId: value === '__none__' ? '' : value }))}>
+                    <SelectTrigger><SelectValue placeholder="Fulfilling warehouse" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Not specified</SelectItem>
+                      {warehouses.map((warehouse) => (
+                        <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Delivery date<span className="ml-0.5 text-rose-500">*</span></p>
-                <Input type="date" value={orderForm.deliveryDate} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryDate: event.target.value }))} required />
+                <p className="text-sm font-medium text-foreground">Remarks <span className="font-normal text-muted-foreground">(optional)</span></p>
+                <Input value={orderForm.remarks} onChange={(event) => setOrderForm((current) => ({ ...current, remarks: event.target.value }))} placeholder="Any note for this order" />
               </div>
             </div>
 
@@ -875,6 +970,20 @@ export function SalesScreen() {
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Discount amount</p>
                   <Input type="number" min="0" max={orderSubtotal} value={orderForm.discount} onChange={(event) => setOrderForm((current) => ({ ...current, discount: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Promotional discount <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input type="number" min="0" max={orderSubtotal} value={orderForm.promotionalDiscount} onChange={(event) => setOrderForm((current) => ({ ...current, promotionalDiscount: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">VAT <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input type="number" min="0" value={orderForm.vat} onChange={(event) => setOrderForm((current) => ({ ...current, vat: event.target.value }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Net amount</p>
+                  <div className="flex h-10 items-center rounded-md border border-input bg-background px-3 text-sm">
+                    {formatCurrency(orderNetSales, data?.settings.currency)}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Payable amount</p>

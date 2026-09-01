@@ -4,6 +4,7 @@ import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent }
 import {
   PencilLine,
   Search,
+  Sparkles,
   Trash2,
 } from 'lucide-react'
 
@@ -11,6 +12,8 @@ import { AdminShell } from './AdminShell'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { QuickCreateSupplierDialog } from './quick-create/QuickCreateSupplierDialog'
 import { QuickCreateWarehouseDialog } from './quick-create/QuickCreateWarehouseDialog'
+import { StockControlSection } from './StockControlSection'
+import { StockTransferSection } from './StockTransferSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,12 +34,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
+import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
 import { formatCurrency, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
 
 const SUPPLIER_NONE = '__none__'
 const currencyOptions = ['BDT', 'USD', 'CNY', 'EUR']
+// Doubles as the Section 15 "Stock Type" classification — Raw Material,
+// Packaging Material, Semi-Finished Goods, Finished Goods, Damaged Goods,
+// Returned Goods, and Promotional Stock are all represented here rather
+// than in a second, near-duplicate field.
+const productTypeOptions = [
+  'Raw Material',
+  'Packaging Material',
+  'Semi-Finished Goods',
+  'Finished Goods',
+  'Damaged Goods',
+  'Returned Goods',
+  'Promotional Stock',
+  'Trading Goods',
+]
+const unitOptions = ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Box', 'Carton', 'Pack', 'Set', 'Dozen']
 
 function statValueFontSizeClass(value: string) {
   const length = value.length
@@ -49,14 +69,33 @@ function statValueFontSizeClass(value: string) {
 
 type ProductFormState = {
   name: string
+  banglaName: string
+  englishName: string
   sku: string
   category: string
+  subCategory: string
+  brand: string
+  productType: string
   serialNumber: string
   warrantyMonths: string
+  unit: string
+  purchaseUnit: string
+  salesUnit: string
+  conversionRatio: string
+  packSize: string
+  weight: string
   warehouseId: string
   supplierId: string
   purchasePrice: string
   sellingPrice: string
+  wholesalePrice: string
+  mrp: string
+  dealerPrice: string
+  distributorPrice: string
+  minSellingPrice: string
+  batchApplicable: boolean
+  expiryApplicable: boolean
+  isActive: boolean
   stockQty: string
   minStock: string
   maxStock: string
@@ -87,14 +126,33 @@ type ProductImageUploadResult = {
 function createEmptyProductForm(warehouseId = ''): ProductFormState {
   return {
     name: '',
+    banglaName: '',
+    englishName: '',
     sku: '',
     category: '',
+    subCategory: '',
+    brand: '',
+    productType: '',
     serialNumber: '',
     warrantyMonths: '0',
+    unit: '',
+    purchaseUnit: '',
+    salesUnit: '',
+    conversionRatio: '1',
+    packSize: '',
+    weight: '',
     warehouseId,
     supplierId: SUPPLIER_NONE,
     purchasePrice: '',
     sellingPrice: '',
+    wholesalePrice: '',
+    mrp: '',
+    dealerPrice: '',
+    distributorPrice: '',
+    minSellingPrice: '',
+    batchApplicable: false,
+    expiryApplicable: false,
+    isActive: true,
     stockQty: '0',
     minStock: '0',
     maxStock: '0',
@@ -127,14 +185,33 @@ function parseAmount(value: string) {
 
 function productToForm(product: {
   name: string
+  banglaName?: string
+  englishName?: string
   sku: string
   category: string
+  subCategory?: string
+  brand?: string
+  productType?: string
   serialNumber?: string
   warrantyMonths?: number
+  unit?: string
+  purchaseUnit?: string
+  salesUnit?: string
+  conversionRatio?: number
+  packSize?: string
+  weight?: number
   warehouseId: string
   supplierId: string
   purchasePrice: number
   sellingPrice: number
+  wholesalePrice?: number
+  mrp?: number
+  dealerPrice?: number
+  distributorPrice?: number
+  minSellingPrice?: number
+  batchApplicable?: boolean
+  expiryApplicable?: boolean
+  isActive?: boolean
   stockQty: number
   minStock: number
   maxStock: number
@@ -143,14 +220,33 @@ function productToForm(product: {
 }): ProductFormState {
   return {
     name: product.name,
+    banglaName: product.banglaName ?? '',
+    englishName: product.englishName ?? '',
     sku: product.sku,
     category: product.category,
+    subCategory: product.subCategory ?? '',
+    brand: product.brand ?? '',
+    productType: product.productType ?? '',
     serialNumber: product.serialNumber ?? '',
     warrantyMonths: String(product.warrantyMonths ?? 0),
+    unit: product.unit ?? '',
+    purchaseUnit: product.purchaseUnit ?? '',
+    salesUnit: product.salesUnit ?? '',
+    conversionRatio: String(product.conversionRatio ?? 1),
+    packSize: product.packSize ?? '',
+    weight: product.weight ? String(product.weight) : '',
     warehouseId: product.warehouseId,
     supplierId: product.supplierId || SUPPLIER_NONE,
     purchasePrice: String(product.purchasePrice),
     sellingPrice: String(product.sellingPrice),
+    wholesalePrice: product.wholesalePrice ? String(product.wholesalePrice) : '',
+    mrp: product.mrp ? String(product.mrp) : '',
+    dealerPrice: product.dealerPrice ? String(product.dealerPrice) : '',
+    distributorPrice: product.distributorPrice ? String(product.distributorPrice) : '',
+    minSellingPrice: product.minSellingPrice ? String(product.minSellingPrice) : '',
+    batchApplicable: product.batchApplicable ?? false,
+    expiryApplicable: product.expiryApplicable ?? false,
+    isActive: product.isActive ?? true,
     stockQty: String(product.stockQty),
     minStock: String(product.minStock),
     maxStock: String(product.maxStock),
@@ -252,7 +348,10 @@ export function StockOverviewScreen() {
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const categoryOptions = useMemo(
-    () => Array.from(new Set(products.map((product) => product.category).filter(Boolean))).sort(),
+    () =>
+      Array.from(
+        new Set([...RECIPE_STARTER_CATEGORIES, ...products.map((product) => product.category).filter(Boolean)])
+      ).sort(),
     [products]
   )
 
@@ -276,6 +375,12 @@ export function StockOverviewScreen() {
   const [quickCreatePurchaseSupplierOpen, setQuickCreatePurchaseSupplierOpen] = useState(false)
   const [quickCreatePurchaseProductOpen, setQuickCreatePurchaseProductOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
+  const [starterCatalogOpen, setStarterCatalogOpen] = useState(false)
+  const [starterWarehouseId, setStarterWarehouseId] = useState('')
+  const [starterSelectedSkus, setStarterSelectedSkus] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(RECIPE_STARTER_CATALOG.map((entry) => [entry.sku, true]))
+  )
+  const [isCreatingStarterCatalog, setIsCreatingStarterCatalog] = useState(false)
 
   const warehouseOptions: ComboboxOption[] = useMemo(
     () => warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: warehouse.location })),
@@ -377,6 +482,70 @@ export function StockOverviewScreen() {
     setAddProductOpen(true)
   }
 
+  const existingSkuSet = useMemo(() => new Set(products.map((product) => product.sku.toUpperCase())), [products])
+
+  function openStarterCatalogDialog() {
+    setStarterWarehouseId(warehouses[0]?.id ?? '')
+    setStarterSelectedSkus(Object.fromEntries(RECIPE_STARTER_CATALOG.map((entry) => [entry.sku, true])))
+    setFeedback(null)
+    setStarterCatalogOpen(true)
+  }
+
+  async function handleCreateStarterCatalog() {
+    if (!starterWarehouseId) {
+      setFeedback('Select a warehouse for the starter catalog first.')
+      return
+    }
+
+    const itemsToCreate = RECIPE_STARTER_CATALOG.filter(
+      (entry) => starterSelectedSkus[entry.sku] && !existingSkuSet.has(entry.sku.toUpperCase())
+    )
+
+    if (!itemsToCreate.length) {
+      setFeedback('Nothing to create — selected products already exist.')
+      return
+    }
+
+    setIsCreatingStarterCatalog(true)
+    setFeedback(null)
+
+    let created = 0
+    try {
+      for (const entry of itemsToCreate) {
+        await saveProduct({
+          name: entry.name,
+          englishName: entry.name,
+          sku: entry.sku,
+          category: entry.category,
+          subCategory: entry.subCategory,
+          productType: entry.productType,
+          unit: entry.unit,
+          purchaseUnit: entry.unit,
+          salesUnit: entry.unit,
+          conversionRatio: 1,
+          packSize: entry.packSize,
+          warehouseId: starterWarehouseId,
+          purchasePrice: 0,
+          sellingPrice: 0,
+          wholesalePrice: 0,
+          batchApplicable: true,
+          expiryApplicable: true,
+          isActive: true,
+          stockQty: 0,
+          minStock: 0,
+        })
+        created += 1
+      }
+
+      setFeedback(`Created ${created} product${created === 1 ? '' : 's'} from the starter catalog. Set pricing and opening stock from the Inventory list.`)
+      setStarterCatalogOpen(false)
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? `${reason.message} (${created} created before this error.)` : 'Unable to create the starter catalog.')
+    } finally {
+      setIsCreatingStarterCatalog(false)
+    }
+  }
+
   function openEditProductDialog(productId: string) {
     const product = data?.products[productId]
     if (!product) {
@@ -467,15 +636,33 @@ export function StockOverviewScreen() {
       await saveProduct(
         {
           name: productForm.name,
+          banglaName: productForm.banglaName,
+          englishName: productForm.englishName,
           sku: productForm.sku,
           category: productForm.category,
+          subCategory: productForm.subCategory,
+          brand: productForm.brand,
+          productType: productForm.productType,
           serialNumber: productForm.serialNumber,
           warrantyMonths: parseAmount(productForm.warrantyMonths),
+          unit: productForm.unit,
+          purchaseUnit: productForm.purchaseUnit || productForm.unit,
+          salesUnit: productForm.salesUnit || productForm.unit,
+          conversionRatio: parseAmount(productForm.conversionRatio) || 1,
+          packSize: productForm.packSize,
+          weight: parseAmount(productForm.weight),
           warehouseId: productForm.warehouseId,
           supplierId: productForm.supplierId === SUPPLIER_NONE ? '' : productForm.supplierId,
           purchasePrice: parseAmount(productForm.purchasePrice),
           sellingPrice: parseAmount(productForm.sellingPrice),
-          wholesalePrice: parseAmount(productForm.sellingPrice),
+          wholesalePrice: parseAmount(productForm.wholesalePrice) || parseAmount(productForm.sellingPrice),
+          mrp: parseAmount(productForm.mrp),
+          dealerPrice: parseAmount(productForm.dealerPrice),
+          distributorPrice: parseAmount(productForm.distributorPrice),
+          minSellingPrice: parseAmount(productForm.minSellingPrice),
+          batchApplicable: productForm.batchApplicable,
+          expiryApplicable: productForm.expiryApplicable,
+          isActive: productForm.isActive,
           stockQty: parseAmount(productForm.stockQty),
           minStock: parseAmount(productForm.minStock),
           maxStock: parseAmount(productForm.maxStock),
@@ -619,6 +806,10 @@ export function StockOverviewScreen() {
                 </Button>
                 <Button variant="outline" className="rounded-xl" onClick={openCreateWarehouseDialog} disabled={!canCreateInventory}>
                   Add warehouse
+                </Button>
+                <Button variant="outline" className="rounded-xl" onClick={openStarterCatalogDialog} disabled={!canCreateInventory || warehouses.length === 0}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Load starter catalog
                 </Button>
             </div>
 
@@ -769,10 +960,10 @@ export function StockOverviewScreen() {
 
                       return (
                         <TableRow key={product.id}>
-                          <TableCell><div className="flex items-center gap-3">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-14 w-14 rounded-xl border border-border/70 object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/30 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">No image</div>}<div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.category || 'General equipment'}</p></div></div></TableCell>
+                          <TableCell><div className="flex items-center gap-3">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-14 w-14 rounded-xl border border-border/70 object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/30 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">No image</div>}<div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.category || 'General equipment'}{product.subCategory ? ` · ${product.subCategory}` : ''}</p><div className="mt-1 flex flex-wrap gap-1">{product.batchApplicable ? <Badge variant="outline" className="border-sky-200 bg-sky-500/10 text-[10px] text-sky-700">Batch</Badge> : null}{product.expiryApplicable ? <Badge variant="outline" className="border-violet-200 bg-violet-500/10 text-[10px] text-violet-700">Expiry</Badge> : null}{product.isActive === false ? <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge> : null}</div></div></div></TableCell>
                           <TableCell className="font-medium"><p>{product.sku}</p>{product.serialNumber ? <p className="text-xs font-normal text-muted-foreground">SN: {product.serialNumber}</p> : null}{product.warrantyMonths ? <p className="text-xs font-normal text-muted-foreground">{product.warrantyMonths}mo warranty</p> : null}</TableCell>
                           <TableCell><div><p className="font-medium">{warehouse?.name ?? 'Unknown warehouse'}</p><p className="text-xs text-muted-foreground">{warehouse?.location ?? 'Location unavailable'}</p></div></TableCell>
-                          <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} units</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
+                          <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} {product.unit || 'units'}</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
                           <TableCell>{formatCurrency(product.purchasePrice, currency)}</TableCell>
                           <TableCell>{formatCurrency(product.sellingPrice, currency)}</TableCell>
                           <TableCell>{supplier?.name ?? 'Not assigned'}</TableCell>
@@ -832,23 +1023,76 @@ export function StockOverviewScreen() {
               <DialogDescription>Use the essential fields only. This form is optimized for workshop and lift inventory records.</DialogDescription>
             </DialogHeader>
             {(editingProductId ? canEditInventory : canCreateInventory) ? (
-              <form className="space-y-5" onSubmit={handleSaveProduct}>
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Two Post Service Lift" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Model / SKU</p><Input placeholder="TLT240SB" value={productForm.sku} onChange={(event) => setProductForm((current) => ({ ...current, sku: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Category</p><Input list="product-category-options" placeholder="Lift Series" value={productForm.category} onChange={(event) => setProductForm((current) => ({ ...current, category: event.target.value }))} /><datalist id="product-category-options">{categoryOptions.map((category) => (<option key={category} value={category} />))}</datalist></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Serial number</p><Input placeholder="SN-000123" value={productForm.serialNumber} onChange={(event) => setProductForm((current) => ({ ...current, serialNumber: event.target.value }))} /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warranty (months)</p><Input type="number" min="0" placeholder="6" value={productForm.warrantyMonths} onChange={(event) => setProductForm((current) => ({ ...current, warrantyMonths: event.target.value }))} /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse</p><Combobox options={warehouseOptions} value={productForm.warehouseId} onChange={(value) => setProductForm((current) => ({ ...current, warehouseId: value }))} placeholder="Select warehouse" searchPlaceholder="Search warehouses..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateWarehouseOpen(true) }} createNewLabel="Create warehouse" /></div>
-                  <div className="space-y-2 sm:col-span-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={productForm.supplierId} onChange={(value) => setProductForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
+              <form className="space-y-6" onSubmit={handleSaveProduct}>
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product code / SKU</p><Input placeholder="RFP-MO-200" value={productForm.sku} onChange={(event) => setProductForm((current) => ({ ...current, sku: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">বাংলা নাম <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="সরিষার তেল ২০০ মিলি" value={productForm.banglaName} onChange={(event) => setProductForm((current) => ({ ...current, banglaName: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">English name <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Mustard Oil 200ml" value={productForm.englishName} onChange={(event) => setProductForm((current) => ({ ...current, englishName: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Category</p><Input list="product-category-options" placeholder="Edible Oil" value={productForm.category} onChange={(event) => setProductForm((current) => ({ ...current, category: event.target.value }))} /><datalist id="product-category-options">{categoryOptions.map((category) => (<option key={category} value={category} />))}</datalist></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Sub-category <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Mustard Oil" value={productForm.subCategory} onChange={(event) => setProductForm((current) => ({ ...current, subCategory: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Brand <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Recipe" value={productForm.brand} onChange={(event) => setProductForm((current) => ({ ...current, brand: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product type <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-type-options" placeholder="Finished Goods" value={productForm.productType} onChange={(event) => setProductForm((current) => ({ ...current, productType: event.target.value }))} /><datalist id="product-type-options">{productTypeOptions.map((type) => (<option key={type} value={type} />))}</datalist></div>
+                  </div>
                 </div>
-                <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Purchase cost ({currency})</p><Input inputMode="numeric" placeholder="330000" value={productForm.purchasePrice} onChange={(event) => setProductForm((current) => ({ ...current, purchasePrice: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Selling price ({currency})</p><Input inputMode="numeric" placeholder="350000" value={productForm.sellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, sellingPrice: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Opening stock</p><Input type="number" min="0" value={productForm.stockQty} onChange={(event) => setProductForm((current) => ({ ...current, stockQty: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Minimum stock</p><Input type="number" min="0" value={productForm.minStock} onChange={(event) => setProductForm((current) => ({ ...current, minStock: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Maximum stock <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="No cap" value={productForm.maxStock} onChange={(event) => setProductForm((current) => ({ ...current, maxStock: event.target.value }))} /></div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Units &amp; Packaging</p>
+                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Unit</p><Input list="product-unit-options" placeholder="Pcs / Kg / Litre" value={productForm.unit} onChange={(event) => setProductForm((current) => ({ ...current, unit: event.target.value }))} /><datalist id="product-unit-options">{unitOptions.map((unit) => (<option key={unit} value={unit} />))}</datalist></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Purchase unit <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-unit-options" placeholder="Defaults to unit" value={productForm.purchaseUnit} onChange={(event) => setProductForm((current) => ({ ...current, purchaseUnit: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Sales unit <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-unit-options" placeholder="Defaults to unit" value={productForm.salesUnit} onChange={(event) => setProductForm((current) => ({ ...current, salesUnit: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Conversion ratio <span className="font-normal text-muted-foreground">(purchase → sales)</span></p><Input type="number" min="0" step="0.01" placeholder="1" value={productForm.conversionRatio} onChange={(event) => setProductForm((current) => ({ ...current, conversionRatio: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Pack size <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="200 ml" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Weight <span className="font-normal text-muted-foreground">(kg, optional)</span></p><Input type="number" min="0" step="0.01" placeholder="0.2" value={productForm.weight} onChange={(event) => setProductForm((current) => ({ ...current, weight: event.target.value }))} /></div>
+                  </div>
                 </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Pricing ({currency})</p>
+                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Cost price</p><Input inputMode="numeric" placeholder="120" value={productForm.purchasePrice} onChange={(event) => setProductForm((current) => ({ ...current, purchasePrice: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">MRP <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="180" value={productForm.mrp} onChange={(event) => setProductForm((current) => ({ ...current, mrp: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Retail (selling) price</p><Input inputMode="numeric" placeholder="170" value={productForm.sellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, sellingPrice: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Wholesale price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="Defaults to selling price" value={productForm.wholesalePrice} onChange={(event) => setProductForm((current) => ({ ...current, wholesalePrice: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Dealer price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="150" value={productForm.dealerPrice} onChange={(event) => setProductForm((current) => ({ ...current, dealerPrice: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Distributor price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="140" value={productForm.distributorPrice} onChange={(event) => setProductForm((current) => ({ ...current, distributorPrice: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Minimum selling price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="130" value={productForm.minSellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, minSellingPrice: event.target.value }))} /></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Stock &amp; Batch</p>
+                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Opening stock</p><Input type="number" min="0" value={productForm.stockQty} onChange={(event) => setProductForm((current) => ({ ...current, stockQty: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Reorder level</p><Input type="number" min="0" value={productForm.minStock} onChange={(event) => setProductForm((current) => ({ ...current, minStock: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Maximum stock <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="No cap" value={productForm.maxStock} onChange={(event) => setProductForm((current) => ({ ...current, maxStock: event.target.value }))} /></div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Batch applicable</p><Switch checked={productForm.batchApplicable} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, batchApplicable: checked }))} /></div>
+                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Expiry applicable</p><Switch checked={productForm.expiryApplicable} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, expiryApplicable: checked }))} /></div>
+                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Active</p><Switch checked={productForm.isActive} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, isActive: checked }))} /></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Warehouse &amp; Supplier</p>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse</p><Combobox options={warehouseOptions} value={productForm.warehouseId} onChange={(value) => setProductForm((current) => ({ ...current, warehouseId: value }))} placeholder="Select warehouse" searchPlaceholder="Search warehouses..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateWarehouseOpen(true) }} createNewLabel="Create warehouse" /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={productForm.supplierId} onChange={(value) => setProductForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Warranty <span className="font-normal normal-case text-muted-foreground/80">(only for warranted goods)</span></p>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Serial number <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="SN-000123" value={productForm.serialNumber} onChange={(event) => setProductForm((current) => ({ ...current, serialNumber: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warranty (months) <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="0" value={productForm.warrantyMonths} onChange={(event) => setProductForm((current) => ({ ...current, warrantyMonths: event.target.value }))} /></div>
+                  </div>
+                </div>
+
                 <div className="space-y-3 rounded-2xl border border-border/70 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -904,7 +1148,71 @@ export function StockOverviewScreen() {
           </DialogContent>
         </Dialog>
 
+        <Dialog open={starterCatalogOpen} onOpenChange={setStarterCatalogOpen}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Load Recipe Food starter catalog</DialogTitle>
+              <DialogDescription>
+                Creates the Category/SKU structure from the product spec (Mustard Oil, Tejpatta, Suji, Muri, Spice Products) with zero opening stock and zero price — update pricing and stock afterward from the Inventory list.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Warehouse for these products</p>
+                <Combobox
+                  options={warehouseOptions}
+                  value={starterWarehouseId}
+                  onChange={setStarterWarehouseId}
+                  placeholder="Select warehouse"
+                  searchPlaceholder="Search warehouses..."
+                />
+              </div>
+              <div className="space-y-4">
+                {RECIPE_STARTER_CATEGORIES.map((category) => (
+                  <div key={category} className="space-y-2 rounded-2xl border border-border/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{category}</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {RECIPE_STARTER_CATALOG.filter((entry) => entry.category === category).map((entry) => {
+                        const alreadyExists = existingSkuSet.has(entry.sku.toUpperCase())
+                        return (
+                          <label
+                            key={entry.sku}
+                            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${alreadyExists ? 'border-border/50 text-muted-foreground' : 'border-border/70'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(starterSelectedSkus[entry.sku]) && !alreadyExists}
+                              disabled={alreadyExists}
+                              onChange={(event) =>
+                                setStarterSelectedSkus((current) => ({ ...current, [entry.sku]: event.target.checked }))
+                              }
+                            />
+                            <span className="flex-1">
+                              {entry.name}
+                              <span className="ml-1 text-xs text-muted-foreground">({entry.sku})</span>
+                            </span>
+                            {alreadyExists ? <Badge variant="outline" className="text-[10px]">Added</Badge> : null}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setStarterCatalogOpen(false)}>Cancel</Button>
+              <Button type="button" onClick={() => void handleCreateStarterCatalog()} disabled={isCreatingStarterCatalog || !starterWarehouseId}>
+                {isCreatingStarterCatalog ? 'Creating...' : 'Create selected products'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading inventory...</CardContent></Card> : null}
+
+        <StockTransferSection />
+        <StockControlSection />
       </div>
 
       <QuickCreateWarehouseDialog

@@ -56,7 +56,14 @@ function getOrderCost(order: OrderRecord) {
   return order.items.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)
 }
 
-const emptyExpenseForm = { category: '', amount: '0', note: '', date: dateInputValue() }
+// order.total includes VAT, which is collected on the tax authority's
+// behalf and isn't revenue — Gross Profit (Section 10) is Net Sales minus
+// COGS, so every P&L figure below nets VAT back out first.
+function getOrderNetSales(order: OrderRecord) {
+  return order.total - (order.vat ?? 0)
+}
+
+const emptyExpenseForm = { category: '', amount: '0', note: '', date: dateInputValue(), paymentMethod: 'cash' as 'cash' | 'bank' }
 
 function SectionHeader({
   icon: Icon,
@@ -129,6 +136,7 @@ export default function FinancePage() {
         amount: Number(expenseForm.amount),
         note: expenseForm.note,
         date: expenseForm.date,
+        paymentMethod: expenseForm.paymentMethod,
       }
       await saveExpense(input)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
@@ -162,7 +170,7 @@ export default function FinancePage() {
   }, [mode, purchases, selectedDate, selectedMonth])
 
   const finance = useMemo(() => {
-    const revenue = filteredOrders.reduce((sum, order) => sum + order.total, 0)
+    const revenue = filteredOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
     const cashIn = filteredOrders.reduce((sum, order) => sum + order.paid, 0)
     const receivable = filteredOrders.reduce((sum, order) => sum + order.due, 0)
     const cogs = filteredOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
@@ -198,7 +206,7 @@ export default function FinancePage() {
       const monthKey = `${year}-${String(index + 1).padStart(2, '0')}`
       const monthOrders = orders.filter((order) => isSameMonth(order.createdAt, monthKey))
       const monthPurchases = purchases.filter((purchase) => isSameMonth(purchase.createdAt, monthKey))
-      const revenue = monthOrders.reduce((sum, order) => sum + order.total, 0)
+      const revenue = monthOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
       const cash = monthOrders.reduce((sum, order) => sum + order.paid, 0)
       const due = monthOrders.reduce((sum, order) => sum + order.due, 0)
       const cogs = monthOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
@@ -298,6 +306,8 @@ export default function FinancePage() {
           <div class="totals">
             <div><span>Total amount</span><strong>${formatCurrency(order.subtotal ?? order.total, currency)}</strong></div>
             <div><span>Discount</span><strong>${formatCurrency(order.discount ?? 0, currency)}</strong></div>
+            ${order.promotionalDiscount ? `<div><span>Promotional discount</span><strong>${formatCurrency(order.promotionalDiscount, currency)}</strong></div>` : ''}
+            ${order.vat ? `<div><span>VAT</span><strong>${formatCurrency(order.vat, currency)}</strong></div>` : ''}
             <div><span>Payable amount</span><strong>${formatCurrency(order.total, currency)}</strong></div>
             <div><span>Cash</span><strong>${formatCurrency(order.paid, currency)}</strong></div>
             <div class="grand"><span>Due amount</span><strong>${formatCurrency(order.due, currency)}</strong></div>
@@ -437,7 +447,7 @@ export default function FinancePage() {
                     </TableHeader>
                     <TableBody>
                       {filteredOrders.map((order) => {
-                        const profit = order.total - getOrderCost(order)
+                        const profit = getOrderNetSales(order) - getOrderCost(order)
 
                         return (
                           <TableRow key={order.id} className={cn(order.due > 0 && 'bg-rose-500/10 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300')}>
@@ -567,6 +577,19 @@ export default function FinancePage() {
                         required
                       />
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Paid from</p>
+                    <Select
+                      value={expenseForm.paymentMethod}
+                      onValueChange={(value) => setExpenseForm((current) => ({ ...current, paymentMethod: value as 'cash' | 'bank' }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Cash</SelectItem>
+                        <SelectItem value="bank">Bank</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">

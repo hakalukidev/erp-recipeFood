@@ -5,8 +5,10 @@ import Link from 'next/link'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
+  BookOpenText,
   Boxes,
   CheckCheck,
+  Factory,
   FileSpreadsheet,
   FileText,
   Handshake,
@@ -87,6 +89,13 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'products:view',
       },
       {
+        label: 'Manufacturing',
+        description: 'Recipes/BOM, production planning, and cost calculation',
+        href: '/admin/manufacturing',
+        icon: Factory,
+        permission: 'products:view',
+      },
+      {
         label: 'Suppliers & Imports',
         description: 'Purchase orders, LC tracking, and landed cost',
         href: '/admin/suppliers',
@@ -140,6 +149,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Ledger, profit/loss, and multi-currency reporting',
         href: '/admin/finance',
         icon: Wallet,
+        permission: 'finance:view',
+      },
+      {
+        label: 'Accounting Module',
+        description: 'Chart of accounts, journal, general ledger, trial balance, P&L, balance sheet, cash flow',
+        href: '/admin/accounting',
+        icon: BookOpenText,
         permission: 'finance:view',
       },
       {
