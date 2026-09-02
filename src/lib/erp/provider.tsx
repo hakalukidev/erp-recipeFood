@@ -26,16 +26,26 @@ import type {
   BatchRecord,
   BillOfMaterialInput,
   BillOfMaterialRecord,
+  BudgetInput,
+  BudgetRecord,
   ChartOfAccountInput,
   ChartOfAccountRecord,
   CollectionInput,
   CollectionRecord,
+  CommissionPayoutInput,
+  CommissionPayoutRecord,
+  CommissionRuleInput,
+  CommissionRuleRecord,
   CourierInput,
   CourierRecord,
   CustomerInput,
   CustomerRecord,
+  CustomerVisitInput,
+  CustomerVisitRecord,
   ERPData,
+  ExpenseApprovalStatus,
   ExpenseInput,
+  ExpenseRecord,
   InvestorInput,
   JournalEntryInput,
   JournalEntryLine,
@@ -52,6 +62,8 @@ import type {
   ProductionOrderInput,
   ProductionOrderRecord,
   PurchaseInput,
+  PurchaseApprovalStage,
+  PurchaseOrderApproval,
   PurchaseOrderInput,
   PurchaseOrderRecord,
   PurchaseReceiveInput,
@@ -63,8 +75,14 @@ import type {
   QualityCheckRecord,
   QualityCheckStatus,
   RoleRecord,
+  RouteInput,
+  RouteRecord,
+  RouteVisitScheduleInput,
+  RouteVisitScheduleRecord,
   SalesReturnInput,
   SalesReturnRecord,
+  SalesTargetInput,
+  SalesTargetRecord,
   SellerInput,
   SellerTransactionInput,
   SettingsInput,
@@ -104,6 +122,14 @@ import {
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
+export const VISIT_OUTCOME_LABEL: Record<CustomerVisitRecord['outcome'], string> = {
+  'order-placed': 'Order placed',
+  'collection-made': 'Collection made',
+  'order-and-collection': 'Order + collection',
+  'no-order': 'No order',
+  'store-closed': 'Store closed',
+}
+
 type ERPContextValue = {
   data: ERPData | null
   loading: boolean
@@ -133,6 +159,7 @@ type ERPContextValue = {
   recordPurchase: (input: PurchaseInput) => Promise<void>
   dismissPurchaseRequisition: (requisitionId: string) => Promise<void>
   createPurchaseOrder: (input: PurchaseOrderInput) => Promise<string>
+  updatePurchaseOrderApproval: (purchaseOrderId: string, decision: 'approved' | 'rejected', note?: string) => Promise<void>
   receivePurchaseOrder: (purchaseOrderId: string, input: PurchaseReceiveInput) => Promise<void>
   cancelPurchaseOrder: (purchaseOrderId: string) => Promise<void>
   recordSupplierPayment: (purchaseOrderId: string, amount: number) => Promise<void>
@@ -165,8 +192,22 @@ type ERPContextValue = {
   markNotificationRead: (notificationId: string) => Promise<void>
   markAllNotificationsRead: (notificationIds: string[]) => Promise<void>
   saveExpense: (input: ExpenseInput, expenseId?: string) => Promise<void>
+  updateExpenseApproval: (expenseId: string, approvalStatus: ExpenseApprovalStatus) => Promise<void>
   saveInvestor: (input: InvestorInput, investorId?: string) => Promise<void>
   deleteExpense: (expenseId: string) => Promise<void>
+  saveBudget: (input: BudgetInput, budgetId?: string) => Promise<void>
+  deleteBudget: (budgetId: string) => Promise<void>
+  saveRoute: (input: RouteInput, routeId?: string) => Promise<string>
+  deleteRoute: (routeId: string) => Promise<void>
+  recordCustomerVisit: (input: CustomerVisitInput) => Promise<string>
+  deleteCustomerVisit: (visitId: string) => Promise<void>
+  saveRouteVisitSchedule: (input: RouteVisitScheduleInput, scheduleId?: string) => Promise<string>
+  deleteRouteVisitSchedule: (scheduleId: string) => Promise<void>
+  saveSalesTarget: (input: SalesTargetInput, targetId?: string) => Promise<string>
+  deleteSalesTarget: (targetId: string) => Promise<void>
+  saveCommissionRule: (input: CommissionRuleInput, ruleId?: string) => Promise<string>
+  deleteCommissionRule: (ruleId: string) => Promise<void>
+  recordCommissionPayout: (input: CommissionPayoutInput) => Promise<string>
   saveChartOfAccount: (input: ChartOfAccountInput, accountId?: string) => Promise<string>
   deleteChartOfAccount: (accountId: string) => Promise<void>
   seedStandardChartOfAccounts: () => Promise<void>
@@ -242,6 +283,12 @@ const ERP_TOP_LEVEL_KEYS = [
   'activities',
   'loginHistory',
   'expenses',
+  'budgets',
+  'routes',
+  'customerVisits',
+  'salesTargets',
+  'commissionRules',
+  'commissionPayouts',
   'sellers',
   'sellerTransactions',
   'couriers',
@@ -383,6 +430,7 @@ function normalizeOrderRecord(order: OrderRecord): OrderRecord {
     // through the old implicit-approval flow — default them to "approved"
     // so they don't suddenly show up as awaiting approval.
     approvalStatus: order.approvalStatus ?? 'approved',
+    approvalReasons: order.approvalReasons ?? [],
     promotionalDiscount: Number(order.promotionalDiscount ?? 0),
     vat: Number(order.vat ?? 0),
     warehouseId: order.warehouseId || '',
@@ -394,6 +442,72 @@ function normalizeOrderMap(orders?: Record<string, OrderRecord> | null) {
   return Object.fromEntries(
     Object.entries(orders ?? {}).map(([id, order]) => [id, normalizeOrderRecord(order)])
   )
+}
+
+// Section 36 — mirrors normalizeOrderRecord above: expenses recorded before
+// the Expense Approval Workflow existed default to "approved" so they don't
+// retroactively show up as awaiting approval.
+function normalizeExpenseRecord(expense: ExpenseRecord): ExpenseRecord {
+  return {
+    ...expense,
+    approvalStatus: expense.approvalStatus ?? 'approved',
+    approvedBy: expense.approvedBy ?? '',
+    approvedByName: expense.approvedByName ?? '',
+    approvedAt: expense.approvedAt ?? '',
+  }
+}
+
+function normalizeExpenseMap(expenses?: Record<string, ExpenseRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(expenses ?? {}).map(([id, expense]) => [id, normalizeExpenseRecord(expense)])
+  )
+}
+
+// Section 48 — purchase orders created before the Purchase Approval
+// Workflow existed already went straight from Requester to Received under
+// the old flow; default them to fully "approved" so they don't retroactively
+// get blocked from being received.
+function normalizePurchaseOrderRecord(purchaseOrder: PurchaseOrderRecord): PurchaseOrderRecord {
+  return {
+    ...purchaseOrder,
+    approvalStatus: purchaseOrder.approvalStatus ?? 'approved',
+    approvalStage: purchaseOrder.approvalStage ?? 'completed',
+    approvals: purchaseOrder.approvals ?? [],
+  }
+}
+
+function normalizePurchaseOrderMap(purchaseOrders?: Record<string, PurchaseOrderRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(purchaseOrders ?? {}).map(([id, purchaseOrder]) => [id, normalizePurchaseOrderRecord(purchaseOrder)])
+  )
+}
+
+// Section 48 — Purchase Approval Workflow chain, in order. Each stage is
+// gated on the closest existing permission this codebase already has (there
+// is no per-role "Department Head" / "Purchase Manager" / "Management"
+// permission catalog, and no role-edit UI to grant a brand-new one — see
+// the Sales/Expense approval gates for the same constraint), so Department
+// Head and Purchase Manager share suppliers:edit while still being recorded
+// as two distinct sign-offs in the audit trail.
+export const PURCHASE_APPROVAL_STAGE_ORDER: Array<Exclude<PurchaseApprovalStage, 'completed'>> = [
+  'department_head',
+  'purchase_manager',
+  'finance',
+  'management',
+]
+
+export const PURCHASE_APPROVAL_STAGE_LABEL: Record<Exclude<PurchaseApprovalStage, 'completed'>, string> = {
+  department_head: 'Department Head',
+  purchase_manager: 'Purchase Manager',
+  finance: 'Finance',
+  management: 'Management',
+}
+
+export const PURCHASE_APPROVAL_STAGE_PERMISSION: Record<Exclude<PurchaseApprovalStage, 'completed'>, string> = {
+  department_head: 'suppliers:edit',
+  purchase_manager: 'suppliers:edit',
+  finance: 'finance:edit',
+  management: 'orders:approve',
 }
 
 // Cost of Goods Sold for an order — sum of each line's cost price at the
@@ -534,6 +648,70 @@ function buildExpenseLedgerEntries(params: {
   }
 }
 
+// Section 37 (Budget Management): "Actual" is never stored on a budget —
+// it's the live sum of expenses matching the budget's category (compared
+// case-insensitively, same as resolveExpenseLedgerAccount above) that fall
+// inside its month (for a monthly budget) or year (for a yearly one).
+// Exported so the Accounting page's Budget tab can render the same figure
+// it's checked against by checkBudgetOverrun below.
+export function getBudgetActual(
+  expenses: Record<string, ExpenseRecord>,
+  budget: Pick<BudgetRecord, 'category' | 'periodType' | 'year' | 'month'>
+) {
+  const category = budget.category.trim().toLowerCase()
+  return Object.values(expenses)
+    .filter((expense) => expense.category.trim().toLowerCase() === category)
+    .filter((expense) => {
+      const expenseDate = new Date(expense.date)
+      if (Number.isNaN(expenseDate.getTime()) || expenseDate.getFullYear() !== budget.year) {
+        return false
+      }
+      return budget.periodType === 'yearly' || expenseDate.getMonth() + 1 === budget.month
+    })
+    .reduce((sum, expense) => sum + expense.amount, 0)
+}
+
+// Section 13's own auto-alert (stock crossing minStock) taught this
+// codebase the pattern: re-check after every state-changing write, alert
+// every time the threshold is still crossed rather than only on the first
+// crossing. Runs after every saveExpense — `expenses` must already reflect
+// the just-saved record (the caller merges it in before calling this, since
+// `data.expenses` is only current as of the last snapshot).
+async function checkBudgetOverrun(
+  budgets: Record<string, BudgetRecord>,
+  expenses: Record<string, ExpenseRecord>,
+  writeNotification: (title: string, body: string, level: 'info' | 'warning' | 'critical', roles?: string[]) => Promise<void>,
+  category: string,
+  date: string
+) {
+  const expenseDate = new Date(date)
+  if (Number.isNaN(expenseDate.getTime())) {
+    return
+  }
+  const year = expenseDate.getFullYear()
+  const month = expenseDate.getMonth() + 1
+  const normalizedCategory = category.trim().toLowerCase()
+
+  const matchingBudgets = Object.values(budgets).filter((budget) => {
+    if (budget.category.trim().toLowerCase() !== normalizedCategory) return false
+    if (budget.year !== year) return false
+    return budget.periodType === 'yearly' || budget.month === month
+  })
+
+  for (const budget of matchingBudgets) {
+    const actual = getBudgetActual(expenses, budget)
+    if (actual > budget.budgetAmount) {
+      const periodLabel = budget.periodType === 'monthly' ? `${budget.month}/${budget.year}` : String(budget.year)
+      await writeNotification(
+        'Budget overrun alert',
+        `${budget.category} (${periodLabel}): actual ${actual.toLocaleString('en-BD')} exceeds budget ${budget.budgetAmount.toLocaleString('en-BD')} — over by ${(actual - budget.budgetAmount).toLocaleString('en-BD')}.`,
+        'warning',
+        ['super_admin', 'manager', 'accounts']
+      )
+    }
+  }
+}
+
 // Section 13 (Purchase Requisition): whenever a stock-moving action leaves a
 // product below its reorder level (minStock), the system should auto-flag
 // it — and clear the flag once a later receipt brings stock back up. Called
@@ -642,7 +820,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     bankAccounts: source.bankAccounts ?? {},
     bankTransactions: source.bankTransactions ?? {},
     purchaseRequisitions: source.purchaseRequisitions ?? {},
-    purchaseOrders: source.purchaseOrders ?? {},
+    purchaseOrders: normalizePurchaseOrderMap(source.purchaseOrders),
     purchaseReturns: source.purchaseReturns ?? {},
     salesReturns: source.salesReturns ?? {},
     collections: source.collections ?? {},
@@ -660,7 +838,14 @@ function normalizeERPData(data: ERPData | null): ERPData {
     notifications: source.notifications ?? {},
     activities: source.activities ?? {},
     loginHistory: source.loginHistory ?? {},
-    expenses: source.expenses ?? {},
+    expenses: normalizeExpenseMap(source.expenses),
+    budgets: source.budgets ?? {},
+    routes: source.routes ?? {},
+    customerVisits: source.customerVisits ?? {},
+    routeVisitSchedules: source.routeVisitSchedules ?? {},
+    salesTargets: source.salesTargets ?? {},
+    commissionRules: source.commissionRules ?? {},
+    commissionPayouts: source.commissionPayouts ?? {},
     sellers: source.sellers ?? {},
     sellerTransactions: source.sellerTransactions ?? {},
     couriers: source.couriers ?? {},
@@ -1833,6 +2018,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       paid: 0,
       due: 0,
       expectedDate: input.expectedDate?.trim() ?? '',
+      // Section 48: the Requester's submission is the first step of the
+      // chain — it now needs to clear Department Head → Purchase Manager →
+      // Finance → Management before it can be received.
+      approvalStatus: 'pending',
+      approvalStage: 'department_head',
+      approvals: [],
       createdAt: now,
       updatedAt: now,
     }
@@ -1858,6 +2049,75 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
+  // Section 48 — Purchase Approval Workflow: advances (or rejects) the
+  // purchase order at whichever stage it is currently sitting at. Approving
+  // the last stage (Management) flips the order to fully approved, which is
+  // what unlocks receivePurchaseOrder above. Rejecting at any stage cancels
+  // the order outright — since createPurchaseOrder never touches stock or
+  // the ledger, that's a plain status flip, nothing to reverse.
+  async function updatePurchaseOrderApproval(purchaseOrderId: string, decision: 'approved' | 'rejected', note?: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const purchaseOrder = data.purchaseOrders[purchaseOrderId]
+    if (!purchaseOrder) {
+      throw new Error('Purchase order not found.')
+    }
+
+    if (purchaseOrder.approvalStage === 'completed' || purchaseOrder.approvalStatus !== 'pending') {
+      throw new Error('This purchase order has already been through the approval chain.')
+    }
+
+    const currentStage = purchaseOrder.approvalStage
+    const requiredPermission = PURCHASE_APPROVAL_STAGE_PERMISSION[currentStage]
+    if (!hasPermissionCheck(data, currentUser, requiredPermission)) {
+      throw new Error(`You do not have permission to act as ${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} on this purchase order.`)
+    }
+
+    const now = new Date().toISOString()
+    const approval: PurchaseOrderApproval = {
+      stage: currentStage,
+      status: decision,
+      byUserId: currentUser.id,
+      byUserName: currentUser.name,
+      note: note?.trim() ?? '',
+      at: now,
+    }
+    const approvals = [...purchaseOrder.approvals, approval]
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {
+      [`purchaseOrders/${purchaseOrderId}/approvals`]: approvals,
+      [`purchaseOrders/${purchaseOrderId}/updatedAt`]: now,
+    }
+
+    if (decision === 'rejected') {
+      updates[`purchaseOrders/${purchaseOrderId}/approvalStatus`] = 'rejected'
+      updates[`purchaseOrders/${purchaseOrderId}/status`] = 'cancelled'
+    } else {
+      const currentIndex = PURCHASE_APPROVAL_STAGE_ORDER.indexOf(currentStage)
+      const nextStage: PurchaseApprovalStage = PURCHASE_APPROVAL_STAGE_ORDER[currentIndex + 1] ?? 'completed'
+      updates[`purchaseOrders/${purchaseOrderId}/approvalStage`] = nextStage
+      if (nextStage === 'completed') {
+        updates[`purchaseOrders/${purchaseOrderId}/approvalStatus`] = 'approved'
+      }
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'purchase_order_approval_changed',
+      'inventory',
+      `${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} ${decision} purchase order ${purchaseOrder.poNumber}.`
+    )
+    await writeNotification(
+      'Purchase order approval updated',
+      `Purchase order ${purchaseOrder.poNumber} was ${decision} at the ${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} stage by ${currentUser.name}.`,
+      decision === 'approved' ? 'info' : 'warning',
+      ['super_admin', 'manager', 'accounts']
+    )
+  }
+
   // Section 12, stage 3-6: Goods Receive → Quality Check → GRN → Warehouse
   // Receive, all in one step — only quality-passed quantities are added to
   // stock, and the accepted value becomes the Supplier Bill / Accounts
@@ -1874,6 +2134,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     if (purchaseOrder.status !== 'ordered') {
       throw new Error('Only orders awaiting receipt can be received.')
+    }
+
+    // Section 48: "Approval অনুযায়ী Purchase Order হবে" — goods can only be
+    // received once the order has cleared the full approval chain.
+    if (purchaseOrder.approvalStatus !== 'approved') {
+      throw new Error('This purchase order is still awaiting approval and cannot be received yet.')
     }
 
     if (!input.items.length) {
@@ -3559,6 +3825,25 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const priceMode = input.priceMode ?? (customer.isWholesale ? 'wholesale' : 'retail')
     const cogs = getOrderCogs(orderItems)
 
+    // Section 49 — Sales Approval Workflow: approval is only required for
+    // the special cases the spec lists. A plain order (none of these) skips
+    // straight to "approved" instead of sitting in every approver's queue.
+    const approvalReasons: string[] = []
+    const projectedCustomerDue = (customer.due ?? 0) + due
+    if ((customer.creditLimit ?? 0) > 0 && projectedCustomerDue > (customer.creditLimit ?? 0)) {
+      approvalReasons.push('Credit limit exceeded')
+    }
+    if (discount > 0) {
+      approvalReasons.push('Special discount applied')
+    }
+    const belowMinimumPrice = orderItems.some((item) => {
+      const product = data.products[item.productId]
+      return (product?.minSellingPrice ?? 0) > 0 && item.unitPrice < (product?.minSellingPrice ?? 0)
+    })
+    if (belowMinimumPrice) {
+      approvalReasons.push('Below minimum selling price')
+    }
+
     const updates: Record<string, unknown> = {
       [`orders/${orderId}`]: {
         id: orderId,
@@ -3568,7 +3853,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         salesPersonId: currentUser.id,
         salesPersonName: currentUser.name,
         status: 'pending',
-        approvalStatus: 'pending',
+        approvalStatus: approvalReasons.length > 0 ? 'pending' : 'approved',
+        approvalReasons,
         paymentStatus: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
         priceMode,
         total,
@@ -3721,10 +4007,31 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const billNumber = input.billNumber?.trim() || order.billNumber
     const cogs = getOrderCogs(orderItems)
 
+    // Section 49: re-check the special-case triggers, since editing can be
+    // what pushes an order over the credit limit / into a special discount
+    // / below the minimum price in the first place.
+    const approvalReasons: string[] = []
+    const projectedCustomerDue = (customer.due ?? 0) - order.due + due
+    if ((customer.creditLimit ?? 0) > 0 && projectedCustomerDue > (customer.creditLimit ?? 0)) {
+      approvalReasons.push('Credit limit exceeded')
+    }
+    if (discount > 0) {
+      approvalReasons.push('Special discount applied')
+    }
+    const belowMinimumPrice = orderItems.some((item) => {
+      const product = data.products[item.productId]
+      return (product?.minSellingPrice ?? 0) > 0 && item.unitPrice < (product?.minSellingPrice ?? 0)
+    })
+    if (belowMinimumPrice) {
+      approvalReasons.push('Below minimum selling price')
+    }
+
     const updates: Record<string, unknown> = {
       [`orders/${orderId}/billNumber`]: billNumber,
       [`orders/${orderId}/customerId`]: customer.id,
       [`orders/${orderId}/customerName`]: customer.name,
+      [`orders/${orderId}/approvalStatus`]: approvalReasons.length > 0 ? 'pending' : 'approved',
+      [`orders/${orderId}/approvalReasons`]: approvalReasons,
       [`orders/${orderId}/paymentStatus`]: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
       [`orders/${orderId}/priceMode`]: priceMode,
       [`orders/${orderId}/total`]: total,
@@ -3949,9 +4256,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Sales Approval step: a sales officer's order sits at approvalStatus
-  // "pending" until someone with orders:approve signs off. Rejecting an
-  // order cancels it outright — stock and ledger entries are reversed by
+  // Section 49 — Sales Approval Workflow: an order only sits at
+  // approvalStatus "pending" (see createOrder/updateOrder's approvalReasons
+  // computation) when it tripped one of the special cases — Credit Limit
+  // Exceeded, Special Discount, or Below Minimum Price — otherwise it skips
+  // straight to "approved". The spec's chain (Sales Officer → Sales Manager
+  // → Finance/Credit Control → Management) collapses to this single
+  // orders:approve gate, the same simplification already used here since
+  // there's no per-role approve permission for each named stage. Rejecting
+  // an order cancels it outright — stock and ledger entries are reversed by
   // cancelOrder — since a rejected invoice should not stand.
   async function updateOrderApproval(orderId: string, approvalStatus: NonNullable<OrderRecord['approvalStatus']>) {
     if (!data || !currentUser) {
@@ -4219,13 +4532,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const paymentMethod = input.paymentMethod ?? existingExpense?.paymentMethod ?? 'cash'
     const expenseDate = input.date?.trim() || now
-    const expense = {
+    const expense: ExpenseRecord = {
       id,
       category,
       amount: input.amount,
       note: input.note?.trim() ?? '',
       date: expenseDate,
       paymentMethod,
+      // Section 36: every new expense starts at "pending" until someone
+      // with finance:edit reviews it (updateExpenseApproval below); editing
+      // an already-reviewed expense leaves its approval status untouched.
+      approvalStatus: existingExpense?.approvalStatus ?? 'pending',
+      approvedBy: existingExpense?.approvedBy ?? '',
+      approvedByName: existingExpense?.approvedByName ?? '',
+      approvedAt: existingExpense?.approvedAt ?? '',
       createdBy: existingExpense?.createdBy ?? currentUser.id,
       createdByName: existingExpense?.createdByName ?? currentUser.name,
       createdAt: existingExpense?.createdAt ?? now,
@@ -4253,6 +4573,573 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'finance',
       existingExpense ? `Updated ${category} expense entry.` : `Recorded ${category} expense of ${expense.amount}.`
     )
+    // Section 37: re-check this category's budget(s) with the just-saved
+    // amount folded in — data.expenses is last snapshot, not this write.
+    await checkBudgetOverrun(data.budgets, { ...data.expenses, [id]: expense }, writeNotification, category, expenseDate)
+  }
+
+  // Section 36 (Expense Approval Workflow): an expense posts to the ledger
+  // immediately at entry (see buildExpenseLedgerEntries) and sits at
+  // "pending" until someone with finance:edit signs off — same "post
+  // first, approve as a review gate" shape as Sales Order approval
+  // (updateOrderApproval above). Rejecting reverses the ledger entries (the
+  // spend is disallowed) but keeps the record itself for audit, unlike
+  // deleteExpense which removes it outright. Only a "pending" expense can
+  // be reviewed, to avoid double-reversing or re-posting on a flip-flop.
+  async function updateExpenseApproval(expenseId: string, approvalStatus: ExpenseApprovalStatus) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to approve expenses.')
+    }
+
+    const expense = data.expenses[expenseId]
+    if (!expense) {
+      throw new Error('Expense not found.')
+    }
+
+    if (expense.approvalStatus !== 'pending') {
+      throw new Error('This expense has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {
+      [`expenses/${expenseId}/approvalStatus`]: approvalStatus,
+      [`expenses/${expenseId}/approvedBy`]: currentUser.id,
+      [`expenses/${expenseId}/approvedByName`]: currentUser.name,
+      [`expenses/${expenseId}/approvedAt`]: now,
+    }
+
+    if (approvalStatus === 'rejected') {
+      const active = getActiveLedgerEntries(data.ledgerEntries, expenseId)
+      Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'expense_approval_changed',
+      'finance',
+      `${expense.category} expense of ${expense.amount} was ${approvalStatus} by ${currentUser.name}.`
+    )
+    await writeNotification(
+      'Expense approval updated',
+      `${expense.category} expense of ${expense.amount} was ${approvalStatus} by ${currentUser.name}.`,
+      approvalStatus === 'approved' ? 'info' : 'warning',
+      ['super_admin', 'manager', 'accounts']
+    )
+  }
+
+  // ---- Budget Management (Section 37) ------------------------------------
+
+  async function saveBudget(input: BudgetInput, budgetId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before setting a budget.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to manage budgets.')
+    }
+
+    const category = input.category.trim()
+    if (!category) {
+      throw new Error('Budget category is required.')
+    }
+    if (!input.year || input.year < 2000) {
+      throw new Error('A valid year is required.')
+    }
+    if (input.periodType === 'monthly' && (!input.month || input.month < 1 || input.month > 12)) {
+      throw new Error('A valid month is required for a monthly budget.')
+    }
+    if (input.budgetAmount <= 0) {
+      throw new Error('Budget amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = budgetId ? data.budgets[budgetId] : null
+    const id = existing?.id ?? createId('budget')
+    const now = new Date().toISOString()
+    const budget: BudgetRecord = {
+      id,
+      category,
+      periodType: input.periodType,
+      year: input.year,
+      month: input.periodType === 'monthly' ? (input.month as number) : 0,
+      budgetAmount: input.budgetAmount,
+      note: input.note?.trim() ?? '',
+      createdBy: existing?.createdBy ?? currentUser.id,
+      createdByName: existing?.createdByName ?? currentUser.name,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/budgets'), { [id]: budget })
+    await writeActivity(
+      existing ? 'budget_updated' : 'budget_created',
+      'finance',
+      `${existing ? 'Updated' : 'Set'} ${budget.periodType} budget for ${category} (${budget.periodType === 'monthly' ? `${budget.month}/${budget.year}` : budget.year}): ${budget.budgetAmount}.`
+    )
+  }
+
+  async function deleteBudget(budgetId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to manage budgets.')
+    }
+
+    const budget = data.budgets[budgetId]
+    if (!budget) {
+      throw new Error('Budget not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/budgets'), { [budgetId]: null })
+    await writeActivity('budget_deleted', 'finance', `Deleted ${budget.category} budget.`)
+  }
+
+  // ---- Sales Force Management (Section 40) -------------------------------
+  async function saveRoute(input: RouteInput, routeId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before managing routes.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
+      throw new Error('You do not have permission to manage routes.')
+    }
+
+    const routeName = input.routeName.trim()
+    if (!routeName) {
+      throw new Error('Route name is required.')
+    }
+
+    const salesOfficer = data.users[input.salesOfficerId]
+    if (!salesOfficer) {
+      throw new Error('Select a valid sales officer.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = routeId ? data.routes[routeId] : null
+    const id = existing?.id ?? createId('route')
+    const now = new Date().toISOString()
+    const route: RouteRecord = {
+      id,
+      routeCode: input.routeCode?.trim() || existing?.routeCode || `RT-${Date.now().toString().slice(-6)}`,
+      routeName,
+      territory: input.territory?.trim() ?? '',
+      salesArea: input.salesArea?.trim() ?? '',
+      salesOfficerId: salesOfficer.id,
+      salesOfficerName: salesOfficer.name,
+      customerIds: input.customerIds ?? [],
+      status: input.status ?? 'active',
+      notes: input.notes?.trim() ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/routes'), { [id]: route })
+    await writeActivity(
+      existing ? 'route_updated' : 'route_created',
+      'sales',
+      `${existing ? 'Updated' : 'Created'} route ${route.routeName} for ${route.salesOfficerName}.`
+    )
+    return id
+  }
+
+  async function deleteRoute(routeId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
+      throw new Error('You do not have permission to manage routes.')
+    }
+
+    const route = data.routes[routeId]
+    if (!route) {
+      throw new Error('Route not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/routes'), { [routeId]: null })
+    await writeActivity('route_deleted', 'sales', `Deleted route ${route.routeName}.`)
+  }
+
+  async function recordCustomerVisit(input: CustomerVisitInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before logging a visit.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:create')) {
+      throw new Error('You do not have permission to log customer visits.')
+    }
+
+    const salesOfficer = data.users[input.salesOfficerId]
+    if (!salesOfficer) {
+      throw new Error('Select a valid sales officer.')
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+
+    const route = input.routeId ? data.routes[input.routeId] : null
+    const order = input.orderId ? data.orders[input.orderId] : null
+    const collection = input.collectionId ? data.collections[input.collectionId] : null
+
+    const db = getDatabaseOrThrow()
+    const id = createId('visit')
+    const now = new Date().toISOString()
+    const visit: CustomerVisitRecord = {
+      id,
+      visitDate: input.visitDate?.trim() || now,
+      salesOfficerId: salesOfficer.id,
+      salesOfficerName: salesOfficer.name,
+      customerId: customer.id,
+      customerName: customer.name,
+      routeId: route?.id ?? '',
+      routeName: route?.routeName ?? '',
+      territory: route?.territory ?? customer.territory ?? '',
+      outcome: input.outcome,
+      orderId: order?.id ?? '',
+      orderAmount: order?.total ?? 0,
+      collectionId: collection?.id ?? '',
+      collectionAmount: collection?.amount ?? 0,
+      remarks: input.remarks?.trim() ?? '',
+      createdAt: now,
+    }
+
+    await update(ref(db, 'erp/customerVisits'), { [id]: visit })
+    await writeActivity(
+      'customer_visit_logged',
+      'sales',
+      `${salesOfficer.name} visited ${customer.name} (${VISIT_OUTCOME_LABEL[input.outcome]}).`
+    )
+    return id
+  }
+
+  async function deleteCustomerVisit(visitId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
+      throw new Error('You do not have permission to remove visit logs.')
+    }
+
+    const visit = data.customerVisits[visitId]
+    if (!visit) {
+      throw new Error('Visit not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/customerVisits'), { [visitId]: null })
+    await writeActivity('customer_visit_deleted', 'sales', `Removed visit log for ${visit.customerName}.`)
+  }
+
+  // ---- Route Visit Schedule / "Beat Plan" (Section 45) --------------------
+  async function saveRouteVisitSchedule(input: RouteVisitScheduleInput, scheduleId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before planning a visit schedule.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
+      throw new Error('You do not have permission to manage the visit schedule.')
+    }
+
+    const route = data.routes[input.routeId]
+    if (!route) {
+      throw new Error('Select a valid route.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = scheduleId ? data.routeVisitSchedules[scheduleId] : null
+    const id = existing?.id ?? createId('sched')
+    const now = new Date().toISOString()
+    const schedule: RouteVisitScheduleRecord = {
+      id,
+      routeId: route.id,
+      routeName: route.routeName,
+      salesOfficerId: route.salesOfficerId,
+      salesOfficerName: route.salesOfficerName,
+      territory: route.territory,
+      dayOfWeek: input.dayOfWeek,
+      customerIds: input.customerIds ?? [],
+      status: input.status ?? 'active',
+      notes: input.notes?.trim() ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/routeVisitSchedules'), { [id]: schedule })
+    await writeActivity(
+      existing ? 'visit_schedule_updated' : 'visit_schedule_created',
+      'sales',
+      `${existing ? 'Updated' : 'Planned'} ${schedule.dayOfWeek} visit schedule for ${schedule.routeName}.`
+    )
+    return id
+  }
+
+  async function deleteRouteVisitSchedule(scheduleId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
+      throw new Error('You do not have permission to manage the visit schedule.')
+    }
+
+    const schedule = data.routeVisitSchedules[scheduleId]
+    if (!schedule) {
+      throw new Error('Visit schedule not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/routeVisitSchedules'), { [scheduleId]: null })
+    await writeActivity('visit_schedule_deleted', 'sales', `Removed ${schedule.dayOfWeek} visit schedule for ${schedule.routeName}.`)
+  }
+
+  // ---- Sales Target (Section 41) ------------------------------------------
+  async function saveSalesTarget(input: SalesTargetInput, targetId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before setting a sales target.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to set sales targets.')
+    }
+
+    if (!/^\d{4}-\d{2}$/.test(input.period)) {
+      throw new Error('Period must be in YYYY-MM format.')
+    }
+
+    if (!input.entityId) {
+      throw new Error('Select who this target applies to.')
+    }
+
+    if (input.targetAmount <= 0) {
+      throw new Error('Target amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = targetId ? data.salesTargets[targetId] : null
+    const id = existing?.id ?? createId('target')
+    const now = new Date().toISOString()
+    const target: SalesTargetRecord = {
+      id,
+      period: input.period,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      entityName: input.entityName?.trim() || existing?.entityName || input.entityId,
+      targetAmount: input.targetAmount,
+      createdBy: existing?.createdBy ?? currentUser.id,
+      createdByName: existing?.createdByName ?? currentUser.name,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/salesTargets'), { [id]: target })
+    await writeActivity(
+      existing ? 'sales_target_updated' : 'sales_target_created',
+      'finance',
+      `${existing ? 'Updated' : 'Set'} ${target.period} target for ${target.entityName}: ${target.targetAmount}.`
+    )
+    return id
+  }
+
+  async function deleteSalesTarget(targetId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to manage sales targets.')
+    }
+
+    const target = data.salesTargets[targetId]
+    if (!target) {
+      throw new Error('Sales target not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/salesTargets'), { [targetId]: null })
+    await writeActivity('sales_target_deleted', 'finance', `Deleted ${target.period} target for ${target.entityName}.`)
+  }
+
+  // ---- Commission Management (Section 42) ---------------------------------
+  async function saveCommissionRule(input: CommissionRuleInput, ruleId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before managing commission rules.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to manage commission rules.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Rule name is required.')
+    }
+
+    const slabs = (input.slabs ?? []).map((slab) => ({
+      minSales: Math.max(slab.minSales, 0),
+      maxSales: slab.maxSales === null || slab.maxSales === undefined ? null : Math.max(slab.maxSales, 0),
+      percentage: Math.max(slab.percentage, 0),
+    }))
+    const productRates = (input.productRates ?? [])
+      .filter((rate) => rate.productId)
+      .map((rate) => {
+        const product = data.products[rate.productId]
+        return {
+          productId: rate.productId,
+          productName: product?.name ?? rate.productName,
+          percentage: Math.max(rate.percentage, 0),
+        }
+      })
+
+    if (input.ruleType === 'slab' && slabs.length === 0) {
+      throw new Error('Add at least one sales slab.')
+    }
+    if (input.ruleType === 'product' && productRates.length === 0) {
+      throw new Error('Add at least one product commission rate.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = ruleId ? data.commissionRules[ruleId] : null
+    const id = existing?.id ?? createId('commrule')
+    const now = new Date().toISOString()
+    const rule: CommissionRuleRecord = {
+      id,
+      name,
+      appliesTo: input.appliesTo,
+      ruleType: input.ruleType,
+      slabs,
+      productRates,
+      status: input.status ?? 'active',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/commissionRules'), { [id]: rule })
+    await writeActivity(
+      existing ? 'commission_rule_updated' : 'commission_rule_created',
+      'finance',
+      `${existing ? 'Updated' : 'Created'} commission rule "${rule.name}" (${rule.appliesTo}).`
+    )
+    return id
+  }
+
+  async function deleteCommissionRule(ruleId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to manage commission rules.')
+    }
+
+    const rule = data.commissionRules[ruleId]
+    if (!rule) {
+      throw new Error('Commission rule not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/commissionRules'), { [ruleId]: null })
+    await writeActivity('commission_rule_deleted', 'finance', `Deleted commission rule "${rule.name}".`)
+  }
+
+  // Marks one period's auto-calculated commission (computed live in the
+  // Sales Force page from commissionRules + orders, never stored until
+  // this point — the same "Actual is never stored" approach as Budget) as
+  // actually paid out. Posts Dr Commission / Cr Cash-or-Bank, reusing the
+  // existing 'commission' LedgerAccount the Expense Category "Commission"
+  // already posts to.
+  async function recordCommissionPayout(input: CommissionPayoutInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a commission payout.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to pay out commission.')
+    }
+
+    const rule = data.commissionRules[input.ruleId]
+    if (!rule) {
+      throw new Error('Commission rule not found.')
+    }
+
+    if (input.commissionAmount <= 0) {
+      throw new Error('Commission amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('compayout')
+    const now = new Date().toISOString()
+    const receiptNumber = `COMM-${Date.now().toString().slice(-8)}`
+    const paymentMethod = input.paymentMethod ?? 'cash'
+
+    const payout: CommissionPayoutRecord = {
+      id,
+      receiptNumber,
+      period: input.period,
+      appliesTo: input.appliesTo,
+      entityId: input.entityId,
+      entityName: input.entityName,
+      ruleId: rule.id,
+      ruleName: rule.name,
+      salesAmount: input.salesAmount,
+      commissionAmount: input.commissionAmount,
+      paymentMethod,
+      paidBy: currentUser.id,
+      paidByName: currentUser.name,
+      createdAt: now,
+    }
+
+    const updates: Record<string, unknown> = {
+      [`commissionPayouts/${id}`]: payout,
+    }
+
+    const debitId = createId('ledger')
+    updates[`ledgerEntries/${debitId}`] = {
+      id: debitId,
+      date: now,
+      orderId: id,
+      billNumber: receiptNumber,
+      account: 'commission',
+      accountRef: input.entityId,
+      description: `Commission payout to ${input.entityName} (${input.period})`,
+      debit: input.commissionAmount,
+      credit: 0,
+      createdAt: now,
+    } satisfies LedgerEntryRecord
+    const creditId = createId('ledger')
+    updates[`ledgerEntries/${creditId}`] = {
+      id: creditId,
+      date: now,
+      orderId: id,
+      billNumber: receiptNumber,
+      account: paymentMethod === 'bank' ? 'bank' : 'cash',
+      accountRef: '',
+      description: `Commission payout to ${input.entityName} (${input.period})`,
+      debit: 0,
+      credit: input.commissionAmount,
+      createdAt: now,
+    } satisfies LedgerEntryRecord
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'commission_paid',
+      'finance',
+      `Paid ${input.commissionAmount} commission to ${input.entityName} for ${input.period}.`
+    )
+    return id
   }
 
   async function saveSettings(input: SettingsInput) {
@@ -5043,6 +5930,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recordPurchase,
       dismissPurchaseRequisition,
       createPurchaseOrder,
+      updatePurchaseOrderApproval,
       receivePurchaseOrder,
       cancelPurchaseOrder,
       recordSupplierPayment,
@@ -5075,8 +5963,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       markNotificationRead,
       markAllNotificationsRead,
       saveExpense,
+      updateExpenseApproval,
       saveInvestor,
       deleteExpense,
+      saveBudget,
+      deleteBudget,
+      saveRoute,
+      deleteRoute,
+      recordCustomerVisit,
+      deleteCustomerVisit,
+      saveRouteVisitSchedule,
+      deleteRouteVisitSchedule,
+      saveSalesTarget,
+      deleteSalesTarget,
+      saveCommissionRule,
+      deleteCommissionRule,
+      recordCommissionPayout,
       saveChartOfAccount,
       deleteChartOfAccount,
       seedStandardChartOfAccounts,

@@ -2,11 +2,13 @@
 
 import { useMemo, useState, type FormEvent } from 'react'
 import {
+  AlertTriangle,
   Banknote,
   BookOpenText,
   Landmark,
   Layers,
   ListChecks,
+  PiggyBank,
   Plus,
   Scale,
   ScrollText,
@@ -34,12 +36,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { useERP } from '@/lib/erp/provider'
-import type { AccountType, BankAccountRecord, BankTransactionType, ChartOfAccountRecord, LedgerEntryRecord } from '@/lib/erp/types'
+import { EXPENSE_CATEGORIES } from '@/lib/erp/standardChartOfAccounts'
+import { getBudgetActual, useERP } from '@/lib/erp/provider'
+import type {
+  AccountType,
+  BankAccountRecord,
+  BankTransactionType,
+  BudgetPeriodType,
+  BudgetRecord,
+  ChartOfAccountRecord,
+  LedgerEntryRecord,
+} from '@/lib/erp/types'
 import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-type Section = 'coa' | 'journal' | 'ledger' | 'trial' | 'pl' | 'bs' | 'cashflow' | 'bank' | 'receivable' | 'payable'
+type Section = 'coa' | 'journal' | 'ledger' | 'trial' | 'pl' | 'bs' | 'cashflow' | 'bank' | 'receivable' | 'payable' | 'budget'
 
 const SECTIONS: Array<{ id: Section; label: string; icon: typeof BookOpenText }> = [
   { id: 'coa', label: 'Chart of Accounts', icon: BookOpenText },
@@ -52,6 +63,12 @@ const SECTIONS: Array<{ id: Section; label: string; icon: typeof BookOpenText }>
   { id: 'bank', label: 'Bank Management', icon: Banknote },
   { id: 'receivable', label: 'Customer Receivable', icon: Users },
   { id: 'payable', label: 'Supplier Payable', icon: Truck },
+  { id: 'budget', label: 'Budget Management', icon: PiggyBank },
+]
+
+const MONTH_LABELS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
 const BANK_TXN_TYPE_LABEL: Record<BankTransactionType, string> = {
@@ -218,6 +235,8 @@ export default function AccountingPage() {
     saveBankAccount,
     deleteBankAccount,
     recordBankTransaction,
+    saveBudget,
+    deleteBudget,
   } = useERP()
 
   const canEdit = hasPermission('finance:edit')
@@ -247,6 +266,16 @@ export default function AccountingPage() {
   const bankTransactions = useMemo(
     () => toArray(data?.bankTransactions).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.bankTransactions]
+  )
+  const expenses = useMemo(() => data?.expenses ?? {}, [data?.expenses])
+  const budgets = useMemo(
+    () =>
+      toArray(data?.budgets).sort((left, right) => {
+        if (right.year !== left.year) return right.year - left.year
+        if (right.month !== left.month) return right.month - left.month
+        return left.category.localeCompare(right.category)
+      }),
+    [data?.budgets]
   )
 
   // ---- Chart of Accounts --------------------------------------------
@@ -786,6 +815,91 @@ export default function AccountingPage() {
       })
       .sort((left, right) => right.total - left.total)
   }, [purchaseOrders, suppliers, apTo])
+
+  // ---- Budget Management (Section 37) ----------------------------------
+  function emptyBudgetForm() {
+    const now = new Date()
+    return {
+      category: EXPENSE_CATEGORIES[0] as string,
+      periodType: 'monthly' as BudgetPeriodType,
+      year: String(now.getFullYear()),
+      month: String(now.getMonth() + 1),
+      budgetAmount: '0',
+      note: '',
+    }
+  }
+
+  const [budgetDialogOpen, setBudgetDialogOpen] = useState(false)
+  const [editingBudgetId, setEditingBudgetId] = useState<string | undefined>(undefined)
+  const [budgetForm, setBudgetForm] = useState(emptyBudgetForm())
+
+  function openNewBudgetDialog() {
+    setEditingBudgetId(undefined)
+    setBudgetForm(emptyBudgetForm())
+    setFeedback(null)
+    setBudgetDialogOpen(true)
+  }
+
+  function openEditBudgetDialog(budget: BudgetRecord) {
+    setEditingBudgetId(budget.id)
+    setBudgetForm({
+      category: budget.category,
+      periodType: budget.periodType,
+      year: String(budget.year),
+      month: String(budget.month || new Date().getMonth() + 1),
+      budgetAmount: String(budget.budgetAmount),
+      note: budget.note,
+    })
+    setFeedback(null)
+    setBudgetDialogOpen(true)
+  }
+
+  async function handleBudgetSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setFeedback(null)
+    try {
+      await saveBudget(
+        {
+          category: budgetForm.category,
+          periodType: budgetForm.periodType,
+          year: Number(budgetForm.year),
+          month: budgetForm.periodType === 'monthly' ? Number(budgetForm.month) : undefined,
+          budgetAmount: Number(budgetForm.budgetAmount) || 0,
+          note: budgetForm.note,
+        },
+        editingBudgetId
+      )
+      setBudgetDialogOpen(false)
+      setFeedback('Budget saved.')
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to save budget.')
+    }
+  }
+
+  async function handleDeleteBudget(budgetId: string) {
+    setFeedback(null)
+    try {
+      await deleteBudget(budgetId)
+      setFeedback('Budget deleted.')
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete budget.')
+    }
+  }
+
+  // Budget vs Actual vs Overrun — Actual is never stored (see
+  // getBudgetActual in provider.tsx), so it's recomputed live here every
+  // time expenses or budgets change, the same figure the overrun-alert
+  // notification (checkBudgetOverrun) is checked against on every expense
+  // save.
+  const budgetRows = useMemo(
+    () =>
+      budgets.map((budget) => {
+        const actual = getBudgetActual(expenses, budget)
+        const overrun = actual - budget.budgetAmount
+        return { budget, actual, overrun, isOverrun: overrun > 0 }
+      }),
+    [budgets, expenses]
+  )
 
   return (
     <AdminShell active="Accounting Module">
@@ -1442,6 +1556,336 @@ export default function AccountingPage() {
           </section>
         ) : null}
 
+        {section === 'bank' ? (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <SectionHeader icon={Banknote} title="Bank management" description="Multiple bank accounts — Deposit, Withdrawal, Transfer, Cheque, Bank Charge (Section 35)." />
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="rounded-xl" onClick={() => openBankTxnDialog()} disabled={!canEdit || bankAccountsList.length === 0}>
+                  <Wallet className="mr-2 h-4 w-4" />
+                  Record transaction
+                </Button>
+                <Button type="button" className="rounded-xl" onClick={openNewBankAccountDialog} disabled={!canEdit}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New bank account
+                </Button>
+              </div>
+            </div>
+
+            <Card className="border-border/70 shadow-sm">
+              <CardContent className="p-0">
+                <div className="overflow-x-auto rounded-2xl">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead>Bank</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Account number</TableHead>
+                        <TableHead className="text-right">Opening balance</TableHead>
+                        <TableHead className="text-right">Current balance</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {bankAccountsList.map((bankAccount) => (
+                        <TableRow key={bankAccount.id}>
+                          <TableCell className="font-medium">{bankAccount.bankName}</TableCell>
+                          <TableCell>{bankAccount.branch || '—'}</TableCell>
+                          <TableCell className="font-mono text-xs">{bankAccount.accountNumber}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(bankAccount.openingBalance, currency)}</TableCell>
+                          <TableCell className="text-right font-medium">{formatCurrency(bankAccountBalance(bankAccount), currency)}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'rounded-full',
+                                bankAccount.status === 'active'
+                                  ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
+                                  : 'border-border bg-muted text-muted-foreground'
+                              )}
+                            >
+                              {bankAccount.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => { setBankRegisterAccountId(bankAccount.id); }}>
+                                View
+                              </Button>
+                              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditBankAccountDialog(bankAccount)} disabled={!canEdit}>
+                                Edit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9 text-destructive hover:text-destructive"
+                                onClick={() => void handleDeleteBankAccount(bankAccount.id)}
+                                disabled={!canEdit}
+                                aria-label="Delete bank account"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {bankAccountsList.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                            No bank accounts yet — add one to start recording deposits, withdrawals, transfers, cheques, and bank charges.
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/70 shadow-sm">
+              <CardHeader>
+                <CardTitle>Bank book</CardTitle>
+                <CardDescription>Every transaction against one account, with a running balance.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Select value={bankRegisterAccountId} onValueChange={setBankRegisterAccountId}>
+                  <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Select a bank account" /></SelectTrigger>
+                  <SelectContent>
+                    {bankAccountsList.map((bankAccount) => (
+                      <SelectItem key={bankAccount.id} value={bankAccount.id}>
+                        {bankAccount.bankName} — {bankAccount.accountNumber}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="overflow-x-auto rounded-2xl border border-border/70">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead>Date</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Details</TableHead>
+                        <TableHead className="text-right">Debit</TableHead>
+                        <TableHead className="text-right">Credit</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {bankRegister.map(({ transaction, debit, credit, balance }) => (
+                        <TableRow key={transaction.id}>
+                          <TableCell>{formatDate(transaction.date)}</TableCell>
+                          <TableCell>{BANK_TXN_TYPE_LABEL[transaction.type]}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {[transaction.toBankLabel, transaction.counterAccountName, transaction.payee, transaction.chequeNumber ? `Cheque ${transaction.chequeNumber}` : '', transaction.note]
+                              .filter(Boolean)
+                              .join(' · ') || '—'}
+                          </TableCell>
+                          <TableCell className="text-right">{debit > 0 ? formatCurrency(debit, currency) : '—'}</TableCell>
+                          <TableCell className="text-right">{credit > 0 ? formatCurrency(credit, currency) : '—'}</TableCell>
+                          <TableCell className="text-right font-medium">{formatCurrency(balance, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {bankRegister.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                            {bankRegisterAccountId ? 'No transactions for this account yet.' : 'Select a bank account to view its book.'}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Dialog open={bankAccountDialogOpen} onOpenChange={setBankAccountDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{editingBankAccountId ? 'Edit bank account' : 'New bank account'}</DialogTitle>
+                  <DialogDescription>Account number must be unique across bank accounts.</DialogDescription>
+                </DialogHeader>
+                <form className="space-y-4" onSubmit={handleBankAccountSubmit}>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Bank name<span className="ml-0.5 text-rose-500">*</span></p>
+                    <Input
+                      value={bankAccountForm.bankName}
+                      onChange={(event) => setBankAccountForm((current) => ({ ...current, bankName: event.target.value }))}
+                      placeholder="e.g. Dutch-Bangla Bank"
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Branch</p>
+                      <Input
+                        value={bankAccountForm.branch}
+                        onChange={(event) => setBankAccountForm((current) => ({ ...current, branch: event.target.value }))}
+                        placeholder="e.g. Nawabpur Road"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Account number<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Input
+                        value={bankAccountForm.accountNumber}
+                        onChange={(event) => setBankAccountForm((current) => ({ ...current, accountNumber: event.target.value }))}
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Opening balance ({currency ?? 'BDT'})</p>
+                      <Input
+                        type="number"
+                        value={bankAccountForm.openingBalance}
+                        onChange={(event) => setBankAccountForm((current) => ({ ...current, openingBalance: event.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Status</p>
+                      <Select
+                        value={bankAccountForm.status}
+                        onValueChange={(value) => setBankAccountForm((current) => ({ ...current, status: value as BankAccountRecord['status'] }))}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="outline" onClick={() => setBankAccountDialogOpen(false)}>Cancel</Button>
+                    <Button type="submit">Save bank account</Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={bankTxnDialogOpen} onOpenChange={setBankTxnDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Record bank transaction</DialogTitle>
+                  <DialogDescription>Deposit/Withdrawal move against Cash; Transfer moves between two bank accounts.</DialogDescription>
+                </DialogHeader>
+                <form className="space-y-4" onSubmit={handleBankTxnSubmit}>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Bank account<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Select
+                        value={bankTxnForm.bankAccountId}
+                        onValueChange={(value) => setBankTxnForm((current) => ({ ...current, bankAccountId: value }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
+                        <SelectContent>
+                          {bankAccountsList.map((bankAccount) => (
+                            <SelectItem key={bankAccount.id} value={bankAccount.id}>
+                              {bankAccount.bankName} — {bankAccount.accountNumber}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Type</p>
+                      <Select
+                        value={bankTxnForm.type}
+                        onValueChange={(value) => setBankTxnForm((current) => ({ ...current, type: value as BankTransactionType }))}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {(Object.keys(BANK_TXN_TYPE_LABEL) as BankTransactionType[]).map((type) => (
+                            <SelectItem key={type} value={type}>{BANK_TXN_TYPE_LABEL[type]}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Amount ({currency ?? 'BDT'})<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={bankTxnForm.amount}
+                        onChange={(event) => setBankTxnForm((current) => ({ ...current, amount: event.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Date</p>
+                      <Input type="date" value={bankTxnForm.date} onChange={(event) => setBankTxnForm((current) => ({ ...current, date: event.target.value }))} />
+                    </div>
+                  </div>
+
+                  {bankTxnForm.type === 'transfer' ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">To bank account<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Select
+                        value={bankTxnForm.toBankAccountId}
+                        onValueChange={(value) => setBankTxnForm((current) => ({ ...current, toBankAccountId: value }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select destination account" /></SelectTrigger>
+                        <SelectContent>
+                          {bankAccountsList
+                            .filter((bankAccount) => bankAccount.id !== bankTxnForm.bankAccountId)
+                            .map((bankAccount) => (
+                              <SelectItem key={bankAccount.id} value={bankAccount.id}>
+                                {bankAccount.bankName} — {bankAccount.accountNumber}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+
+                  {bankTxnForm.type === 'cheque_issued' || bankTxnForm.type === 'cheque_deposited' ? (
+                    <>
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-foreground">Against account<span className="ml-0.5 text-rose-500">*</span></p>
+                        <Select
+                          value={bankTxnForm.counterAccountId}
+                          onValueChange={(value) => setBankTxnForm((current) => ({ ...current, counterAccountId: value }))}
+                        >
+                          <SelectTrigger><SelectValue placeholder="What is this cheque for?" /></SelectTrigger>
+                          <SelectContent>
+                            {activeAccounts.map((account) => (
+                              <SelectItem key={account.id} value={account.id}>{account.code} — {account.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-foreground">Cheque number</p>
+                          <Input value={bankTxnForm.chequeNumber} onChange={(event) => setBankTxnForm((current) => ({ ...current, chequeNumber: event.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-foreground">Payee / payer</p>
+                          <Input value={bankTxnForm.payee} onChange={(event) => setBankTxnForm((current) => ({ ...current, payee: event.target.value }))} />
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Note <span className="font-normal text-muted-foreground">(optional)</span></p>
+                    <Input value={bankTxnForm.note} onChange={(event) => setBankTxnForm((current) => ({ ...current, note: event.target.value }))} />
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="outline" onClick={() => setBankTxnDialogOpen(false)}>Cancel</Button>
+                    <Button type="submit">Record transaction</Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </section>
+        ) : null}
+
         {section === 'receivable' ? (
           <section className="space-y-4">
             <SectionHeader icon={Users} title="Customer receivable" description="Per-customer Opening/Sales/Sales Return/Collection/Adjustment/Closing (Section 30)." />
@@ -1695,6 +2139,180 @@ export default function AccountingPage() {
                 </div>
               </CardContent>
             </Card>
+          </section>
+        ) : null}
+
+        {section === 'budget' ? (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <SectionHeader
+                icon={PiggyBank}
+                title="Budget management"
+                description="Set a monthly or yearly budget per expense category — Actual tracks live expenses; an overrun alerts automatically (Section 37)."
+              />
+              <Button type="button" className="rounded-xl" onClick={openNewBudgetDialog} disabled={!canEdit}>
+                <Plus className="mr-2 h-4 w-4" />
+                New budget
+              </Button>
+            </div>
+
+            <Card className="border-border/70 shadow-sm">
+              <CardContent className="p-0">
+                <div className="overflow-x-auto rounded-2xl">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead>Category</TableHead>
+                        <TableHead>Period</TableHead>
+                        <TableHead className="text-right">Budget</TableHead>
+                        <TableHead className="text-right">Actual</TableHead>
+                        <TableHead className="text-right">Overrun</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {budgetRows.map(({ budget, actual, overrun, isOverrun }) => (
+                        <TableRow key={budget.id}>
+                          <TableCell className="font-medium">{budget.category}</TableCell>
+                          <TableCell>
+                            {budget.periodType === 'monthly' ? `${MONTH_LABELS[budget.month - 1] ?? budget.month} ${budget.year}` : budget.year}
+                          </TableCell>
+                          <TableCell className="text-right">{formatCurrency(budget.budgetAmount, currency)}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(actual, currency)}</TableCell>
+                          <TableCell className={cn('text-right font-medium', isOverrun && 'text-rose-600 dark:text-rose-400')}>
+                            {isOverrun ? formatCurrency(overrun, currency) : '—'}
+                          </TableCell>
+                          <TableCell>
+                            {isOverrun ? (
+                              <Badge
+                                variant="outline"
+                                className="gap-1 rounded-full border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300"
+                              >
+                                <AlertTriangle className="h-3 w-3" />
+                                Overrun
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
+                                On track
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditBudgetDialog(budget)} disabled={!canEdit}>
+                                Edit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9 text-destructive hover:text-destructive"
+                                onClick={() => void handleDeleteBudget(budget.id)}
+                                disabled={!canEdit}
+                                aria-label="Delete budget"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {budgetRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                            No budgets set yet — add one per expense category to start tracking Actual vs. Budget.
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Dialog open={budgetDialogOpen} onOpenChange={setBudgetDialogOpen}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>{editingBudgetId ? 'Edit budget' : 'New budget'}</DialogTitle>
+                  <DialogDescription>Plan spend for one expense category over one month or one calendar year.</DialogDescription>
+                </DialogHeader>
+                <form className="space-y-4" onSubmit={handleBudgetSubmit}>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Category</p>
+                    <Select value={budgetForm.category} onValueChange={(value) => setBudgetForm((current) => ({ ...current, category: value }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {EXPENSE_CATEGORIES.map((category) => (
+                          <SelectItem key={category} value={category}>{category}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Period</p>
+                    <Select
+                      value={budgetForm.periodType}
+                      onValueChange={(value) => setBudgetForm((current) => ({ ...current, periodType: value as BudgetPeriodType }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    {budgetForm.periodType === 'monthly' ? (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-foreground">Month</p>
+                        <Select value={budgetForm.month} onValueChange={(value) => setBudgetForm((current) => ({ ...current, month: value }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {MONTH_LABELS.map((label, index) => (
+                              <SelectItem key={label} value={String(index + 1)}>{label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : null}
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">Year</p>
+                      <Input
+                        type="number"
+                        value={budgetForm.year}
+                        onChange={(event) => setBudgetForm((current) => ({ ...current, year: event.target.value }))}
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">
+                      Budget amount ({currency ?? 'BDT'})<span className="ml-0.5 text-rose-500">*</span>
+                    </p>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={budgetForm.budgetAmount}
+                      onChange={(event) => setBudgetForm((current) => ({ ...current, budgetAmount: event.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">
+                      Note <span className="font-normal text-muted-foreground">(optional)</span>
+                    </p>
+                    <Textarea
+                      value={budgetForm.note}
+                      onChange={(event) => setBudgetForm((current) => ({ ...current, note: event.target.value }))}
+                      rows={2}
+                    />
+                  </div>
+                  <Button type="submit" className="w-full rounded-xl">
+                    Save budget
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
           </section>
         ) : null}
 

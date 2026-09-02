@@ -691,32 +691,47 @@ export function SalesScreen() {
                         ) : (
                           <div className="space-y-2">
                             {order.approvalStatus === 'pending' ? (
-                              hasPermission('orders:approve') ? (
-                                <div className="flex gap-1.5">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-full border-emerald-200 px-2.5 text-xs text-emerald-700 hover:text-emerald-700 dark:border-emerald-900 dark:text-emerald-300"
-                                    onClick={() => void handleApprovalChange(order, 'approved')}
-                                  >
-                                    <Check className="mr-1 h-3.5 w-3.5" /> Approve
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-full border-rose-200 px-2.5 text-xs text-rose-600 hover:text-rose-600 dark:border-rose-900 dark:text-rose-400"
-                                    onClick={() => void handleApprovalChange(order, 'rejected')}
-                                  >
-                                    <X className="mr-1 h-3.5 w-3.5" /> Reject
-                                  </Button>
-                                </div>
-                              ) : (
-                                <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300">
-                                  Awaiting approval
-                                </Badge>
-                              )
+                              <div className="space-y-1.5">
+                                {order.approvalReasons && order.approvalReasons.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {order.approvalReasons.map((reason) => (
+                                      <Badge
+                                        key={reason}
+                                        variant="outline"
+                                        className="rounded-full border-amber-200 bg-amber-500/10 text-[10px] text-amber-700 dark:border-amber-900 dark:text-amber-300"
+                                      >
+                                        {reason}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {hasPermission('orders:approve') ? (
+                                  <div className="flex gap-1.5">
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-full border-emerald-200 px-2.5 text-xs text-emerald-700 hover:text-emerald-700 dark:border-emerald-900 dark:text-emerald-300"
+                                      onClick={() => void handleApprovalChange(order, 'approved')}
+                                    >
+                                      <Check className="mr-1 h-3.5 w-3.5" /> Approve
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-full border-rose-200 px-2.5 text-xs text-rose-600 hover:text-rose-600 dark:border-rose-900 dark:text-rose-400"
+                                      onClick={() => void handleApprovalChange(order, 'rejected')}
+                                    >
+                                      <X className="mr-1 h-3.5 w-3.5" /> Reject
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300">
+                                    Awaiting approval
+                                  </Badge>
+                                )}
+                              </div>
                             ) : null}
                             {hasPermission('orders:approve') ? (
                               <Select value={order.status} onValueChange={(value) => void updateOrderStatus(order.id, value as typeof order.status)}>

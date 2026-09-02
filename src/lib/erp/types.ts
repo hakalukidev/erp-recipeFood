@@ -192,6 +192,14 @@ export type OrderRecord = {
   remarks?: string
   createdAt: string
   items: OrderItem[]
+  // Section 49 — Sales Approval Workflow: approval is only required for the
+  // three special cases the spec lists (Credit Limit Exceeded / Special
+  // Discount / Below Minimum Price); a plain order skips straight to
+  // "approved". This records which condition(s) actually fired, so an
+  // approver (Sales Manager / Finance-Credit Control / Management — gated
+  // on the existing orders:approve permission, same simplification already
+  // used for this single-stage gate) can see why the order needs sign-off.
+  approvalReasons?: string[]
 }
 
 // One ledger entry per debit or credit leg of the auto-posted double entry
@@ -235,6 +243,11 @@ export type LedgerAccount =
   | 'bank_charge'
   | 'depreciation'
   | 'other_expense'
+  | 'fuel'
+  | 'advertisement'
+  | 'repair'
+  | 'utility'
+  | 'travel'
   | 'mfs'
   | 'manual'
 
@@ -423,6 +436,22 @@ export type PurchaseOrderStatus = 'ordered' | 'received' | 'cancelled'
 export type QualityCheckStatus = 'pending' | 'passed' | 'failed' | 'partial'
 export type BillStatus = 'unbilled' | 'billed' | 'paid'
 
+// ---- Purchase Approval Workflow (Section 48) -----------------------------
+// Requester (implicit — whoever submits the PO) → Department Head →
+// Purchase Manager → Finance → Management. A purchase order can only be
+// received (goods/GRN take effect) once it has cleared every stage —
+// "Approval অনুযায়ী Purchase Order হবে".
+export type PurchaseApprovalStage = 'department_head' | 'purchase_manager' | 'finance' | 'management' | 'completed'
+
+export type PurchaseOrderApproval = {
+  stage: Exclude<PurchaseApprovalStage, 'completed'>
+  status: 'approved' | 'rejected'
+  byUserId: string
+  byUserName: string
+  note: string
+  at: string
+}
+
 export type PurchaseOrderRecord = {
   id: string
   poNumber: string
@@ -446,6 +475,9 @@ export type PurchaseOrderRecord = {
   paid: number
   due: number
   expectedDate: string
+  approvalStatus: ApprovalStatus
+  approvalStage: PurchaseApprovalStage
+  approvals: PurchaseOrderApproval[]
   createdAt: string
   updatedAt: string
 }
@@ -934,6 +966,15 @@ export type SettingsRecord = {
 // resolveExpenseLedgerAccount in provider.tsx for the category→account map.
 export type ExpensePaymentMethod = 'cash' | 'bank'
 
+// Section 36 (Expense Approval Workflow): an expense posts to the ledger
+// immediately at entry (same "post first, approve as a review gate" shape
+// as Sales Order approval) and sits at "pending" until someone with
+// finance:edit approves or rejects it — see updateExpenseApproval in
+// provider.tsx. Expenses recorded before this workflow existed normalize to
+// "approved" (see normalizeExpenseRecord) so they don't retroactively show
+// up as awaiting approval.
+export type ExpenseApprovalStatus = 'pending' | 'approved' | 'rejected'
+
 export type ExpenseRecord = {
   id: string
   category: string
@@ -941,9 +982,246 @@ export type ExpenseRecord = {
   note: string
   date: string
   paymentMethod?: ExpensePaymentMethod
+  approvalStatus: ExpenseApprovalStatus
+  approvedBy: string
+  approvedByName: string
+  approvedAt: string
   createdBy: string
   createdByName: string
   createdAt: string
+}
+
+// Section 37 (Budget Management): a plan for one expense category over one
+// month or one calendar year. "Actual" is intentionally never stored here —
+// it's the live sum of ExpenseRecords in that category+period, computed by
+// getBudgetActual (provider.tsx) and reused by the Accounting page's Budget
+// tab and by the overrun-alert check that runs every time an expense is
+// saved. `month` is 1-12 for a monthly budget and 0 (not applicable) for a
+// yearly one — kept as a plain number, not optional/undefined, since the
+// Firebase Realtime Database write rejects undefined property values.
+export type BudgetPeriodType = 'monthly' | 'yearly'
+
+export type BudgetRecord = {
+  id: string
+  category: string
+  periodType: BudgetPeriodType
+  year: number
+  month: number
+  budgetAmount: number
+  note: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type BudgetInput = {
+  category: string
+  periodType: BudgetPeriodType
+  year: number
+  month?: number
+  budgetAmount: number
+  note?: string
+}
+
+// ---- Sales Force Management (Section 40) -------------------------------
+// A "Sales Officer" has no separate master — it is a UserRecord whose role
+// carries 'orders:create' (the same identity already stamped on every
+// OrderRecord as salesPersonId/salesPersonName). Route just groups a
+// territory's customers under one officer for a visit plan.
+export type RouteRecord = {
+  id: string
+  routeCode?: string
+  routeName: string
+  territory?: string
+  salesArea?: string
+  salesOfficerId: string
+  salesOfficerName: string
+  customerIds: string[]
+  status: 'active' | 'inactive'
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RouteInput = {
+  routeCode?: string
+  routeName: string
+  territory?: string
+  salesArea?: string
+  salesOfficerId: string
+  customerIds?: string[]
+  status?: 'active' | 'inactive'
+  notes?: string
+}
+
+// A visit optionally links back to the Order/Collection it produced so the
+// Sales Officer dashboard can roll visits up into real order/collection
+// figures instead of just a call count.
+export type VisitOutcome = 'order-placed' | 'collection-made' | 'order-and-collection' | 'no-order' | 'store-closed'
+
+export type CustomerVisitRecord = {
+  id: string
+  visitDate: string
+  salesOfficerId: string
+  salesOfficerName: string
+  customerId: string
+  customerName: string
+  routeId?: string
+  routeName?: string
+  territory?: string
+  outcome: VisitOutcome
+  orderId?: string
+  orderAmount?: number
+  collectionId?: string
+  collectionAmount?: number
+  remarks: string
+  createdAt: string
+}
+
+export type CustomerVisitInput = {
+  visitDate?: string
+  salesOfficerId: string
+  customerId: string
+  routeId?: string
+  outcome: VisitOutcome
+  orderId?: string
+  collectionId?: string
+  remarks?: string
+}
+
+// ---- Route Visit Schedule / "Beat Plan" (Section 45) --------------------
+// The planned counterpart to CustomerVisitRecord above: which customers on
+// a route a Sales Officer is due to call on a given weekday, decided ahead
+// of time. Logging an actual CustomerVisitRecord against that same
+// route/customer is how the plan gets checked off — this record itself
+// never marks "done".
+export const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
+export type Weekday = (typeof WEEKDAYS)[number]
+
+export type RouteVisitScheduleRecord = {
+  id: string
+  routeId: string
+  routeName: string
+  salesOfficerId: string
+  salesOfficerName: string
+  territory?: string
+  dayOfWeek: Weekday
+  customerIds: string[]
+  status: 'active' | 'inactive'
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RouteVisitScheduleInput = {
+  routeId: string
+  dayOfWeek: Weekday
+  customerIds?: string[]
+  status?: 'active' | 'inactive'
+  notes?: string
+}
+
+// ---- Sales Target (Section 41) ------------------------------------------
+// Achievement is deliberately never stored — like Budget's Actual, it is
+// the live sum of net sales for the matching orders in that period, so it
+// can never drift from the books (see entitySalesAmount in the Sales
+// Force page). 'territory'/'sales-area' targets key off the matching free-
+// text field on CustomerRecord (there is no separate Territory master);
+// 'distributor' targets key off one specific distributor/dealer customer.
+export type SalesTargetEntityType = 'sales-officer' | 'territory' | 'sales-area' | 'distributor'
+
+export type SalesTargetRecord = {
+  id: string
+  period: string // 'YYYY-MM'
+  entityType: SalesTargetEntityType
+  entityId: string
+  entityName: string
+  targetAmount: number
+  createdBy: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SalesTargetInput = {
+  period: string
+  entityType: SalesTargetEntityType
+  entityId: string
+  entityName?: string
+  targetAmount: number
+}
+
+// ---- Commission Management (Section 42) ---------------------------------
+// A rule is either a sales-value slab table (e.g. "Sales > 10 lakh => 5%")
+// or a per-product rate table. Like the slab/product split in the spec,
+// only one of `slabs`/`productRates` is meaningful for a given ruleType.
+export type CommissionAppliesTo = 'sales-officer' | 'dealer'
+export type CommissionRuleType = 'slab' | 'product'
+
+export type CommissionSlab = {
+  minSales: number
+  maxSales: number | null // null = no upper bound
+  percentage: number
+}
+
+export type CommissionProductRate = {
+  productId: string
+  productName: string
+  percentage: number
+}
+
+export type CommissionRuleRecord = {
+  id: string
+  name: string
+  appliesTo: CommissionAppliesTo
+  ruleType: CommissionRuleType
+  slabs: CommissionSlab[]
+  productRates: CommissionProductRate[]
+  status: 'active' | 'inactive'
+  createdAt: string
+  updatedAt: string
+}
+
+export type CommissionRuleInput = {
+  name: string
+  appliesTo: CommissionAppliesTo
+  ruleType: CommissionRuleType
+  slabs?: CommissionSlab[]
+  productRates?: CommissionProductRate[]
+  status?: 'active' | 'inactive'
+}
+
+// The System auto-calculates commission (rule x period sales) live in the
+// UI, same as Budget's Actual — this record only exists once that computed
+// figure is actually paid out, so it doubles as the payment receipt and
+// posts Dr Commission / Cr Cash-or-Bank to the ledger.
+export type CommissionPayoutRecord = {
+  id: string
+  receiptNumber: string
+  period: string
+  appliesTo: CommissionAppliesTo
+  entityId: string
+  entityName: string
+  ruleId: string
+  ruleName: string
+  salesAmount: number
+  commissionAmount: number
+  paymentMethod: 'cash' | 'bank'
+  paidBy: string
+  paidByName: string
+  createdAt: string
+}
+
+export type CommissionPayoutInput = {
+  period: string
+  appliesTo: CommissionAppliesTo
+  entityId: string
+  entityName: string
+  ruleId: string
+  salesAmount: number
+  commissionAmount: number
+  paymentMethod?: 'cash' | 'bank'
 }
 
 export type SellerRecord = {
@@ -1025,6 +1303,13 @@ export type ERPData = {
   activities: Record<string, ActivityRecord>
   loginHistory: Record<string, LoginHistoryRecord>
   expenses: Record<string, ExpenseRecord>
+  budgets: Record<string, BudgetRecord>
+  routes: Record<string, RouteRecord>
+  customerVisits: Record<string, CustomerVisitRecord>
+  routeVisitSchedules: Record<string, RouteVisitScheduleRecord>
+  salesTargets: Record<string, SalesTargetRecord>
+  commissionRules: Record<string, CommissionRuleRecord>
+  commissionPayouts: Record<string, CommissionPayoutRecord>
   sellers: Record<string, SellerRecord>
   sellerTransactions: Record<string, SellerTransactionRecord>
   couriers: Record<string, CourierRecord>

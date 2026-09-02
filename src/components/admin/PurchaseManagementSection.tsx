@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { useERP } from '@/lib/erp/provider'
+import { PURCHASE_APPROVAL_STAGE_LABEL, PURCHASE_APPROVAL_STAGE_PERMISSION, useERP } from '@/lib/erp/provider'
 import type { PurchaseOrderRecord, PurchaseRequisitionRecord } from '@/lib/erp/types'
 import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -68,8 +68,10 @@ type ReturnLineState = { productId: string; productName: string; maxQty: number;
 export function PurchaseManagementSection() {
   const {
     data,
+    hasPermission,
     dismissPurchaseRequisition,
     createPurchaseOrder,
+    updatePurchaseOrderApproval,
     receivePurchaseOrder,
     cancelPurchaseOrder,
     recordSupplierPayment,
@@ -269,6 +271,20 @@ export function PurchaseManagementSection() {
     }
   }
 
+  async function handlePoApproval(purchaseOrder: PurchaseOrderRecord, decision: 'approved' | 'rejected') {
+    setFeedback(null)
+    try {
+      await updatePurchaseOrderApproval(purchaseOrder.id, decision)
+      setFeedback(
+        decision === 'approved'
+          ? `${purchaseOrder.poNumber} approved at the ${PURCHASE_APPROVAL_STAGE_LABEL[purchaseOrder.approvalStage as keyof typeof PURCHASE_APPROVAL_STAGE_LABEL]} stage.`
+          : `${purchaseOrder.poNumber} rejected and cancelled.`
+      )
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to update approval status.')
+    }
+  }
+
   async function handleCancelPo(purchaseOrder: PurchaseOrderRecord) {
     if (!window.confirm(`Cancel purchase order ${purchaseOrder.poNumber}?`)) return
     setFeedback(null)
@@ -419,6 +435,17 @@ export function PurchaseManagementSection() {
                             QC: {po.qualityCheckStatus}
                           </Badge>
                         ) : null}
+                        {po.status === 'ordered' ? (
+                          po.approvalStatus === 'approved' ? (
+                            <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
+                              Approved
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300">
+                              Awaiting {PURCHASE_APPROVAL_STAGE_LABEL[po.approvalStage as keyof typeof PURCHASE_APPROVAL_STAGE_LABEL]}
+                            </Badge>
+                          )
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell className="min-w-40">
@@ -438,22 +465,44 @@ export function PurchaseManagementSection() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {po.status === 'ordered' && po.approvalStatus === 'pending' ? (
+                          hasPermission(PURCHASE_APPROVAL_STAGE_PERMISSION[po.approvalStage as keyof typeof PURCHASE_APPROVAL_STAGE_PERMISSION]) ? (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-full border-emerald-200 px-2.5 text-xs text-emerald-700 hover:text-emerald-700 dark:border-emerald-900 dark:text-emerald-300"
+                                onClick={() => void handlePoApproval(po, 'approved')}
+                              >
+                                <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-full border-rose-200 px-2.5 text-xs text-rose-600 hover:text-rose-600 dark:border-rose-900 dark:text-rose-400"
+                                onClick={() => void handlePoApproval(po, 'rejected')}
+                              >
+                                <Ban className="mr-1 h-3.5 w-3.5" /> Reject
+                              </Button>
+                            </>
+                          ) : null
+                        ) : null}
+                        {po.status === 'ordered' && po.approvalStatus === 'approved' ? (
+                          <Button size="sm" className="h-8 rounded-full" onClick={() => openReceiveDialog(po)}>
+                            <Truck className="mr-1 h-3.5 w-3.5" /> Receive
+                          </Button>
+                        ) : null}
                         {po.status === 'ordered' ? (
-                          <>
-                            <Button size="sm" className="h-8 rounded-full" onClick={() => openReceiveDialog(po)}>
-                              <Truck className="mr-1 h-3.5 w-3.5" /> Receive
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 w-8 rounded-full p-0 text-rose-600 hover:text-rose-600 dark:text-rose-400"
-                              onClick={() => void handleCancelPo(po)}
-                              aria-label={`Cancel ${po.poNumber}`}
-                            >
-                              <Ban className="h-3.5 w-3.5" />
-                            </Button>
-                          </>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 w-8 rounded-full p-0 text-rose-600 hover:text-rose-600 dark:text-rose-400"
+                            onClick={() => void handleCancelPo(po)}
+                            aria-label={`Cancel ${po.poNumber}`}
+                          >
+                            <Ban className="h-3.5 w-3.5" />
+                          </Button>
                         ) : null}
                         {po.status === 'received' && po.due > 0 ? (
                           <Button
@@ -541,7 +590,10 @@ export function PurchaseManagementSection() {
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New purchase order</DialogTitle>
-            <DialogDescription>Placing the order does not touch stock yet — that happens on receipt (GRN).</DialogDescription>
+            <DialogDescription>
+              Placing the order does not touch stock yet — it first needs to clear the approval chain (Department Head →
+              Purchase Manager → Finance → Management), then goods receipt (GRN).
+            </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleCreatePo}>
             <div className="grid gap-4 sm:grid-cols-2">

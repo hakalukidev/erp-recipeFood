@@ -47,8 +47,33 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
   { code: '5009', name: 'Factory Expense', type: 'expense', ledgerAccount: 'factory_expense' },
   { code: '5010', name: 'Bank Charge', type: 'expense', ledgerAccount: 'bank_charge' },
   { code: '5011', name: 'Depreciation', type: 'expense', ledgerAccount: 'depreciation' },
-  { code: '5012', name: 'Other Expense', type: 'expense', ledgerAccount: 'other_expense' },
+  { code: '5012', name: 'Other Expense / Miscellaneous', type: 'expense', ledgerAccount: 'other_expense' },
+  { code: '5013', name: 'Fuel', type: 'expense', ledgerAccount: 'fuel' },
+  { code: '5014', name: 'Advertisement', type: 'expense', ledgerAccount: 'advertisement' },
+  { code: '5015', name: 'Repair', type: 'expense', ledgerAccount: 'repair' },
+  { code: '5016', name: 'Utility', type: 'expense', ledgerAccount: 'utility' },
+  { code: '5017', name: 'Travel', type: 'expense', ledgerAccount: 'travel' },
 ]
+
+// Section 36's exact Expense Category list, in spec order — the Finance
+// page's "Record expense" form and the Accounting page's Budget form both
+// use this as their category dropdown, so a budget's category always lines
+// up with an expense's category (both compared case-insensitively).
+export const EXPENSE_CATEGORIES = [
+  'Office Expense',
+  'Factory Expense',
+  'Transport',
+  'Fuel',
+  'Marketing',
+  'Advertisement',
+  'Salary',
+  'Commission',
+  'Repair',
+  'Utility',
+  'Rent',
+  'Travel',
+  'Miscellaneous',
+] as const
 
 // Free-text expense categories (Finance page) are matched against this map
 // (case-insensitive) to decide which Chart of Accounts expense head an
@@ -58,7 +83,6 @@ export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   salary: 'salary',
   rent: 'rent',
   electricity: 'electricity',
-  utilities: 'electricity',
   transport: 'transport',
   marketing: 'marketing',
   commission: 'commission',
@@ -69,4 +93,12 @@ export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   'bank charge': 'bank_charge',
   'bank charges': 'bank_charge',
   depreciation: 'depreciation',
+  fuel: 'fuel',
+  advertisement: 'advertisement',
+  repair: 'repair',
+  'repair & maintenance': 'repair',
+  utility: 'utility',
+  utilities: 'utility',
+  travel: 'travel',
+  miscellaneous: 'other_expense',
 }

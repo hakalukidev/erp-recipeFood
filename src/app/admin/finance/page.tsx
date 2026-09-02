@@ -16,12 +16,14 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { EXPENSE_CATEGORIES } from '@/lib/erp/standardChartOfAccounts'
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
@@ -63,7 +65,13 @@ function getOrderNetSales(order: OrderRecord) {
   return order.total - (order.vat ?? 0)
 }
 
-const emptyExpenseForm = { category: '', amount: '0', note: '', date: dateInputValue(), paymentMethod: 'cash' as 'cash' | 'bank' }
+const emptyExpenseForm = {
+  category: EXPENSE_CATEGORIES[0] as string,
+  amount: '0',
+  note: '',
+  date: dateInputValue(),
+  paymentMethod: 'cash' as 'cash' | 'bank',
+}
 
 function SectionHeader({
   icon: Icon,
@@ -88,7 +96,8 @@ function SectionHeader({
 }
 
 export default function FinancePage() {
-  const { data, saveExpense, deleteExpense } = useERP()
+  const { data, hasPermission, saveExpense, updateExpenseApproval, deleteExpense } = useERP()
+  const canApproveExpense = hasPermission('finance:edit')
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
@@ -110,10 +119,6 @@ export default function FinancePage() {
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const currency = data?.settings.currency
-  const expenseCategories = useMemo(
-    () => Array.from(new Set(expenses.map((expense) => expense.category).filter(Boolean))).sort(),
-    [expenses]
-  )
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter((expense) =>
@@ -154,6 +159,17 @@ export default function FinancePage() {
       setFeedback('Expense removed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete expense.')
+    }
+  }
+
+  async function handleExpenseApproval(expenseId: string, approvalStatus: 'approved' | 'rejected') {
+    setFeedback(null)
+
+    try {
+      await updateExpenseApproval(expenseId, approvalStatus)
+      setFeedback(approvalStatus === 'approved' ? 'Expense approved.' : 'Expense rejected.')
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to update expense approval.')
     }
   }
 
@@ -539,18 +555,17 @@ export default function FinancePage() {
                     <p className="text-sm font-medium text-foreground">
                       Category<span className="ml-0.5 text-rose-500">*</span>
                     </p>
-                    <Input
-                      list="expense-category-options"
+                    <Select
                       value={expenseForm.category}
-                      onChange={(event) => setExpenseForm((current) => ({ ...current, category: event.target.value }))}
-                      placeholder="e.g. Rent, Transport, Utilities"
-                      required
-                    />
-                    <datalist id="expense-category-options">
-                      {expenseCategories.map((category) => (
-                        <option key={category} value={category} />
-                      ))}
-                    </datalist>
+                      onValueChange={(value) => setExpenseForm((current) => ({ ...current, category: value }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {EXPENSE_CATEGORIES.map((category) => (
+                          <SelectItem key={category} value={category}>{category}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
@@ -612,7 +627,9 @@ export default function FinancePage() {
             <Card className="border-border/70 shadow-sm">
               <CardHeader>
                 <CardTitle>Expenses this period</CardTitle>
-                <CardDescription>Total: {formatCurrency(expenseTotal, currency)}</CardDescription>
+                <CardDescription>
+                  Total: {formatCurrency(expenseTotal, currency)} · every entry sits at Pending until someone with Finance edit access approves or rejects it.
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
@@ -623,6 +640,7 @@ export default function FinancePage() {
                         <TableHead>Category</TableHead>
                         <TableHead>Amount</TableHead>
                         <TableHead>Note</TableHead>
+                        <TableHead>Approval</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -634,7 +652,43 @@ export default function FinancePage() {
                           <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
                           <TableCell>
-                            <div className="flex justify-end">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'rounded-full capitalize',
+                                expense.approvalStatus === 'approved' &&
+                                  'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300',
+                                expense.approvalStatus === 'rejected' &&
+                                  'border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300',
+                                expense.approvalStatus === 'pending' &&
+                                  'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+                              )}
+                            >
+                              {expense.approvalStatus}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              {expense.approvalStatus === 'pending' && canApproveExpense ? (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="rounded-lg"
+                                    onClick={() => void handleExpenseApproval(expense.id, 'approved')}
+                                  >
+                                    Approve
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="rounded-lg text-destructive hover:text-destructive"
+                                    onClick={() => void handleExpenseApproval(expense.id, 'rejected')}
+                                  >
+                                    Reject
+                                  </Button>
+                                </>
+                              ) : null}
                               <Button
                                 variant="outline"
                                 size="icon"
@@ -650,7 +704,7 @@ export default function FinancePage() {
                       ))}
                       {filteredExpenses.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                          <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                             No expenses recorded for this period.
                           </TableCell>
                         </TableRow>
