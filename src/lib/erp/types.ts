@@ -156,12 +156,24 @@ export type OrderStatus = 'pending' | 'ready' | 'shipped' | 'completed' | 'hold'
 export type PaymentStatus = 'unpaid' | 'partial' | 'paid'
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
 
+// Section 18 completion — which specific batch(es) this line's quantity was
+// drawn from, soonest-expiry-first (see consumeBatchesFefo in provider.tsx).
+// Empty/absent when the product isn't batch-tracked, or when tracked batches
+// didn't hold enough to cover the full quantity (the shortfall is silently
+// drawn from the untracked portion of stockQty, same as before this chunk).
+export type OrderItemBatchAllocation = {
+  batchId: string
+  batchNumber: string
+  quantity: number
+}
+
 export type OrderItem = {
   productId: string
   productName: string
   quantity: number
   unitPrice: number
   purchasePrice: number
+  batchAllocations?: OrderItemBatchAllocation[]
 }
 
 export type PriceMode = 'retail' | 'wholesale'
@@ -587,9 +599,11 @@ export type StockTransferInput = {
 
 // ---- Batches / FIFO-FEFO (Section 18) -----------------------------------
 // Created at GRN time (see receivePurchaseOrder) whenever a received line
-// carries a batch number or expiry date. Purely a picking aid for now —
-// "Suggest" per the spec, not an enforced consumption ledger: quantity only
-// ever decreases if something explicitly consumes it.
+// carries a batch number or expiry date. A sale now genuinely consumes the
+// soonest-expiring batch(es) first (see consumeBatchesFefo/createOrder in
+// provider.tsx) — quantity here decreases as an order is created/edited and
+// is restored on cancel/edit-away, same reverse-then-repost pattern as the
+// rest of the sale's stock/ledger effects.
 export type BatchRecord = {
   id: string
   productId: string

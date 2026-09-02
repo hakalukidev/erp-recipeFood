@@ -2,6 +2,9 @@
 
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
+  AlertTriangle,
+  Boxes,
+  PackageX,
   PencilLine,
   Search,
   Sparkles,
@@ -36,9 +39,10 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { buildInventoryDashboard } from '@/lib/erp/dashboards'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
-import { formatCurrency, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
 
 const SUPPLIER_NONE = '__none__'
 const currencyOptions = ['BDT', 'USD', 'CNY', 'EUR']
@@ -441,6 +445,8 @@ export function StockOverviewScreen() {
   const lowStockProducts = useMemo(() => products.filter((product) => product.stockQty <= product.minStock), [products])
   const totalInventoryValue = useMemo(() => products.reduce((sum, product) => sum + product.purchasePrice * product.stockQty, 0), [products])
   const totalUnits = useMemo(() => products.reduce((sum, product) => sum + product.stockQty, 0), [products])
+  // Section 57 — Inventory Dashboard.
+  const inventoryDashboard = useMemo(() => buildInventoryDashboard(data), [data])
   const selectedPurchaseProduct = useMemo(() => products.find((product) => product.id === purchaseForm.productId) ?? null, [products, purchaseForm.productId])
   const purchaseTotal = parseAmount(purchaseForm.unitCost) * parseAmount(purchaseForm.quantity)
 
@@ -836,6 +842,95 @@ export function StockOverviewScreen() {
             <CardContent className="p-4 text-sm text-primary">{feedback}</CardContent>
           </Card>
         ) : null}
+
+        {/* Section 57: Inventory Dashboard */}
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader>
+            <CardTitle>Inventory dashboard</CardTitle>
+            <CardDescription>Stock value, expiry exposure, and a warehouse / product / batch breakdown.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
+              {[
+                { label: 'Total stock value', value: formatCurrency(inventoryDashboard.totalStockValue, currency), icon: Boxes },
+                { label: 'Raw material', value: formatCurrency(inventoryDashboard.rawMaterialValue, currency), icon: Boxes },
+                { label: 'Finished goods', value: formatCurrency(inventoryDashboard.finishedGoodsValue, currency), icon: Boxes },
+                { label: 'Damaged', value: formatCurrency(inventoryDashboard.damagedValue, currency), icon: AlertTriangle },
+                { label: 'Low stock', value: String(inventoryDashboard.lowStockCount), icon: AlertTriangle },
+                { label: 'Out of stock', value: String(inventoryDashboard.outOfStockCount), icon: PackageX },
+                { label: 'Near expiry', value: String(inventoryDashboard.nearExpiryBatches.length), icon: AlertTriangle },
+                { label: 'Expired', value: String(inventoryDashboard.expiredBatches.length), icon: PackageX },
+              ].map((stat) => {
+                const Icon = stat.icon
+                return (
+                  <div key={stat.label} className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
+                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{stat.label}</span></div>
+                    <p className={`mt-1 truncate font-semibold tracking-tight ${statValueFontSizeClass(stat.value)}`}>{stat.value}</p>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-3">
+              <div>
+                <p className="mb-2 text-sm font-medium text-foreground">Warehouse-wise stock</p>
+                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Warehouse</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Value</th></tr></thead>
+                    <tbody>
+                      {inventoryDashboard.warehouseWiseStock.map((row) => (
+                        <tr key={row.warehouseId} className="border-t border-border/70">
+                          <td className="p-2.5">{row.warehouseName}</td>
+                          <td className="p-2.5 text-right">{row.quantity}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.value, currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!inventoryDashboard.warehouseWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No stock recorded yet.</p> : null}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-2 text-sm font-medium text-foreground">Product-wise stock</p>
+                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Product</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Value</th></tr></thead>
+                    <tbody>
+                      {inventoryDashboard.productWiseStock.slice(0, 100).map((product) => (
+                        <tr key={product.id} className="border-t border-border/70">
+                          <td className="p-2.5">{product.name}<span className="block text-xs text-muted-foreground">{product.sku}</span></td>
+                          <td className="p-2.5 text-right">{product.stockQty}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(product.purchasePrice * product.stockQty, currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!inventoryDashboard.productWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No products yet.</p> : null}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-2 text-sm font-medium text-foreground">Batch-wise stock</p>
+                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Batch</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Expiry</th></tr></thead>
+                    <tbody>
+                      {inventoryDashboard.batchWiseStock.slice(0, 100).map((batch) => (
+                        <tr key={batch.id} className="border-t border-border/70">
+                          <td className="p-2.5">{batch.productName}<span className="block text-xs text-muted-foreground">{batch.batchNumber}</span></td>
+                          <td className="p-2.5 text-right">{batch.quantity}</td>
+                          <td className="p-2.5 text-right">{batch.expiryDate ? formatDate(batch.expiryDate) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!inventoryDashboard.batchWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No batches recorded yet.</p> : null}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card className="border-border/70 shadow-sm">
           <CardHeader>

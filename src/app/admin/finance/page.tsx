@@ -3,15 +3,20 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   BarChart3,
+  Banknote,
   FileDown,
+  Landmark,
   LayoutGrid,
   ListChecks,
   Plus,
   Printer,
   ReceiptText,
   Trash2,
+  Truck,
+  Users,
   Wallet,
 } from 'lucide-react'
 
@@ -23,6 +28,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { buildFinanceDashboard } from '@/lib/erp/dashboards'
 import { EXPENSE_CATEGORIES } from '@/lib/erp/standardChartOfAccounts'
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
@@ -118,6 +124,9 @@ export default function FinancePage() {
   )
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
+  // Section 56 — live balances, independent of the reporting-period picker
+  // above (a dashboard is a snapshot, not something you scope by date).
+  const financeDashboard = useMemo(() => buildFinanceDashboard(data), [data])
   const currency = data?.settings.currency
 
   const filteredExpenses = useMemo(() => {
@@ -357,6 +366,51 @@ export default function FinancePage() {
   return (
     <AdminShell active="Accounting & Finance">
       <div className="space-y-8">
+        {/* Section 56: Finance Dashboard — real-time balances, not scoped to the period picker below. */}
+        <section className="space-y-4">
+          <SectionHeader icon={Landmark} title="Finance dashboard" description="Live cash, bank, and payable position as of right now." />
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {[
+              ['Cash balance', formatCurrency(financeDashboard.cashBalance, currency), Wallet],
+              ['Bank balance', formatCurrency(financeDashboard.bankBalance, currency), Banknote],
+              ['Receivable', formatCurrency(financeDashboard.totalReceivable, currency), Users],
+              ['Payable', formatCurrency(financeDashboard.totalPayable, currency), Truck],
+              ['Due payment', formatCurrency(financeDashboard.duePayment, currency), ReceiptText],
+            ].map(([label, value, Icon]) => {
+              const MetricIcon = Icon as typeof Wallet
+              return (
+                <Card key={label as string} className="border-border/70 shadow-sm">
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground"><MetricIcon className="h-4 w-4" />{label as string}</div>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            {[
+              ["Today's collection", formatCurrency(financeDashboard.todayCollection, currency), ArrowUpRight],
+              ["Today's expense", formatCurrency(financeDashboard.todayExpense, currency), ArrowDownLeft],
+              ['Monthly expense', formatCurrency(financeDashboard.monthlyExpense, currency), ReceiptText],
+              ['Profit (this month)', formatCurrency(financeDashboard.profit, currency), financeDashboard.profit >= 0 ? ArrowUpRight : ArrowDownLeft],
+              ['Cash flow (this month)', formatCurrency(financeDashboard.cashFlow, currency), ArrowLeftRight],
+            ].map(([label, value, Icon]) => {
+              const MetricIcon = Icon as typeof Wallet
+              return (
+                <Card key={label as string} className="border-border/70 shadow-sm">
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground"><MetricIcon className="h-4 w-4" />{label as string}</div>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </section>
+
+        <Separator />
+
         <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-medium text-foreground">Reporting period</p>

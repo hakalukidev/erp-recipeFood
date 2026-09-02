@@ -5,11 +5,19 @@ import Link from 'next/link'
 import {
   AlertTriangle,
   ArrowRight,
+  Banknote,
+  Factory,
+  Landmark,
   Package,
   Plus,
+  ReceiptText,
   Search,
   ShoppingCart,
+  Target,
+  TrendingDown,
   TrendingUp,
+  Truck,
+  Users,
   Wallet,
 } from 'lucide-react'
 import {
@@ -43,6 +51,7 @@ import {
 } from '@/components/ui/select'
 import { useERP } from '@/lib/erp/provider'
 import { Textarea } from '@/components/ui/textarea'
+import { buildManagingDirectorExtras } from '@/lib/erp/dashboards'
 import {
   buildCategoryRevenue,
   buildDashboardSnapshot,
@@ -76,11 +85,16 @@ function getKpiValueFontSize(value: string | number) {
 }
 
 export function DashboardScreen() {
-  const { data, loading, error, currentUser, saveInvestor } = useERP()
+  const { data, loading, error, currentUser, saveInvestor, hasPermission } = useERP()
   const snapshot = buildDashboardSnapshot(data, currentUser?.roleId)
   const overduePayments = toArray(data?.orders).filter(
     (order) => order.due > 0 && new Date(order.paymentDueDate).getTime() < Date.now()
   ).length
+  // Section 55 — Managing Director Dashboard: the rest of the bullet list
+  // (finance/production/target figures) beyond what buildDashboardSnapshot
+  // already covers, shown only to roles that can see finance data.
+  const canViewExecutiveOverview = hasPermission('finance:view')
+  const mdExtras = useMemo(() => buildManagingDirectorExtras(data), [data])
 
   const [revenueRange, setRevenueRange] = useState<RevenueRange>('6m')
   const [investorOpen, setInvestorOpen] = useState(false)
@@ -216,6 +230,84 @@ export function DashboardScreen() {
             )
           })}
         </div>
+
+        {/* Section 55: Managing Director Dashboard — executive figures, gated on finance:view. */}
+        {canViewExecutiveOverview ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Executive overview</CardTitle>
+              <CardDescription>Sales, finance, production and target figures for this month.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-7">
+                {[
+                  { label: 'Monthly sales', value: formatCurrency(mdExtras.monthlySales, data?.settings.currency), icon: TrendingUp },
+                  { label: 'Yearly sales', value: formatCurrency(mdExtras.yearlySales, data?.settings.currency), icon: TrendingUp },
+                  { label: 'Collection', value: formatCurrency(mdExtras.collection, data?.settings.currency), icon: Wallet },
+                  { label: 'Outstanding', value: formatCurrency(mdExtras.outstanding, data?.settings.currency), icon: AlertTriangle },
+                  { label: 'Purchase', value: formatCurrency(mdExtras.purchase, data?.settings.currency), icon: ShoppingCart },
+                  { label: 'Inventory value', value: formatCurrency(mdExtras.inventoryValue, data?.settings.currency), icon: Package },
+                  { label: 'Production', value: `${mdExtras.production.finishedGoodsQty} units`, icon: Factory },
+                  { label: 'Gross profit', value: formatCurrency(mdExtras.grossProfit, data?.settings.currency), icon: TrendingUp },
+                  { label: 'Net profit', value: formatCurrency(mdExtras.netProfit, data?.settings.currency), icon: mdExtras.netProfit >= 0 ? TrendingUp : TrendingDown },
+                  { label: 'Expense', value: formatCurrency(mdExtras.expense, data?.settings.currency), icon: ReceiptText },
+                  { label: 'Cash', value: formatCurrency(mdExtras.cash, data?.settings.currency), icon: Banknote },
+                  { label: 'Bank', value: formatCurrency(mdExtras.bank, data?.settings.currency), icon: Landmark },
+                  { label: 'Receivable', value: formatCurrency(mdExtras.receivable, data?.settings.currency), icon: Users },
+                  { label: 'Payable', value: formatCurrency(mdExtras.payable, data?.settings.currency), icon: Truck },
+                ].map((stat) => {
+                  const Icon = stat.icon
+                  return (
+                    <div key={stat.label} className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
+                      <div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{stat.label}</span></div>
+                      <p className="mt-1 truncate font-semibold tracking-tight" style={{ fontSize: getKpiValueFontSize(stat.value) }}>{stat.value}</p>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Target className="h-4 w-4" /> Sales target vs achievement (this month)</div>
+                  <p className="mt-2 text-xl font-semibold">
+                    {formatCurrency(mdExtras.monthlySales, data?.settings.currency)} / {formatCurrency(mdExtras.salesTarget, data?.settings.currency)}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">{mdExtras.salesTarget > 0 ? `${mdExtras.achievementPercent.toFixed(1)}% achieved` : 'No sales target set for this month.'}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground"><Factory className="h-4 w-4" /> Production variance (this month)</div>
+                  <p className="mt-2 text-xl font-semibold">{mdExtras.productionVariance.lossQty} units loss</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{mdExtras.productionVariance.alertCount} production order(s) flagged over standard loss.</p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <div>
+                  <p className="mb-2 text-sm font-medium text-foreground">Top customers</p>
+                  <div className="space-y-2">
+                    {mdExtras.topCustomers.length ? mdExtras.topCustomers.map((customer) => (
+                      <div key={customer.id} className="flex items-center justify-between rounded-xl border border-border/70 p-3">
+                        <p className="font-medium">{customer.name}</p>
+                        <p className="font-semibold">{formatCurrency(customer.totalSpend, data?.settings.currency)}</p>
+                      </div>
+                    )) : <p className="text-sm text-muted-foreground">No customer sales recorded yet.</p>}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-medium text-foreground">Near expiry stock</p>
+                  <div className="space-y-2">
+                    {mdExtras.nearExpiryBatches.length ? mdExtras.nearExpiryBatches.slice(0, 5).map((batch) => (
+                      <div key={batch.id} className="flex items-center justify-between rounded-xl border border-border/70 p-3">
+                        <div><p className="font-medium">{batch.productName}</p><p className="text-xs text-muted-foreground">Batch {batch.batchNumber} · Qty {batch.quantity}</p></div>
+                        <p className="text-sm text-amber-600 dark:text-amber-400">{new Date(batch.expiryDate).toLocaleDateString('en-BD')}</p>
+                      </div>
+                    )) : <p className="text-sm text-muted-foreground">Nothing expiring within 30 days.</p>}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[1.15fr_1.85fr]">
           <Card className="border-border/70 shadow-sm">

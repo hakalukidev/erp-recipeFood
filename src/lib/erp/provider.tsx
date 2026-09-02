@@ -18,6 +18,7 @@ import { get, onValue, ref, set, update } from 'firebase/database'
 import toast from 'react-hot-toast'
 
 import { createDefaultERPData } from '@/lib/erp/defaultData'
+import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
 import type {
   BankAccountInput,
   BankAccountRecord,
@@ -55,6 +56,7 @@ import type {
   LoginHistoryRecord,
   OrderInput,
   OrderItem,
+  OrderItemBatchAllocation,
   OrderRecord,
   ProductInput,
   ProductRecord,
@@ -802,6 +804,82 @@ function adjustWarehouseStock(
   } satisfies WarehouseStockRecord
 }
 
+// A single write batch can touch the same batch record's quantity more than
+// once (e.g. updateOrder releasing the old allocation and consuming a new
+// one in the same update) — read back whatever this batch already staged,
+// same trick as adjustWarehouseStock above.
+function batchQuantity(data: ERPData, updates: Record<string, unknown>, batchId: string) {
+  const pendingQty = updates[`batches/${batchId}/quantity`] as number | undefined
+  if (pendingQty !== undefined) return pendingQty
+  return data.batches[batchId]?.quantity ?? 0
+}
+
+// Section 18 completion — a sale now genuinely draws down the specific
+// batch(es) it should, soonest-expiry-first, instead of only ever touching
+// the product's total stockQty. Batches with no expiry date sort last
+// (nothing to prioritize by). Only ever consumes as much as tracked batches
+// for this product+warehouse actually hold; any shortfall is left to the
+// untracked portion of stockQty — batches stay a best-effort FEFO layer on
+// top of stockQty, not a hard sub-ledger that can block a sale.
+function consumeBatchesFefo(
+  data: ERPData,
+  updates: Record<string, unknown>,
+  productId: string,
+  warehouseId: string,
+  quantity: number
+): OrderItemBatchAllocation[] {
+  if (!warehouseId || quantity <= 0) {
+    return []
+  }
+
+  const now = new Date().toISOString()
+  const candidates = Object.values(data.batches)
+    .filter((batch) => batch.productId === productId && batch.warehouseId === warehouseId)
+    .sort((a, b) => {
+      if (!a.expiryDate && !b.expiryDate) return a.createdAt.localeCompare(b.createdAt)
+      if (!a.expiryDate) return 1
+      if (!b.expiryDate) return -1
+      return a.expiryDate.localeCompare(b.expiryDate)
+    })
+
+  const allocations: OrderItemBatchAllocation[] = []
+  let remaining = quantity
+  for (const batch of candidates) {
+    if (remaining <= 0) break
+    const available = batchQuantity(data, updates, batch.id)
+    if (available <= 0) continue
+    const take = Math.min(available, remaining)
+    updates[`batches/${batch.id}/quantity`] = available - take
+    updates[`batches/${batch.id}/updatedAt`] = now
+    allocations.push({ batchId: batch.id, batchNumber: batch.batchNumber, quantity: take })
+    remaining -= take
+  }
+  return allocations
+}
+
+// Reverses consumeBatchesFefo — restores each allocated quantity back to its
+// batch (edit-away / cancel). A batch that no longer exists (rare — someone
+// would have had to delete it since the sale) is silently skipped rather
+// than throwing, since there's nothing left to restore it into.
+function releaseBatchAllocations(
+  data: ERPData,
+  updates: Record<string, unknown>,
+  allocations: OrderItemBatchAllocation[] | undefined
+) {
+  if (!allocations?.length) {
+    return
+  }
+  const now = new Date().toISOString()
+  allocations.forEach((allocation) => {
+    if (!data.batches[allocation.batchId]) {
+      return
+    }
+    const available = batchQuantity(data, updates, allocation.batchId)
+    updates[`batches/${allocation.batchId}/quantity`] = available + allocation.quantity
+    updates[`batches/${allocation.batchId}/updatedAt`] = now
+  })
+}
+
 function normalizeERPData(data: ERPData | null): ERPData {
   const source = data ?? ({} as Partial<ERPData>)
 
@@ -1085,14 +1163,35 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     setLoading(true)
+
+    // Instant paint from the last-synced snapshot (IndexedDB) while the live
+    // listeners below catch up over the network — see offlineCache.ts for
+    // why RTDB's web SDK needs this. Only fills in if nothing has rendered
+    // yet (`current ?? ...`), so it never clobbers a live value that beat it
+    // to the state update.
+    void readCachedERPData<ERPData>().then((cached) => {
+      if (cancelled || !cached) return
+      setData((current) => current ?? normalizeERPData(cached))
+    })
+
     const raw: Partial<Record<(typeof ERP_TOP_LEVEL_KEYS)[number], unknown>> = {}
     const loadedKeys = new Set<string>()
+    let persistTimer: ReturnType<typeof setTimeout> | null = null
 
     function commit() {
       if (cancelled) return
-      setData(normalizeERPData(raw as ERPData))
+      const next = normalizeERPData(raw as ERPData)
+      setData(next)
       if (loadedKeys.size >= ERP_TOP_LEVEL_KEYS.length) {
         setLoading(false)
+        // A single write (e.g. createOrder) touches several top-level keys
+        // (orders/customers/ledgerEntries/products/...) whose listeners each
+        // fire independently — debounce so a burst of commits coalesces into
+        // one snapshot write instead of one per key.
+        if (persistTimer) clearTimeout(persistTimer)
+        persistTimer = setTimeout(() => {
+          if (!cancelled) void writeCachedERPData(next)
+        }, 1500)
       }
     }
 
@@ -1114,6 +1213,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true
+      if (persistTimer) clearTimeout(persistTimer)
       unsubscribes.forEach((unsubscribe) => unsubscribe())
     }
   }, [firebaseUser])
@@ -1310,6 +1410,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     setCurrentUserId(null)
     persistCurrentUserId(null)
     persistSessionExpiresAt(null)
+    void clearCachedERPData()
     if (auth) {
       void signOut(auth)
     }
@@ -3814,6 +3915,29 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Paid amount cannot be negative.')
     }
 
+    // Section 18 completion: consume the soonest-expiring batch(es) each
+    // product line actually draws from. Computed before `updates` below so
+    // the enriched items (with `batchAllocations`) can go straight into the
+    // order record instead of a conflicting follow-up write to the same path.
+    const batchWrites: Record<string, unknown> = {}
+    const batchAllocationsByProduct = new Map<string, OrderItemBatchAllocation[]>()
+    requestedByProduct.forEach((quantity, productId) => {
+      const product = data.products[productId]
+      const warehouseId = input.warehouseId?.trim() || product.warehouseId
+      const allocations = consumeBatchesFefo(data, batchWrites, productId, warehouseId, quantity)
+      if (allocations.length) {
+        batchAllocationsByProduct.set(productId, allocations)
+      }
+    })
+    const assignedBatchProducts = new Set<string>()
+    const orderItemsWithBatches = orderItems.map((item) => {
+      if (assignedBatchProducts.has(item.productId)) return item
+      const allocations = batchAllocationsByProduct.get(item.productId)
+      if (!allocations) return item
+      assignedBatchProducts.add(item.productId)
+      return { ...item, batchAllocations: allocations }
+    })
+
     const orderId = createId('order')
     const billNumber = input.billNumber?.trim() || `INV-${Date.now().toString().slice(-8)}`
     const paid = Math.min(Math.max(input.paid, 0), total)
@@ -3871,9 +3995,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         overdueNotified: false,
         remarks: input.remarks?.trim() ?? '',
         createdAt: orderDate,
-        items: orderItems,
+        items: orderItemsWithBatches,
       },
       [`customers/${customer.id}/due`]: (data.customers[customer.id]?.due ?? 0) + due,
+      ...batchWrites,
     }
 
     const invoiceEntries = buildInvoiceLedgerEntries({
@@ -4093,6 +4218,31 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       adjustWarehouseStock(data, updates, product, nextWarehouseId || product.warehouseId, -requestedQty)
     })
 
+    // Section 18 completion: release whatever batches the original lines
+    // drew from, then re-consume fresh FEFO allocations for the edited
+    // quantities/warehouse — same reverse-then-repost shape as the
+    // stock/ledger effects above.
+    order.items.forEach((item) => {
+      releaseBatchAllocations(data, updates, item.batchAllocations)
+    })
+    const batchAllocationsByProduct = new Map<string, OrderItemBatchAllocation[]>()
+    requestedByProduct.forEach((quantity, productId) => {
+      const product = data.products[productId]
+      const warehouseId = nextWarehouseId || product.warehouseId
+      const allocations = consumeBatchesFefo(data, updates, productId, warehouseId, quantity)
+      if (allocations.length) {
+        batchAllocationsByProduct.set(productId, allocations)
+      }
+    })
+    const assignedBatchProducts = new Set<string>()
+    updates[`orders/${orderId}/items`] = orderItems.map((item) => {
+      if (assignedBatchProducts.has(item.productId)) return item
+      const allocations = batchAllocationsByProduct.get(item.productId)
+      if (!allocations) return item
+      assignedBatchProducts.add(item.productId)
+      return { ...item, batchAllocations: allocations }
+    })
+
     await update(ref(db, 'erp'), updates)
 
     await writeActivity('order_updated', 'sales', `Edited order ${order.billNumber} for ${customer.name}.`)
@@ -4145,6 +4295,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
       adjustWarehouseStock(data, updates, product, order.warehouseId || product.warehouseId, quantity)
+    })
+
+    // Section 18 completion: restore every batch this order's lines had
+    // drawn down.
+    order.items.forEach((item) => {
+      releaseBatchAllocations(data, updates, item.batchAllocations)
     })
 
     await update(ref(db, 'erp'), updates)

@@ -8,12 +8,20 @@ import {
   ClipboardPlus,
   FileDown,
   FileSpreadsheet,
+  MapPin,
   PencilLine,
   Plus,
   Printer,
   ReceiptText,
   Search,
+  ShoppingBag,
+  Store,
+  Target,
   Trash2,
+  TrendingDown,
+  TrendingUp,
+  UserRound,
+  Wallet,
   X,
 } from 'lucide-react'
 
@@ -36,7 +44,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { buildSalesDashboard } from '@/lib/erp/dashboards'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRecord } from '@/lib/erp/types'
 import { cn } from '@/lib/utils'
@@ -71,6 +81,15 @@ type SalesDocument = Pick<
 
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid'
 
+function statValueFontSizeClass(value: string) {
+  const length = value.length
+  if (length <= 6) return 'text-2xl md:text-3xl'
+  if (length <= 9) return 'text-xl md:text-2xl'
+  if (length <= 13) return 'text-lg md:text-xl'
+  if (length <= 17) return 'text-base md:text-lg'
+  return 'text-sm md:text-base'
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -95,6 +114,8 @@ export function SalesScreen() {
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
+  // Section 58 — Sales Dashboard.
+  const salesDashboard = useMemo(() => buildSalesDashboard(data), [data])
   const salesPeople = useMemo(() => {
     const map = new Map<string, string>()
     orders.forEach((order) => {
@@ -309,10 +330,16 @@ export function SalesScreen() {
       .map((item, index) => {
         const lineTotal = item.quantity * item.unitPrice
 
+        const batchNote = item.batchAllocations?.length
+          ? `<div style="font-size:11px;color:#666;">Batch: ${escapeHtml(
+              item.batchAllocations.map((allocation) => `${allocation.batchNumber} x${allocation.quantity}`).join(', ')
+            )}</div>`
+          : ''
+
         return `
           <tr>
             <td>${index + 1}</td>
-            <td>${escapeHtml(item.productName)}</td>
+            <td>${escapeHtml(item.productName)}${batchNote}</td>
             <td class="numeric">${item.quantity}</td>
             <td class="numeric">${formatCurrency(item.unitPrice, currency)}</td>
             <td class="numeric">${formatCurrency(lineTotal, currency)}</td>
@@ -514,6 +541,161 @@ export function SalesScreen() {
             <CardContent className="p-4 text-sm text-primary">{feedback}</CardContent>
           </Card>
         ) : null}
+
+        {/* Section 58: Sales Dashboard */}
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader>
+            <CardTitle>Sales dashboard</CardTitle>
+            <CardDescription>Daily/monthly sales, growth, and a territory / officer / dealer / product / category breakdown for this month.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              <div className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Wallet className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Daily sales</span></div>
+                <p className={`mt-1 truncate font-semibold tracking-tight ${statValueFontSizeClass(formatCurrency(salesDashboard.dailySales, data?.settings.currency))}`}>
+                  {formatCurrency(salesDashboard.dailySales, data?.settings.currency)}
+                </p>
+              </div>
+              <div className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Wallet className="h-3.5 w-3.5 shrink-0" /><span className="truncate">Monthly sales</span></div>
+                <p className={`mt-1 truncate font-semibold tracking-tight ${statValueFontSizeClass(formatCurrency(salesDashboard.monthlySales, data?.settings.currency))}`}>
+                  {formatCurrency(salesDashboard.monthlySales, data?.settings.currency)}
+                </p>
+              </div>
+              <div className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  {salesDashboard.salesGrowthPercent >= 0 ? <TrendingUp className="h-3.5 w-3.5 shrink-0" /> : <TrendingDown className="h-3.5 w-3.5 shrink-0" />}
+                  <span className="truncate">Sales growth (vs last month)</span>
+                </div>
+                <p className={cn('mt-1 truncate font-semibold tracking-tight', salesDashboard.salesGrowthPercent >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
+                  {salesDashboard.salesGrowthPercent >= 0 ? '+' : ''}{salesDashboard.salesGrowthPercent.toFixed(1)}%
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Previous month: {formatCurrency(salesDashboard.previousMonthSales, data?.settings.currency)}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-3">
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><MapPin className="h-4 w-4" /> Territory-wise sales</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Territory</th><th className="p-2.5 text-right">Orders</th><th className="p-2.5 text-right">Sales</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.territoryWiseSales.map((row) => (
+                        <tr key={row.key} className="border-t border-border/70">
+                          <td className="p-2.5">{row.label}</td>
+                          <td className="p-2.5 text-right">{row.orders}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.total, data?.settings.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.territoryWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales recorded this month.</p> : null}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><UserRound className="h-4 w-4" /> Sales officer-wise sales</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Officer</th><th className="p-2.5 text-right">Orders</th><th className="p-2.5 text-right">Sales</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.salesOfficerWiseSales.map((row) => (
+                        <tr key={row.key} className="border-t border-border/70">
+                          <td className="p-2.5">{row.label}</td>
+                          <td className="p-2.5 text-right">{row.orders}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.total, data?.settings.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.salesOfficerWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales recorded this month.</p> : null}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><Store className="h-4 w-4" /> Dealer-wise sales</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Dealer</th><th className="p-2.5 text-right">Orders</th><th className="p-2.5 text-right">Sales</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.dealerWiseSales.map((row) => (
+                        <tr key={row.key} className="border-t border-border/70">
+                          <td className="p-2.5">{row.label}</td>
+                          <td className="p-2.5 text-right">{row.orders}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.total, data?.settings.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.dealerWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No dealer sales recorded this month.</p> : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-3">
+              <div className="xl:col-span-1">
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><ShoppingBag className="h-4 w-4" /> Product-wise sales</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Product</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Sales</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.productWiseSales.slice(0, 100).map((row) => (
+                        <tr key={row.productId} className="border-t border-border/70">
+                          <td className="p-2.5">{row.productName}</td>
+                          <td className="p-2.5 text-right">{row.quantity}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.revenue, data?.settings.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.productWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales recorded this month.</p> : null}
+                </div>
+              </div>
+
+              <div className="xl:col-span-1">
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><ShoppingBag className="h-4 w-4" /> Category-wise sales</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Category</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Sales</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.categoryWiseSales.map((row) => (
+                        <tr key={row.category} className="border-t border-border/70">
+                          <td className="p-2.5">{row.category}</td>
+                          <td className="p-2.5 text-right">{row.quantity}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.revenue, data?.settings.currency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.categoryWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales recorded this month.</p> : null}
+                </div>
+              </div>
+
+              <div className="xl:col-span-1">
+                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><Target className="h-4 w-4" /> Target vs achievement</p>
+                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Entity</th><th className="p-2.5 text-right">Target</th><th className="p-2.5 text-right">Achieved</th><th className="p-2.5 text-right">%</th></tr></thead>
+                    <tbody>
+                      {salesDashboard.targetVsAchievement.map((row) => (
+                        <tr key={row.id} className="border-t border-border/70">
+                          <td className="p-2.5">{row.entityName}<span className="block text-xs text-muted-foreground capitalize">{row.entityType.replace('-', ' ')}</span></td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.targetAmount, data?.settings.currency)}</td>
+                          <td className="p-2.5 text-right">{formatCurrency(row.achievedAmount, data?.settings.currency)}</td>
+                          <td className={cn('p-2.5 text-right', row.achievementPercent >= 100 ? 'text-emerald-600 dark:text-emerald-400' : '')}>{row.achievementPercent.toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!salesDashboard.targetVsAchievement.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales target set for this month.</p> : null}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Separator />
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
