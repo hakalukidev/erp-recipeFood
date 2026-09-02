@@ -343,6 +343,40 @@ export async function exportXlsx(filename: string, sheetName: string, headers: s
   XLSX.writeFile(workbook, filename)
 }
 
+// ---- Section 81/82 (Data Migration / Import-Export) ----------------------
+// Reads an uploaded .xlsx/.xls/.csv file into plain row objects keyed by
+// its header row — the shared entry point every Data Migration import tab
+// and any future "Upload Excel/CSV" flow parses through. `defval: ''` keeps
+// every declared column present (as an empty string) even on a short row,
+// so downstream mapping code never has to guess between "blank" and
+// "missing".
+export async function parseSpreadsheetFile(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+  const XLSX = await import('xlsx')
+  const buffer = await file.arrayBuffer()
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+  if (!firstSheetName) {
+    return { headers: [], rows: [] }
+  }
+
+  const sheet = workbook.Sheets[firstSheetName]
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false })
+  const headers = (XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 })[0] ?? []).map((header) =>
+    String(header ?? '').trim()
+  )
+
+  return {
+    headers,
+    rows: rows.map((row) => {
+      const normalized: Record<string, string> = {}
+      Object.entries(row).forEach(([key, value]) => {
+        normalized[key.trim()] = String(value ?? '').trim()
+      })
+      return normalized
+    }),
+  }
+}
+
 export async function exportPdf(filename: string, title: string, headers: string[], rows: (string | number)[][]) {
   const { default: JsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')

@@ -3,6 +3,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { AlertTriangle, Ban, CheckCircle2, ClipboardList, Plus, Receipt, RotateCcw, Trash2, Truck, Wallet } from 'lucide-react'
 
+import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -94,6 +95,21 @@ export function PurchaseManagementSection() {
   const purchaseOrders = useMemo(
     () => toArray(data?.purchaseOrders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.purchaseOrders]
+  )
+  const poExportHeaders = ['PO Number', 'Supplier', 'Warehouse', 'Status', 'Subtotal', 'Paid', 'Due', 'GRN Number']
+  const poExportRows = useMemo(
+    () =>
+      purchaseOrders.map((po) => [
+        po.poNumber,
+        po.supplierName,
+        po.warehouseName,
+        po.status,
+        po.subtotal,
+        po.paid,
+        po.due,
+        po.grnNumber ?? '',
+      ]),
+    [purchaseOrders]
   )
   const purchaseReturns = useMemo(
     () => toArray(data?.purchaseReturns).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
@@ -387,10 +403,13 @@ export function PurchaseManagementSection() {
               <CardDescription>Requisition → PO → Goods Receive → Quality Check → GRN → Accounts Payable.</CardDescription>
             </div>
           </div>
-          <Button onClick={() => openNewPoDialog()} className="h-10 rounded-xl">
-            <Plus className="mr-2 h-4 w-4" />
-            New purchase order
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportMenu filenameBase="purchase-orders" title="Purchase Orders" headers={poExportHeaders} rows={poExportRows} />
+            <Button onClick={() => openNewPoDialog()} className="h-10 rounded-xl">
+              <Plus className="mr-2 h-4 w-4" />
+              New purchase order
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto rounded-2xl border border-border/70">

@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { BellRing, Check, Crown, Edit, Eye, MapPin, Phone, Plus, Search, Trash2, Wrench } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -268,6 +269,21 @@ export default function CustomersPage() {
     })
   }, [customerRows, query, supportFilter, tierFilter, reminderOnly])
 
+  const exportHeaders = ['Customer', 'Phone', 'Location', 'Type', 'Purchase Total', 'Due', 'Support Status']
+  const exportRows = useMemo(
+    () =>
+      filteredRows.map(({ customer, purchaseTotal, dueTotal }) => [
+        customer.name,
+        customer.phone,
+        customer.location ?? '',
+        customer.customerType ?? '',
+        purchaseTotal,
+        dueTotal,
+        customer.supportStatus,
+      ]),
+    [filteredRows]
+  )
+
   const metrics = useMemo(() => {
     return {
       totalCustomers: customers.length,
@@ -455,6 +471,7 @@ export default function CustomersPage() {
                 <Plus className="mr-2 h-4 w-4" />
                 Add customer
               </Button>
+              <ExportMenu filenameBase="customers" title="Customers" headers={exportHeaders} rows={exportRows} />
             </div>
           </CardHeader>
           <CardContent>

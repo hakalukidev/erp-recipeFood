@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
+import { ExportMenu } from './ExportMenu'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { QuickCreateSupplierDialog } from './quick-create/QuickCreateSupplierDialog'
 import { QuickCreateWarehouseDialog } from './quick-create/QuickCreateWarehouseDialog'
@@ -441,6 +442,21 @@ export function StockOverviewScreen() {
 
     return result
   }, [data?.suppliers, data?.warehouses, deferredSearch, products, selectedWarehouseFilter, selectedSupplierFilter])
+
+  const productExportHeaders = ['Product', 'SKU', 'Warehouse', 'Stock', 'Cost', 'Sell Price', 'Supplier']
+  const productExportRows = useMemo(
+    () =>
+      filteredProducts.map((product) => [
+        product.name,
+        product.sku,
+        data?.warehouses[product.warehouseId]?.name ?? '',
+        product.stockQty,
+        product.purchasePrice,
+        product.sellingPrice,
+        data?.suppliers[product.supplierId]?.name ?? '',
+      ]),
+    [data?.suppliers, data?.warehouses, filteredProducts]
+  )
 
   const lowStockProducts = useMemo(() => products.filter((product) => product.stockQty <= product.minStock), [products])
   const totalInventoryValue = useMemo(() => products.reduce((sum, product) => sum + product.purchasePrice * product.stockQty, 0), [products])
@@ -1000,6 +1016,9 @@ export function StockOverviewScreen() {
               ) : <div />}
 
               {activeInventoryView === 'warehouses' && canCreateInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={openCreateWarehouseDialog}>Add warehouse</Button> : null}
+              {activeInventoryView === 'products' ? (
+                <ExportMenu filenameBase="products" title="Products" headers={productExportHeaders} rows={productExportRows} />
+              ) : null}
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-border/70">

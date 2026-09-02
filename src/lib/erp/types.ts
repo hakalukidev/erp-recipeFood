@@ -1571,6 +1571,14 @@ export type SettingsInput = {
   restockOnReturn: boolean
 }
 
+// ---- Data Migration (Section 81) ----------------------------------------
+export type ImportRowError = { row: number; message: string }
+export type ImportResult = { imported: number; errors: ImportRowError[] }
+export type OpeningStockRow = { sku: string; quantity: number; warehouseId?: string }
+// `match` is a customer/supplier code or phone number — whichever the sheet
+// gives; importOpeningReceivable/importOpeningPayable try both.
+export type OpeningBalanceRow = { match: string; amount: number }
+
 export type UserInput = {
   name: string
   loginId: string

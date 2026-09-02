@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Check, Edit, MapPin, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { ExportMenu } from '@/components/admin/ExportMenu'
 import { PurchaseManagementSection } from '@/components/admin/PurchaseManagementSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -224,6 +225,21 @@ export default function SuppliersPage() {
     })
   }, [query, supplierRows, typeFilter])
 
+  const exportHeaders = ['Supplier', 'Company', 'Phone', 'Country', 'Type', 'Purchase Total', 'Landed Cost']
+  const exportRows = useMemo(
+    () =>
+      filteredRows.map(({ supplier, purchaseTotal, landedCost }) => [
+        supplier.name,
+        supplier.company,
+        supplier.phone,
+        supplier.country,
+        supplier.supplierType,
+        purchaseTotal,
+        landedCost,
+      ]),
+    [filteredRows]
+  )
+
   const metrics = useMemo(() => {
     return {
       suppliers: suppliers.length,
@@ -387,6 +403,7 @@ export default function SuppliersPage() {
                 <Plus className="mr-2 h-4 w-4" />
                 Add supplier
               </Button>
+              <ExportMenu filenameBase="suppliers" title="Suppliers" headers={exportHeaders} rows={exportRows} />
             </div>
           </CardHeader>
           <CardContent>

@@ -2,6 +2,7 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
@@ -24,14 +25,17 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Route,
+  Search,
   Settings as SettingsIcon,
   ShieldCheck,
   ShoppingCart,
   Store,
   TrendingUp,
   Truck,
+  UploadCloud,
   Users,
   Wallet,
+  X,
 } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -50,10 +54,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { Input } from '@/components/ui/input'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { useERP } from '@/lib/erp/provider'
 import { cn } from '@/lib/utils'
-import { formatDateTime } from '@/lib/erp/utils'
+import { formatDateTime, toArray } from '@/lib/erp/utils'
 
 type NavigationItem = {
   label: string
@@ -222,6 +227,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Login/logout, create/edit/delete, approval, and accounting adjustment trail',
         href: '/admin/audit-log',
         icon: History,
+        permission: 'users:view',
+      },
+      {
+        label: 'Data Migration',
+        description: 'Import product, customer, supplier, opening balances, and employees from Excel/CSV',
+        href: '/admin/data-migration',
+        icon: UploadCloud,
         permission: 'users:view',
       },
       {
@@ -481,6 +493,192 @@ function NotificationBell() {
   )
 }
 
+// ---- Global Search (Section 83) ------------------------------------------
+// One search box, searched across the identifiers a day-to-day user is
+// actually likely to type into it — bill/invoice number, customer, product,
+// batch, PO/GRN number, bank payment, and collection receipt — each result
+// jumping to the workspace page that record lives on (there's no single
+// "record detail" route yet, so this gets the user to the right list rather
+// than a specific row).
+type SearchResult = {
+  id: string
+  category: string
+  title: string
+  subtitle: string
+  href: string
+}
+
+function useGlobalSearchResults(query: string): SearchResult[] {
+  const { data } = useERP()
+
+  return useMemo(() => {
+    const term = query.trim().toLowerCase()
+    if (term.length < 2 || !data) return []
+
+    const results: SearchResult[] = []
+    const limit = 6
+
+    const orders = toArray(data.orders).filter(
+      (order) => order.billNumber.toLowerCase().includes(term) || order.customerName.toLowerCase().includes(term)
+    )
+    orders.slice(0, limit).forEach((order) =>
+      results.push({ id: order.id, category: 'Invoice', title: order.billNumber, subtitle: order.customerName, href: '/admin/sales' })
+    )
+
+    const customers = toArray(data.customers).filter(
+      (customer) =>
+        customer.name.toLowerCase().includes(term) ||
+        customer.phone.toLowerCase().includes(term) ||
+        (customer.company ?? '').toLowerCase().includes(term)
+    )
+    customers.slice(0, limit).forEach((customer) =>
+      results.push({ id: customer.id, category: 'Customer', title: customer.name, subtitle: customer.phone, href: '/admin/customers' })
+    )
+
+    const products = toArray(data.products).filter(
+      (product) => product.name.toLowerCase().includes(term) || product.sku.toLowerCase().includes(term)
+    )
+    products.slice(0, limit).forEach((product) =>
+      results.push({ id: product.id, category: 'Product', title: product.name, subtitle: product.sku, href: '/admin/stock/overview' })
+    )
+
+    const batches = toArray(data.batches).filter(
+      (batch) => batch.batchNumber.toLowerCase().includes(term) || batch.productName.toLowerCase().includes(term)
+    )
+    batches.slice(0, limit).forEach((batch) =>
+      results.push({ id: batch.id, category: 'Batch', title: batch.batchNumber, subtitle: batch.productName, href: '/admin/stock/overview' })
+    )
+
+    const purchaseOrders = toArray(data.purchaseOrders).filter(
+      (po) =>
+        po.poNumber.toLowerCase().includes(term) ||
+        po.supplierName.toLowerCase().includes(term) ||
+        (po.grnNumber ?? '').toLowerCase().includes(term)
+    )
+    purchaseOrders.slice(0, limit).forEach((po) => {
+      const matchedGrn = po.grnNumber && po.grnNumber.toLowerCase().includes(term)
+      results.push({
+        id: po.id,
+        category: matchedGrn ? 'GRN' : 'PO',
+        title: matchedGrn ? po.grnNumber : po.poNumber,
+        subtitle: po.supplierName,
+        href: '/admin/suppliers',
+      })
+    })
+
+    const payments = toArray(data.bankTransactions).filter(
+      (transaction) =>
+        (transaction.payee ?? '').toLowerCase().includes(term) ||
+        (transaction.chequeNumber ?? '').toLowerCase().includes(term) ||
+        (transaction.note ?? '').toLowerCase().includes(term)
+    )
+    payments.slice(0, limit).forEach((transaction) =>
+      results.push({
+        id: transaction.id,
+        category: 'Payment',
+        title: transaction.payee || transaction.chequeNumber || transaction.type.replace('_', ' '),
+        subtitle: transaction.bankLabel,
+        href: '/admin/accounting',
+      })
+    )
+
+    const receipts = toArray(data.collections).filter(
+      (collection) => collection.receiptNumber.toLowerCase().includes(term) || collection.customerName.toLowerCase().includes(term)
+    )
+    receipts.slice(0, limit).forEach((collection) =>
+      results.push({ id: collection.id, category: 'Receipt', title: collection.receiptNumber, subtitle: collection.customerName, href: '/admin/sales' })
+    )
+
+    return results
+  }, [data, query])
+}
+
+function GlobalSearch() {
+  const router = useRouter()
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const results = useGlobalSearchResults(query)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const grouped = useMemo(() => {
+    const groups = new Map<string, SearchResult[]>()
+    results.forEach((result) => {
+      const bucket = groups.get(result.category) ?? []
+      bucket.push(result)
+      groups.set(result.category, bucket)
+    })
+    return Array.from(groups.entries())
+  }, [results])
+
+  function goTo(result: SearchResult) {
+    setOpen(false)
+    setQuery('')
+    router.push(result.href)
+  }
+
+  return (
+    <div ref={containerRef} className="relative hidden w-full max-w-xs sm:block">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search invoice, customer, product, batch, PO, GRN…"
+        className="rounded-full pl-9 pr-8"
+      />
+      {query ? (
+        <button
+          type="button"
+          onClick={() => setQuery('')}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+
+      {open && query.trim().length >= 2 ? (
+        <div className="absolute left-0 top-full z-40 mt-2 max-h-96 w-full min-w-[22rem] overflow-y-auto rounded-2xl border border-border/70 bg-popover p-2 shadow-xl">
+          {grouped.length === 0 ? (
+            <p className="px-3 py-4 text-center text-sm text-muted-foreground">No matches for &ldquo;{query}&rdquo;.</p>
+          ) : (
+            grouped.map(([category, items]) => (
+              <div key={category} className="mb-2 last:mb-0">
+                <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  {category}
+                </p>
+                {items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => goTo(item)}
+                    className="flex w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2 text-left text-sm hover:bg-accent"
+                  >
+                    <span className="font-medium text-foreground">{item.title}</span>
+                    <span className="text-xs text-muted-foreground">{item.subtitle}</span>
+                  </button>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function AdminShell({ active, children }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => {
@@ -570,7 +768,9 @@ export function AdminShell({ active, children }: AdminShellProps) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-1 items-center justify-end gap-3">
+                  <GlobalSearch />
+
                   <NotificationBell />
 
                   <ThemeToggle className="hidden sm:inline-flex" />

@@ -3,6 +3,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react'
 
+import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -46,6 +47,19 @@ export function UserManagementPanel() {
 
   const roles = useMemo(() => Object.values(data?.roles ?? {}), [data?.roles])
   const users = useMemo(() => Object.values(data?.users ?? {}), [data?.users])
+  const userExportHeaders = ['Name', 'Login ID', 'Phone', 'Title', 'Role', 'Status']
+  const userExportRows = useMemo(
+    () =>
+      users.map((user) => [
+        user.name,
+        user.loginId,
+        user.phone,
+        user.title,
+        data?.roles[user.roleId]?.name ?? user.roleId,
+        user.status,
+      ]),
+    [data?.roles, users]
+  )
   const loginHistory = useMemo(
     () =>
       Object.values(data?.loginHistory ?? {})
@@ -181,7 +195,9 @@ export function UserManagementPanel() {
             <CardDescription>Login ID and role map for the team already stored in Firebase.</CardDescription>
           </div>
 
-          {canCreate ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportMenu filenameBase="users" title="Users" headers={userExportHeaders} rows={userExportRows} />
+            {canCreate ? (
             <Dialog open={open} onOpenChange={handleOpenChange}>
               <DialogTrigger asChild>
                 <Button className="rounded-xl" onClick={handleAddClick}>
@@ -327,7 +343,8 @@ export function UserManagementPanel() {
                 </form>
               </DialogContent>
             </Dialog>
-          ) : null}
+            ) : null}
+          </div>
         </CardHeader>
         <CardContent>
           {message ? <p className="mb-4 text-sm text-emerald-600 dark:text-emerald-400">{message}</p> : null}

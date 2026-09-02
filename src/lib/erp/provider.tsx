@@ -16,6 +16,7 @@ import {
 } from 'firebase/auth'
 import { get, onValue, ref, set, update } from 'firebase/database'
 import toast from 'react-hot-toast'
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 
 import { createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
 import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
@@ -47,6 +48,8 @@ import type {
   ExpenseApprovalStatus,
   ExpenseInput,
   ExpenseRecord,
+  ImportResult,
+  ImportRowError,
   InvestorInput,
   JournalEntryInput,
   JournalEntryLine,
@@ -57,6 +60,8 @@ import type {
   OrderInput,
   OrderItem,
   OrderItemBatchAllocation,
+  OpeningBalanceRow,
+  OpeningStockRow,
   OrderRecord,
   ProductInput,
   ProductRecord,
@@ -233,6 +238,16 @@ type ERPContextValue = {
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
+  // Section 81 (Data Migration)
+  importProducts: (rows: ProductInput[]) => Promise<ImportResult>
+  importCustomers: (rows: CustomerInput[]) => Promise<ImportResult>
+  importSuppliers: (rows: SupplierInput[]) => Promise<ImportResult>
+  importOpeningStock: (rows: OpeningStockRow[]) => Promise<ImportResult>
+  importOpeningReceivable: (rows: OpeningBalanceRow[]) => Promise<ImportResult>
+  importOpeningPayable: (rows: OpeningBalanceRow[]) => Promise<ImportResult>
+  importOpeningCash: (amount: number) => Promise<void>
+  importOpeningBank: (rows: BankAccountInput[]) => Promise<ImportResult>
+  importEmployees: (rows: UserInput[]) => Promise<ImportResult>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -305,6 +320,44 @@ const ERP_TOP_LEVEL_KEYS = [
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
+
+// ---- TanStack Query cache bridge -----------------------------------------
+// Every top-level ERP collection is realtime-pushed by Firebase (the
+// onValue listeners in ERPProvider below), not fetched on demand — so
+// instead of a queryFn, the listeners themselves write each update straight
+// into the React Query cache via queryClient.setQueryData. That gives the
+// existing useERP() consumers zero changes while still making the data
+// available under these keys to React Query DevTools and to any future
+// component that wants it via useErpCollection/useErpSnapshot below instead
+// of the context.
+export const erpQueryKeys = {
+  // The full normalized ERPData snapshot, updated once per commit() (i.e.
+  // once per batch of Firebase pushes) — the same object useERP().data
+  // returns.
+  snapshot: ['erp', 'snapshot'] as const,
+  // One entry per top-level collection, updated as soon as its own
+  // listener fires (finer-grained than `snapshot`, and available slightly
+  // sooner since it doesn't wait for every other collection to load).
+  collection: (key: (typeof ERP_TOP_LEVEL_KEYS)[number]) => ['erp', 'collection', key] as const,
+}
+
+// Reads a single collection straight from the cache — no queryFn, since
+// nothing here is ever fetched; it's only ever written by ERPProvider's
+// Firebase listeners via setQueryData. `enabled: false` stops React Query
+// from complaining about the missing fetcher while still returning
+// whatever is already in the cache (and updating live as setQueryData
+// writes land, the same as any other useQuery subscriber).
+export function useErpCollection<K extends (typeof ERP_TOP_LEVEL_KEYS)[number]>(key: K): UseQueryResult<ERPData[K]> {
+  return useQuery({
+    queryKey: erpQueryKeys.collection(key),
+    queryFn: skipQueryFn,
+    enabled: false,
+  })
+}
+
+function skipQueryFn(): never {
+  throw new Error('erp query cache entries are only ever written via setQueryData, never fetched directly.')
+}
 
 // Section 66 (Security — IP/Device Log): a client can't read its own public
 // IP without asking someone outside the LAN, so this is a best-effort call
@@ -1150,6 +1203,10 @@ function getInitialCurrentUserId() {
 }
 
 export function ERPProvider({ children }: { children: ReactNode }) {
+  // Bridge target for the Firebase listeners below — see the "TanStack
+  // Query cache bridge" comment above erpQueryKeys. Requires ERPProvider to
+  // render under the app's QueryProvider (see app/layout.tsx).
+  const queryClient = useQueryClient()
   const [data, setData] = useState<ERPData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -1184,6 +1241,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!firebaseUser) {
       setData(null)
       setLoading(false)
+      // Signed out (or never signed in) — drop every bridged 'erp' entry so
+      // a shared/public browser never keeps the previous session's data
+      // sitting in the query cache (gcTime is Infinity, so nothing would
+      // otherwise evict it).
+      queryClient.removeQueries({ queryKey: ['erp'] })
       return
     }
 
@@ -1217,6 +1279,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (cancelled) return
       const next = normalizeERPData(raw as ERPData)
       setData(next)
+      queryClient.setQueryData(erpQueryKeys.snapshot, next)
       if (loadedKeys.size >= ERP_TOP_LEVEL_KEYS.length) {
         setLoading(false)
         // A single write (e.g. createOrder) touches several top-level keys
@@ -1236,11 +1299,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         (snapshot) => {
           raw[key] = snapshot.val()
           loadedKeys.add(key)
+          // Per-collection cache entry — lands as soon as this one
+          // listener fires, ahead of the merged `snapshot` above which
+          // waits for normalizeERPData's cross-collection defaults/fixups.
+          queryClient.setQueryData(erpQueryKeys.collection(key), snapshot.val())
           commit()
         },
         () => {
           raw[key] = null
           loadedKeys.add(key)
+          queryClient.setQueryData(erpQueryKeys.collection(key), null)
           commit()
         }
       )
@@ -1461,6 +1529,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     persistCurrentUserId(null)
     persistSessionExpiresAt(null)
     void clearCachedERPData()
+    queryClient.removeQueries({ queryKey: ['erp'] })
     if (auth) {
       void signOut(auth)
     }
@@ -6259,6 +6328,417 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
   }
 
+  // ---- Data Migration (Section 81) ---------------------------------------
+  // Bulk counterparts of saveProduct/saveCustomer/saveSupplier/etc. for the
+  // Data Migration screen's Excel/CSV upload. A migration sheet can be
+  // hundreds of rows, so each of these stages every row into ONE combined
+  // multi-path `update()` (instead of one write — and one notification —
+  // per row like the single-record save functions) and posts a single
+  // summary activity-log entry. A bad row is collected as an error and
+  // skipped rather than aborting the whole sheet.
+  async function importProducts(rows: ProductInput[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing products.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'products:edit')) {
+      throw new Error('You do not have permission to import products.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const bySku = new Map(Object.values(data.products).map((product) => [product.sku.toUpperCase(), product]))
+    let imported = 0
+
+    rows.forEach((input, index) => {
+      try {
+        const normalized = normalizeProductInput(input)
+        if (!normalized.name) throw new Error('Product name is required.')
+        if (!normalized.sku) throw new Error('SKU is required.')
+        if (!data.warehouses[normalized.warehouseId]) throw new Error('Unknown warehouse.')
+
+        const existing = bySku.get(normalized.sku)
+        const id = existing?.id ?? createId('product')
+        const product: ProductRecord = {
+          id,
+          ...normalized,
+          status: getProductStatus(normalized.stockQty, normalized.minStock),
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        }
+        updates[`products/${id}`] = product
+
+        if (!existing) {
+          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
+        } else if (existing.warehouseId === product.warehouseId) {
+          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty - existing.stockQty)
+        } else {
+          adjustWarehouseStock(data, updates, existing, existing.warehouseId, -existing.stockQty)
+          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
+        }
+        syncPurchaseRequisitionForStock(data, product, product.stockQty, updates)
+
+        bySku.set(normalized.sku, product)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('products_imported', 'inventory', `Imported ${imported} product(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  async function importCustomers(rows: CustomerInput[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing customers.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'customers:edit')) {
+      throw new Error('You do not have permission to import customers.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const byPhone = new Map(Object.values(data.customers).map((customer) => [normalizePhoneLookup(customer.phone), customer]))
+    let imported = 0
+
+    rows.forEach((input, index) => {
+      try {
+        const existing = byPhone.get(normalizePhoneLookup(input.phone))
+        const normalized = normalizeCustomerInput({
+          ...input,
+          due: input.due ?? existing?.due,
+          isPremium: input.isPremium ?? existing?.isPremium,
+          isWholesale: input.isWholesale ?? existing?.isWholesale,
+          leadSource: input.leadSource ?? existing?.leadSource,
+          reminderCustomer: input.reminderCustomer ?? existing?.reminderCustomer,
+          customerCode: input.customerCode ?? existing?.customerCode,
+          ownerName: input.ownerName ?? existing?.ownerName,
+          district: input.district ?? existing?.district,
+          territory: input.territory ?? existing?.territory,
+          salesArea: input.salesArea ?? existing?.salesArea,
+          salesOfficerId: input.salesOfficerId ?? existing?.salesOfficerId,
+          customerType: input.customerType ?? existing?.customerType,
+          creditLimit: input.creditLimit ?? existing?.creditLimit,
+          creditDays: input.creditDays ?? existing?.creditDays,
+          openingBalance: input.openingBalance ?? existing?.openingBalance,
+          paymentTerms: input.paymentTerms ?? existing?.paymentTerms,
+          priceCategory: input.priceCategory ?? existing?.priceCategory,
+          discountCategory: input.discountCategory ?? existing?.discountCategory,
+          bankInformation: input.bankInformation ?? existing?.bankInformation,
+          status: input.status ?? existing?.status,
+        })
+        if (!normalized.name) throw new Error('Customer name is required.')
+        if (!normalized.phone) throw new Error('Phone number is required.')
+
+        const id = existing?.id ?? createId('customer')
+        const customer: CustomerRecord = {
+          id,
+          ...normalized,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        }
+        updates[`customers/${id}`] = customer
+        byPhone.set(normalizePhoneLookup(customer.phone), customer)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('customers_imported', 'customers', `Imported ${imported} customer(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  async function importSuppliers(rows: SupplierInput[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing suppliers.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers:edit')) {
+      throw new Error('You do not have permission to import suppliers.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const byPhone = new Map(Object.values(data.suppliers).map((supplier) => [normalizePhoneLookup(supplier.phone), supplier]))
+    let imported = 0
+
+    rows.forEach((input, index) => {
+      try {
+        const normalized = normalizeSupplierInput(input)
+        if (!normalized.name) throw new Error('Supplier name is required.')
+        if (!normalized.phone) throw new Error('Phone number is required.')
+
+        const existing = byPhone.get(normalizePhoneLookup(normalized.phone))
+        const id = existing?.id ?? createId('supplier')
+        const supplier: SupplierRecord = {
+          id,
+          ...normalized,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        }
+        updates[`suppliers/${id}`] = supplier
+        byPhone.set(normalizePhoneLookup(supplier.phone), supplier)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('suppliers_imported', 'suppliers', `Imported ${imported} supplier(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  // Sets stockQty (and the matching warehouseStocks row) directly to the
+  // sheet's quantity for an already-migrated product — matched by SKU,
+  // since that's the one identifier a legacy Excel/khata sheet reliably has.
+  async function importOpeningStock(rows: OpeningStockRow[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing opening stock.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'products:edit')) {
+      throw new Error('You do not have permission to import opening stock.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const bySku = new Map(Object.values(data.products).map((product) => [product.sku.toUpperCase(), product]))
+    let imported = 0
+
+    rows.forEach((row, index) => {
+      try {
+        const sku = row.sku.trim().toUpperCase()
+        if (!sku) throw new Error('SKU is required.')
+        const product = bySku.get(sku)
+        if (!product) throw new Error(`No product found for SKU "${row.sku}".`)
+        if (!Number.isFinite(row.quantity) || row.quantity < 0) throw new Error('Opening quantity must be a non-negative number.')
+
+        const warehouseId = row.warehouseId || product.warehouseId
+        if (!data.warehouses[warehouseId]) throw new Error('Unknown warehouse.')
+
+        const nextProduct: ProductRecord = {
+          ...product,
+          stockQty: row.quantity,
+          status: getProductStatus(row.quantity, product.minStock),
+          updatedAt: now,
+        }
+        updates[`products/${product.id}`] = nextProduct
+
+        if (warehouseId === product.warehouseId) {
+          adjustWarehouseStock(data, updates, product, warehouseId, row.quantity - product.stockQty)
+        } else {
+          adjustWarehouseStock(data, updates, product, product.warehouseId, -product.stockQty)
+          adjustWarehouseStock(data, updates, nextProduct, warehouseId, row.quantity)
+        }
+        syncPurchaseRequisitionForStock(data, nextProduct, row.quantity, updates)
+
+        bySku.set(sku, nextProduct)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('opening_stock_imported', 'inventory', `Imported opening stock for ${imported} product(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  // Opening Receivable/Payable both set the matching master record's
+  // `openingBalance` — already the field the Accounting page's
+  // Receivable/Payable running balance starts from (see the accounting
+  // page's receivable/payable ledger builders), so nothing else needs to
+  // change for these to show up correctly.
+  async function importOpeningReceivable(rows: OpeningBalanceRow[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing opening receivables.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'customers:edit')) {
+      throw new Error('You do not have permission to import opening receivables.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const customers = Object.values(data.customers)
+    let imported = 0
+
+    rows.forEach((row, index) => {
+      try {
+        const key = row.match.trim()
+        if (!key) throw new Error('Customer code or phone is required.')
+        if (!Number.isFinite(row.amount) || row.amount < 0) throw new Error('Amount must be a non-negative number.')
+
+        const customer = customers.find(
+          (candidate) =>
+            (candidate.customerCode && candidate.customerCode.toLowerCase() === key.toLowerCase()) ||
+            normalizePhoneLookup(candidate.phone) === normalizePhoneLookup(key)
+        )
+        if (!customer) throw new Error(`No customer found for "${row.match}".`)
+
+        updates[`customers/${customer.id}/openingBalance`] = row.amount
+        updates[`customers/${customer.id}/updatedAt`] = now
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('opening_receivable_imported', 'customers', `Imported opening receivable for ${imported} customer(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  async function importOpeningPayable(rows: OpeningBalanceRow[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing opening payables.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers:edit')) {
+      throw new Error('You do not have permission to import opening payables.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = {}
+    const errors: ImportRowError[] = []
+    const now = new Date().toISOString()
+    const suppliers = Object.values(data.suppliers)
+    let imported = 0
+
+    rows.forEach((row, index) => {
+      try {
+        const key = row.match.trim()
+        if (!key) throw new Error('Supplier code or phone is required.')
+        if (!Number.isFinite(row.amount) || row.amount < 0) throw new Error('Amount must be a non-negative number.')
+
+        const supplier = suppliers.find(
+          (candidate) =>
+            (candidate.supplierCode && candidate.supplierCode.toLowerCase() === key.toLowerCase()) ||
+            normalizePhoneLookup(candidate.phone) === normalizePhoneLookup(key)
+        )
+        if (!supplier) throw new Error(`No supplier found for "${row.match}".`)
+
+        updates[`suppliers/${supplier.id}/openingBalance`] = row.amount
+        updates[`suppliers/${supplier.id}/updatedAt`] = now
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    })
+
+    if (imported > 0) {
+      await update(ref(db, 'erp'), updates)
+      await writeActivity('opening_payable_imported', 'suppliers', `Imported opening payable for ${imported} supplier(s) via Data Migration.`)
+    }
+
+    return { imported, errors }
+  }
+
+  // Opening Cash is a single figure — the Cash account's openingBalance,
+  // same field the Accounting page's Cash-in-Hand row and Trial Balance
+  // already read (see STANDARD_CHART_OF_ACCOUNTS' code '1001').
+  async function importOpeningCash(amount: number) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before setting opening cash.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('You do not have permission to set opening cash.')
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error('Amount must be a non-negative number.')
+    }
+
+    const cashAccount = Object.values(data.chartOfAccounts).find((account) => account.ledgerAccount === 'cash')
+    if (!cashAccount) {
+      throw new Error('Load the standard chart of accounts first (Accounting Module → Chart of Accounts).')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`chartOfAccounts/${cashAccount.id}/openingBalance`]: amount,
+      [`chartOfAccounts/${cashAccount.id}/updatedAt`]: new Date().toISOString(),
+    })
+    await writeActivity('opening_cash_imported', 'finance', `Set opening cash balance via Data Migration.`)
+  }
+
+  // Bank accounts are usually only a handful of rows, so this simply loops
+  // saveBankAccount (matched/updated by account number) rather than
+  // duplicating its chart-of-accounts bookkeeping here.
+  async function importOpeningBank(rows: BankAccountInput[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing opening bank balances.')
+    }
+
+    const errors: ImportRowError[] = []
+    let imported = 0
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const input = rows[index]
+      try {
+        const existing = Object.values(data.bankAccounts).find(
+          (account) => account.accountNumber === input.accountNumber.trim()
+        )
+        await saveBankAccount(input, existing?.id)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    }
+
+    return { imported, errors }
+  }
+
+  // Employees are provisioned as regular logins (Section 63 Users), so this
+  // loops createUser (which already creates the Firebase Auth account
+  // through a secondary app instance — see createManagedUser — so it never
+  // disturbs the admin's own signed-in session) rather than writing user
+  // records directly and leaving them unable to log in.
+  async function importEmployees(rows: UserInput[]): Promise<ImportResult> {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before importing employees.')
+    }
+
+    const errors: ImportRowError[] = []
+    let imported = 0
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const input = rows[index]
+      try {
+        await createUser(input)
+        imported += 1
+      } catch (reason) {
+        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
+      }
+    }
+
+    return { imported, errors }
+  }
+
   const value = useMemo<ERPContextValue>(
     () => ({
       data,
@@ -6356,6 +6836,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updateCourierStatus,
       deleteCourier,
       saveSettings,
+      importProducts,
+      importCustomers,
+      importSuppliers,
+      importOpeningStock,
+      importOpeningReceivable,
+      importOpeningPayable,
+      importOpeningCash,
+      importOpeningBank,
+      importEmployees,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
   )
