@@ -18,7 +18,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { useERP } from '@/lib/erp/provider'
+import { isStrongPassword, useERP } from '@/lib/erp/provider'
 import type { UserRecord } from '@/lib/erp/types'
 import { formatDateTime } from '@/lib/erp/utils'
 
@@ -282,6 +282,10 @@ export function UserManagementPanel() {
                           type="password"
                           required
                         />
+                        {/* Section 66 (Security — Strong Password): same rule the provider enforces on submit. */}
+                        <p className={`text-xs ${form.password && !isStrongPassword(form.password) ? 'text-rose-500' : 'text-muted-foreground'}`}>
+                          At least 8 characters, with a letter and a number.
+                        </p>
                       </div>
                     )}
                   </div>
@@ -437,13 +441,14 @@ export function UserManagementPanel() {
                     <TableHead>User</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Device</TableHead>
+                    <TableHead>IP address</TableHead>
                     <TableHead className="text-right">When</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loginHistory.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
                         No logins recorded yet.
                       </TableCell>
                     </TableRow>
@@ -455,6 +460,7 @@ export function UserManagementPanel() {
                         <TableCell className="max-w-xs truncate text-sm text-muted-foreground" title={entry.userAgent}>
                           {entry.userAgent || 'Unknown device'}
                         </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{entry.ipAddress || '—'}</TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground">
                           {formatDateTime(entry.createdAt)}
                         </TableCell>

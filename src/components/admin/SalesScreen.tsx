@@ -252,7 +252,15 @@ export function SalesScreen() {
 
     try {
       if (editingOrderId) {
-        await updateOrder(editingOrderId, orderInput)
+        // Section 64 (Approval System): editing an already-created invoice
+        // is a limited action — a reason is required and goes to the Audit
+        // Trail alongside the before/after values.
+        const reason = window.prompt('Reason for editing this invoice (required for the audit trail):')
+        if (!reason || !reason.trim()) {
+          setFeedback('Edit cancelled — a reason is required to edit an invoice.')
+          return
+        }
+        await updateOrder(editingOrderId, orderInput, reason.trim())
         setFeedback('Sales order updated and inventory adjusted in realtime.')
       } else {
         await createOrder(orderInput)
@@ -306,13 +314,18 @@ export function SalesScreen() {
   }
 
   async function handleCancelOrder(order: OrderRecord) {
-    if (!window.confirm(`Cancel order ${order.billNumber}? Stock will be returned to inventory and the customer's due will be adjusted.`)) {
+    // Section 64 (Approval System): cancelling is a limited action — the
+    // prompt doubles as confirmation and captures the reason for the audit trail.
+    const reason = window.prompt(
+      `Cancel order ${order.billNumber}? Stock will be returned to inventory and the customer's due will be adjusted.\n\nReason for cancelling (required):`
+    )
+    if (!reason || !reason.trim()) {
       return
     }
 
     setFeedback(null)
     try {
-      await cancelOrder(order.id)
+      await cancelOrder(order.id, reason.trim())
       setFeedback(`Order ${order.billNumber} cancelled and stock returned to inventory.`)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to cancel order.')

@@ -1,4 +1,5 @@
 import { AdminShell } from '@/components/admin/AdminShell'
+import { RoleManagementSection } from '@/components/admin/RoleManagementSection'
 import { UserManagementPanel } from '@/components/admin/UserManagementPanel'
 
 export default function UsersPage() {
@@ -6,6 +7,7 @@ export default function UsersPage() {
     <AdminShell active="User & Role Management">
       <div className="space-y-6">
         <UserManagementPanel />
+        <RoleManagementSection />
       </div>
     </AdminShell>
   )

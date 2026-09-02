@@ -51,7 +51,7 @@ import {
 } from '@/components/ui/select'
 import { useERP } from '@/lib/erp/provider'
 import { Textarea } from '@/components/ui/textarea'
-import { buildManagingDirectorExtras } from '@/lib/erp/dashboards'
+import { buildBusinessAlerts, buildManagingDirectorExtras } from '@/lib/erp/dashboards'
 import {
   buildCategoryRevenue,
   buildDashboardSnapshot,
@@ -95,6 +95,10 @@ export function DashboardScreen() {
   // already covers, shown only to roles that can see finance data.
   const canViewExecutiveOverview = hasPermission('finance:view')
   const mdExtras = useMemo(() => buildManagingDirectorExtras(data), [data])
+  // Section 61 — Real-time Business Intelligence: Critical/Warning/Normal
+  // alerts for the Management Dashboard.
+  const businessAlerts = useMemo(() => buildBusinessAlerts(data), [data])
+  const totalAlertCount = businessAlerts.critical.length + businessAlerts.warning.length + businessAlerts.normal.length
 
   const [revenueRange, setRevenueRange] = useState<RevenueRange>('6m')
   const [investorOpen, setInvestorOpen] = useState(false)
@@ -230,6 +234,47 @@ export function DashboardScreen() {
             )
           })}
         </div>
+
+        {/* Section 61: Real-time Business Intelligence — Critical/Warning/Normal alerts, gated on finance:view like the executive overview below. */}
+        {canViewExecutiveOverview && totalAlertCount > 0 ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Real-time alerts</CardTitle>
+              <CardDescription>Business-critical conditions across stock, credit, cash, and targets, refreshed live.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-3">
+              {(
+                [
+                  { key: 'critical', label: 'Critical', items: businessAlerts.critical, tone: 'destructive' as const },
+                  { key: 'warning', label: 'Warning', items: businessAlerts.warning, tone: 'chart-3' as const },
+                  { key: 'normal', label: 'Normal', items: businessAlerts.normal, tone: 'chart-2' as const },
+                ] as const
+              ).map((group) => (
+                <div key={group.key} className="space-y-3 rounded-2xl border border-border/70 p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: `hsl(var(--${group.tone}))` }} />
+                      {group.label}
+                    </p>
+                    <Badge variant="outline" className="rounded-full">{group.items.length}</Badge>
+                  </div>
+                  <div className="space-y-2">
+                    {group.items.length ? (
+                      group.items.map((alert) => (
+                        <div key={alert.id} className="rounded-xl bg-muted/30 p-3">
+                          <p className="text-sm font-medium">{alert.title}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{alert.message}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Nothing to report.</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Section 55: Managing Director Dashboard — executive figures, gated on finance:view. */}
         {canViewExecutiveOverview ? (

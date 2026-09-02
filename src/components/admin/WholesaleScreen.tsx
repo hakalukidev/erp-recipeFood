@@ -75,11 +75,16 @@ export function WholesaleScreen() {
   )
 
   async function handleCancelOrder(order: OrderRecord) {
-    if (!window.confirm(`Cancel order ${order.billNumber}? Stock will be returned to inventory and the customer's due will be adjusted.`)) {
+    // Section 64 (Approval System): cancelling is a limited action — the
+    // prompt doubles as confirmation and captures the reason for the audit trail.
+    const reason = window.prompt(
+      `Cancel order ${order.billNumber}? Stock will be returned to inventory and the customer's due will be adjusted.\n\nReason for cancelling (required):`
+    )
+    if (!reason || !reason.trim()) {
       return
     }
 
-    await cancelOrder(order.id)
+    await cancelOrder(order.id, reason.trim())
   }
 
   return (

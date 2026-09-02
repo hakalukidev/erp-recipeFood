@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   FileText,
   Handshake,
+  History,
   LayoutDashboard,
   ListTodo,
   Lock,
@@ -27,6 +28,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Store,
+  TrendingUp,
   Truck,
   Users,
   Wallet,
@@ -190,6 +192,13 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'reports:view',
       },
       {
+        label: 'Profit Analysis',
+        description: 'Gross profit by company, product, category, customer, dealer, territory, sales officer, and invoice',
+        href: '/admin/profit-analysis',
+        icon: TrendingUp,
+        permission: 'reports:view',
+      },
+      {
         label: 'Notifications',
         description: 'Low stock, overdue payments, and system alerts',
         href: '/admin/notifications',
@@ -206,6 +215,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Employee logins and permission matrix',
         href: '/admin/users',
         icon: ShieldCheck,
+        permission: 'users:view',
+      },
+      {
+        label: 'Audit Log',
+        description: 'Login/logout, create/edit/delete, approval, and accounting adjustment trail',
+        href: '/admin/audit-log',
+        icon: History,
         permission: 'users:view',
       },
       {

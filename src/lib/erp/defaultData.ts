@@ -1,8 +1,10 @@
 import type { ERPData, PermissionDefinition } from '@/lib/erp/types'
 
-type ModuleAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export'
+export type ModuleAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export'
 
-const ACTION_LABELS: Record<ModuleAction, string> = {
+// Exported so the Role & Permission Matrix (Section 63 — RoleManagementSection.tsx)
+// renders the exact same module x action grid these ids are built from.
+export const ACTION_LABELS: Record<ModuleAction, string> = {
   view: 'View',
   create: 'Create',
   edit: 'Edit',
@@ -11,7 +13,7 @@ const ACTION_LABELS: Record<ModuleAction, string> = {
   export: 'Export',
 }
 
-const MODULE_DEFINITIONS: Array<{
+export const MODULE_DEFINITIONS: Array<{
   module: string
   label: string
   actions: ModuleAction[]
@@ -66,6 +68,17 @@ export function createDefaultERPData(): ERPData {
 
   return {
     permissions: buildPermissionDefinitions(),
+    // Section 63 (User Role & Permission): Role-based Access Control is
+    // mandatory. These are the spec's 15 example roles, each with its own
+    // View/Create/Edit/Delete/Approve/Export permission set — just a
+    // starting point; every role (this list included) can be renamed, have
+    // its permissions changed, or be replaced by a custom one from the Role
+    // & Permission Matrix (see saveRole/deleteRole in provider.tsx). The
+    // ids super_admin/md/manager/sales_officer/accounts are also used
+    // as-is elsewhere (writeNotification role targeting, LEGACY_ROLE_ID_MAP
+    // in provider.tsx) so they keep their original ids even though their
+    // display names now match the spec's wording (e.g. Manager -> General
+    // Manager).
     roles: {
       super_admin: {
         id: 'super_admin',
@@ -75,7 +88,7 @@ export function createDefaultERPData(): ERPData {
       },
       md: {
         id: 'md',
-        name: 'MD',
+        name: 'Managing Director',
         description: 'Business-wide visibility with order approval authority. No day-to-day data entry, no user management.',
         permissions: toPermissionSet([
           'dashboard:view',
@@ -88,9 +101,23 @@ export function createDefaultERPData(): ERPData {
           'users:view',
         ]),
       },
+      director: {
+        id: 'director',
+        name: 'Director',
+        description: 'Board-level visibility across operations and finance, with order approval authority.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:export',
+          'orders:view', 'orders:approve', 'orders:export',
+          'customers:view', 'customers:export',
+          'suppliers:view', 'suppliers:export',
+          'finance:view', 'finance:export',
+          'reports:view', 'reports:export',
+        ]),
+      },
       manager: {
         id: 'manager',
-        name: 'Manager',
+        name: 'General Manager',
         description: 'Runs day-to-day inventory, sales, and customer/supplier operations.',
         permissions: toPermissionSet([
           'dashboard:view',
@@ -98,6 +125,43 @@ export function createDefaultERPData(): ERPData {
           'orders:view', 'orders:create', 'orders:edit', 'orders:export',
           'customers:view', 'customers:create', 'customers:edit', 'customers:export',
           'suppliers:view', 'suppliers:create', 'suppliers:edit', 'suppliers:export',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      finance_manager: {
+        id: 'finance_manager',
+        name: 'Finance Manager',
+        description: 'Owns the books end-to-end: finance entries, order approval, and financial reporting.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'finance:view', 'finance:create', 'finance:edit', 'finance:delete', 'finance:export',
+          'orders:view', 'orders:approve', 'orders:export',
+          'customers:view',
+          'suppliers:view',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      accounts: {
+        id: 'accounts',
+        name: 'Accounts Officer',
+        description: 'Tracks revenue, dues, expenses, and financial reporting.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'finance:view', 'finance:create', 'finance:edit', 'finance:export',
+          'reports:view', 'reports:export',
+          'orders:view',
+          'customers:view',
+        ]),
+      },
+      sales_manager: {
+        id: 'sales_manager',
+        name: 'Sales Manager',
+        description: 'Owns the sales pipeline: orders, customers, and sales reporting for the whole team.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view',
+          'orders:view', 'orders:create', 'orders:edit', 'orders:delete', 'orders:approve', 'orders:export',
+          'customers:view', 'customers:create', 'customers:edit', 'customers:delete', 'customers:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -113,30 +177,84 @@ export function createDefaultERPData(): ERPData {
           'reports:view',
         ]),
       },
-      accounts: {
-        id: 'accounts',
-        name: 'Accounts',
-        description: 'Tracks revenue, dues, expenses, and financial reporting.',
+      purchase_manager: {
+        id: 'purchase_manager',
+        name: 'Purchase Manager',
+        description: 'Manages suppliers, purchase orders, and landed cost.',
         permissions: toPermissionSet([
           'dashboard:view',
-          'finance:view', 'finance:create', 'finance:edit', 'finance:export',
-          'reports:view', 'reports:export',
+          'suppliers:view', 'suppliers:create', 'suppliers:edit', 'suppliers:delete', 'suppliers:export',
+          'products:view', 'products:create', 'products:edit', 'products:export',
           'orders:view',
-          'customers:view',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      warehouse_manager: {
+        id: 'warehouse_manager',
+        name: 'Warehouse Manager',
+        description: 'Owns stock levels, transfers, and warehouse-wise inventory.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:create', 'products:edit', 'products:delete', 'products:export',
+          'orders:view',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      store_officer: {
+        id: 'store_officer',
+        name: 'Store Officer',
+        description: 'Handles day-to-day stock entry and issue at the store/warehouse.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:create', 'products:edit',
+          'orders:view',
+        ]),
+      },
+      production_manager: {
+        id: 'production_manager',
+        name: 'Production Manager',
+        description: 'Plans production, manages recipes/BOM, and tracks manufacturing cost.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:create', 'products:edit', 'products:export',
+          'suppliers:view',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      qc_officer: {
+        id: 'qc_officer',
+        name: 'QC Officer',
+        description: 'Records quality-check results on purchases and production batches.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'products:view', 'products:edit',
+          'suppliers:view',
+          'reports:view',
+        ]),
+      },
+      hr_manager: {
+        id: 'hr_manager',
+        name: 'HR Manager',
+        description: 'Manages employee logins and role assignment.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'users:view', 'users:create', 'users:edit',
+          'reports:view',
         ]),
       },
       viewer: {
         id: 'viewer',
-        name: 'Viewer',
-        description: 'Read-only workspace access.',
+        name: 'Auditor',
+        description: 'Read-only visibility across every module, with export rights for audit trails.',
         permissions: toPermissionSet([
           'dashboard:view',
-          'products:view',
-          'orders:view',
-          'customers:view',
-          'suppliers:view',
-          'finance:view',
-          'reports:view',
+          'products:view', 'products:export',
+          'orders:view', 'orders:export',
+          'customers:view', 'customers:export',
+          'suppliers:view', 'suppliers:export',
+          'finance:view', 'finance:export',
+          'reports:view', 'reports:export',
+          'users:view',
         ]),
       },
     },

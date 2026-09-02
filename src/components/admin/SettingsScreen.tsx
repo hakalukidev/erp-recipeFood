@@ -98,6 +98,20 @@ export function SettingsScreen() {
     }
   }
 
+  // Section 66 (Security — Backup): an on-demand, client-side export of the
+  // full ERP snapshot already held in memory. Automated/scheduled backups
+  // are configured at the Firebase project level, outside application code.
+  function handleDownloadBackup() {
+    if (!data) return
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${(data.settings.companyName || 'erp').replace(/\s+/g, '-').toLowerCase()}-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <AdminShell active="Settings">
       <div className="space-y-6">
@@ -228,6 +242,45 @@ export function SettingsScreen() {
             </div>
           ) : null}
         </form>
+
+        {/* Section 66 — Security. Role Permission, Session Management, Login
+            History, and Automatic Logout are already enforced app-wide (see
+            hasPermission/IDLE_TIMEOUT_MS in provider.tsx and the Audit Log /
+            User & Role Management pages). Database Encryption and HTTPS/SSL
+            are provided by the hosting platform (Firebase Realtime Database
+            encrypts data at rest and requires TLS in transit; Firebase/
+            Vercel hosting serves the app over HTTPS only) rather than
+            application code, and scheduled Backup/Disaster Recovery is
+            configured at the Firebase project level — this card's export
+            button is the on-demand counterpart an admin can trigger anytime.
+            Two-Factor Authentication is intentionally not built yet. */}
+        {canEdit ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Security</CardTitle>
+              <CardDescription>What&apos;s already enforced, and an on-demand backup of everything currently in the ERP.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <ul className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                <li>✓ Role-based permissions (View/Create/Edit/Delete/Approve/Export per role)</li>
+                <li>✓ Strong password required for new logins</li>
+                <li>✓ Session timeout &amp; automatic logout after inactivity</li>
+                <li>✓ Login history with device and IP address</li>
+                <li>✓ Full audit trail of every action (see Audit Log)</li>
+                <li>✓ Data encrypted in transit (HTTPS) and at rest (Firebase)</li>
+              </ul>
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/70 p-4">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Backup</p>
+                  <p className="text-xs text-muted-foreground">Download every record currently in the ERP as one JSON file.</p>
+                </div>
+                <Button type="button" variant="outline" className="rounded-xl" onClick={handleDownloadBackup}>
+                  Download backup
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
     </AdminShell>
   )

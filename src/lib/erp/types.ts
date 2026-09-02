@@ -11,6 +11,17 @@ export type RoleRecord = {
   permissions: Record<string, true>
 }
 
+// ---- Section 63 (User Role & Permission) --------------------------------
+// A role is created/edited from the Role & Permission Matrix (User & Role
+// Management page) — `permissions` is the flat list of `module:action`
+// permission ids (see ALL_PERMISSION_IDS/toPermissionSet in defaultData.ts)
+// that get checked into the role's `{ [id]: true }` map by saveRole.
+export type RoleInput = {
+  name: string
+  description?: string
+  permissions: string[]
+}
+
 export type UserRecord = {
   id: string
   name: string
@@ -29,6 +40,10 @@ export type LoginHistoryRecord = {
   roleId: string
   roleName: string
   userAgent: string
+  // Section 66 (Security — IP/Device Log): best-effort public IP looked up
+  // client-side at login time (see login() in provider.tsx). Left blank if
+  // the lookup fails or is blocked — never blocks sign-in either way.
+  ipAddress?: string
   createdAt: string
 }
 
@@ -954,6 +969,14 @@ export type NotificationRecord = {
   roles?: string[]
 }
 
+// Section 65 (Audit Trail): every Login/Logout/Create/Edit/Delete/Approval/
+// Cancel/Stock Adjustment/Price Change/Discount Change/Accounting
+// Adjustment already funnels through writeActivity (provider.tsx) into this
+// one append-only collection — never edited or deleted once written. See
+// AuditLogScreen.tsx for the viewer. `oldValue`/`newValue`/`reason` are only
+// populated for the Section 64 Approval System flow (an edit or cancel that
+// changes an already-created record) — JSON-stringified snapshots so the
+// diff survives even after the record itself changes again later.
 export type ActivityRecord = {
   id: string
   action: string
@@ -961,6 +984,9 @@ export type ActivityRecord = {
   message: string
   userId: string
   userName: string
+  oldValue?: string
+  newValue?: string
+  reason?: string
   createdAt: string
 }
 

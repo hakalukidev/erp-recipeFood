@@ -389,9 +389,16 @@ export default function AccountingPage() {
   }
 
   async function handleReverseJournal(journalEntryId: string) {
+    // Section 64 (Approval System): an Accounting Adjustment is a limited,
+    // audited action — capture why before posting the reversal.
+    const reversalReason = window.prompt('Reason for reversing this journal entry (required for the audit trail):')
+    if (!reversalReason || !reversalReason.trim()) {
+      return
+    }
+
     setFeedback(null)
     try {
-      await reverseJournalEntry(journalEntryId)
+      await reverseJournalEntry(journalEntryId, reversalReason.trim())
       setFeedback('Journal entry reversed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to reverse journal entry.')

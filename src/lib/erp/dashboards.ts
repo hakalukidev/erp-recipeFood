@@ -14,8 +14,10 @@
 import type {
   AccountType,
   BatchRecord,
+  BudgetRecord,
   ChartOfAccountRecord,
   ERPData,
+  ExpenseRecord,
   LedgerEntryRecord,
   OrderRecord,
   ProductRecord,
@@ -524,4 +526,256 @@ export function buildSalesDashboard(data: ERPData | null) {
     categoryWiseSales,
     targetVsAchievement,
   }
+}
+
+// ---- Section 60: Profit Analysis -----------------------------------------
+// Product Sales - COGS = Gross Profit, sliced by every dimension the spec
+// lists. Both figures are derived the same way the Automatic Accounting
+// Engine posts them for a sale (see buildInvoiceLedgerEntries in
+// provider.tsx): per line, Sales = unitPrice x quantity net of the order's
+// discount/promotional-discount (apportioned across lines by revenue share
+// so the pieces still add up to the order total), and COGS = purchasePrice
+// x quantity — purchasePrice is snapshotted onto the order line at sale
+// time, so this stays accurate even if a product's cost changes later.
+export type ProfitAnalysisRow = {
+  key: string
+  label: string
+  sales: number
+  cogs: number
+  grossProfit: number
+  marginPercent: number
+  orders: number
+}
+
+function toProfitRow(key: string, label: string, sales: number, cogs: number, orders: number): ProfitAnalysisRow {
+  const grossProfit = sales - cogs
+  return { key, label, sales, cogs, grossProfit, marginPercent: sales > 0 ? (grossProfit / sales) * 100 : 0, orders }
+}
+
+function orderNetSales(order: OrderRecord) {
+  const subtotal = order.subtotal ?? order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+  return subtotal - (order.discount ?? 0) - (order.promotionalDiscount ?? 0)
+}
+
+function orderCogs(order: OrderRecord) {
+  return order.items.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)
+}
+
+// One row per distinct key from `keyOf` (Company/Customer/Dealer/
+// Territory/Sales Officer-wise, and Invoice-wise since a bill number is
+// already unique per order).
+function aggregateOrderProfit(
+  orders: OrderRecord[],
+  keyOf: (order: OrderRecord) => string | undefined,
+  fallback = 'Unassigned'
+): ProfitAnalysisRow[] {
+  const rows = new Map<string, { sales: number; cogs: number; orders: number }>()
+  orders.forEach((order) => {
+    const label = keyOf(order) || fallback
+    const row = rows.get(label) ?? { sales: 0, cogs: 0, orders: 0 }
+    row.sales += orderNetSales(order)
+    row.cogs += orderCogs(order)
+    row.orders += 1
+    rows.set(label, row)
+  })
+  return Array.from(rows.entries())
+    .map(([label, row]) => toProfitRow(label, label, row.sales, row.cogs, row.orders))
+    .sort((a, b) => b.grossProfit - a.grossProfit)
+}
+
+// Product/Category-wise needs line-item granularity — an order's discount
+// is apportioned across its lines by gross-revenue share so the per-line
+// rows still sum back to the same order-level net sales aggregateOrderProfit
+// uses.
+function aggregateItemProfit(
+  orders: OrderRecord[],
+  keyOf: (item: OrderRecord['items'][number], order: OrderRecord) => string | undefined,
+  fallback = 'Unassigned'
+): ProfitAnalysisRow[] {
+  const rows = new Map<string, { sales: number; cogs: number; orders: Set<string> }>()
+  orders.forEach((order) => {
+    const grossRevenue = order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const totalDiscount = (order.discount ?? 0) + (order.promotionalDiscount ?? 0)
+    order.items.forEach((item) => {
+      const label = keyOf(item, order) || fallback
+      const itemRevenue = item.unitPrice * item.quantity
+      const discountShare = grossRevenue > 0 ? (itemRevenue / grossRevenue) * totalDiscount : 0
+      const row = rows.get(label) ?? { sales: 0, cogs: 0, orders: new Set<string>() }
+      row.sales += itemRevenue - discountShare
+      row.cogs += item.purchasePrice * item.quantity
+      row.orders.add(order.id)
+      rows.set(label, row)
+    })
+  })
+  return Array.from(rows.entries())
+    .map(([label, row]) => toProfitRow(label, label, row.sales, row.cogs, row.orders.size))
+    .sort((a, b) => b.grossProfit - a.grossProfit)
+}
+
+export function buildProfitAnalysis(data: ERPData | null, inPeriod: (date: string) => boolean = () => true) {
+  const orders = toArray(data?.orders).filter((order) => order.status !== 'cancelled' && inPeriod(order.createdAt))
+  const customers = toArray(data?.customers)
+  const products = toArray(data?.products)
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
+  const productById = new Map(products.map((product) => [product.id, product]))
+
+  // Section 60 example: Product Sales 100,000 - COGS 70,000 = Gross Profit
+  // 30,000 — one company-wide row (this ERP runs a single company; the
+  // breakdown is ready to extend once multi-company is supported).
+  const companyName = data?.settings.companyName || 'Company'
+  const companyWise = aggregateOrderProfit(orders, () => companyName, companyName)
+
+  const productWise = aggregateItemProfit(orders, (item) => item.productName)
+  const categoryWise = aggregateItemProfit(orders, (item) => productById.get(item.productId)?.category)
+  const customerWise = aggregateOrderProfit(orders, (order) => order.customerName)
+  const dealerOrders = orders.filter((order) => customerById.get(order.customerId)?.customerType === 'dealer')
+  const dealerWise = aggregateOrderProfit(dealerOrders, (order) => order.customerName)
+  const territoryWise = aggregateOrderProfit(orders, (order) => customerById.get(order.customerId)?.territory)
+  const salesOfficerWise = aggregateOrderProfit(orders, (order) => order.salesPersonName)
+  const invoiceWise = orders
+    .map((order) => toProfitRow(order.id, order.billNumber, orderNetSales(order), orderCogs(order), 1))
+    .sort((a, b) => b.grossProfit - a.grossProfit)
+
+  return { companyWise, productWise, categoryWise, customerWise, dealerWise, territoryWise, salesOfficerWise, invoiceWise }
+}
+
+export type ProfitAnalysisDimension = keyof ReturnType<typeof buildProfitAnalysis>
+
+// ---- Section 61: Real-time Business Intelligence (Management Dashboard) --
+// Alerts grouped Critical/Warning/Normal, same buckets and examples the
+// spec lists. Re-checked live off the current snapshot every render, same
+// "no stored alert state, just re-derive it" approach as the rest of this
+// file.
+export type BusinessAlertItem = {
+  id: string
+  title: string
+  message: string
+}
+
+export type BusinessAlerts = {
+  critical: BusinessAlertItem[]
+  warning: BusinessAlertItem[]
+  normal: BusinessAlertItem[]
+}
+
+// Local mirror of getBudgetActual (provider.tsx) — same reason the
+// accounting-position math above is re-declared rather than imported: this
+// is a pure data file and provider.tsx is a client module wired to
+// Firebase/Auth.
+function budgetActual(expenses: ExpenseRecord[], budget: Pick<BudgetRecord, 'category' | 'periodType' | 'year' | 'month'>) {
+  const category = budget.category.trim().toLowerCase()
+  return expenses
+    .filter((expense) => expense.category.trim().toLowerCase() === category)
+    .filter((expense) => {
+      const expenseDate = new Date(expense.date)
+      if (Number.isNaN(expenseDate.getTime()) || expenseDate.getFullYear() !== budget.year) return false
+      return budget.periodType === 'yearly' || expenseDate.getMonth() + 1 === budget.month
+    })
+    .reduce((sum, expense) => sum + expense.amount, 0)
+}
+
+// A budget more than 20% over its planned amount counts as a "Major"
+// overrun for the Critical bucket; anything else stays informational on
+// the Accounting page's own Budget tab.
+const MAJOR_BUDGET_OVERRUN_RATIO = 1.2
+
+export function buildBusinessAlerts(data: ERPData | null): BusinessAlerts {
+  const critical: BusinessAlertItem[] = []
+  const warning: BusinessAlertItem[] = []
+  const normal: BusinessAlertItem[] = []
+
+  const products = toArray(data?.products)
+  const customers = toArray(data?.customers)
+  const orders = toArray(data?.orders)
+  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
+  const budgets = toArray(data?.budgets)
+  const inventory = buildInventoryDashboard(data)
+  const { cashBalance } = buildAccountingPosition(data)
+
+  // ---- Critical -------------------------------------------------------
+  if (inventory.expiredBatches.length) {
+    const qty = inventory.expiredBatches.reduce((sum, batch) => sum + batch.quantity, 0)
+    critical.push({
+      id: 'expired-stock',
+      title: 'Expired Stock',
+      message: `${inventory.expiredBatches.length} batch(es), ${qty} unit(s) expired and still on hand.`,
+    })
+  }
+
+  const overLimitCustomers = customers.filter((customer) => (customer.creditLimit ?? 0) > 0 && customer.due > (customer.creditLimit ?? 0))
+  if (overLimitCustomers.length) {
+    critical.push({
+      id: 'credit-limit-exceeded',
+      title: 'Credit Limit Exceeded',
+      message: `${overLimitCustomers.length} customer(s) owe more than their approved credit limit.`,
+    })
+  }
+
+  const negativeStockProducts = products.filter((product) => product.stockQty < 0)
+  if (negativeStockProducts.length) {
+    critical.push({
+      id: 'negative-stock',
+      title: 'Negative Stock',
+      message: `${negativeStockProducts.length} product(s) show negative stock — reconcile immediately.`,
+    })
+  }
+
+  if (cashBalance < 0) {
+    critical.push({ id: 'cash-shortage', title: 'Cash Shortage', message: 'Cash balance has gone negative.' })
+  }
+
+  const majorOverrunBudgets = budgets.filter((budget) => budget.budgetAmount > 0 && budgetActual(expenses, budget) >= budget.budgetAmount * MAJOR_BUDGET_OVERRUN_RATIO)
+  if (majorOverrunBudgets.length) {
+    critical.push({
+      id: 'major-budget-overrun',
+      title: 'Major Budget Overrun',
+      message: `${majorOverrunBudgets.length} budget category(ies) are 20%+ over their planned amount.`,
+    })
+  }
+
+  // ---- Warning ----------------------------------------------------------
+  if (inventory.lowStockCount) {
+    warning.push({ id: 'low-stock', title: 'Low Stock', message: `${inventory.lowStockCount} product(s) at or below their reorder level.` })
+  }
+  if (inventory.nearExpiryBatches.length) {
+    warning.push({ id: 'near-expiry', title: 'Near Expiry', message: `${inventory.nearExpiryBatches.length} batch(es) expiring within 30 days.` })
+  }
+  const overdueOrders = orders.filter((order) => order.due > 0 && new Date(order.paymentDueDate).getTime() < Date.now())
+  if (overdueOrders.length) {
+    warning.push({ id: 'overdue-customer', title: 'Overdue Customer', message: `${overdueOrders.length} invoice(s) past their due date with an outstanding balance.` })
+  }
+  const varianceOrders = toArray(data?.productionOrders).filter((order) => order.varianceAlert)
+  if (varianceOrders.length) {
+    warning.push({ id: 'production-variance', title: 'Production Variance', message: `${varianceOrders.length} production order(s) exceeded standard loss.` })
+  }
+
+  // ---- Normal -------------------------------------------------------------
+  const now = new Date()
+  const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const activeOrders = orders.filter((order) => order.status !== 'cancelled')
+  const monthOrders = activeOrders.filter((order) => atOrAfter(monthStart(now))(order.createdAt))
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
+  const achievedTargets = toArray(data?.salesTargets).filter(
+    (target) => target.period === periodKey && target.targetAmount > 0 && achievedAmountFor(target, monthOrders, customerById) >= target.targetAmount
+  )
+  if (achievedTargets.length) {
+    normal.push({ id: 'target-achieved', title: 'Target Achieved', message: `${achievedTargets.length} sales target(s) achieved this month.` })
+  }
+
+  const availableProducts = products.filter((product) => product.stockQty > product.minStock)
+  if (availableProducts.length) {
+    normal.push({ id: 'stock-available', title: 'Stock Available', message: `${availableProducts.length} product(s) are comfortably stocked.` })
+  }
+
+  const todayCollections = toArray(data?.collections).filter((collection) => isSameCalendarDay(collection.collectionDate))
+  if (todayCollections.length) {
+    const amount = todayCollections.reduce((sum, collection) => sum + collection.amount, 0)
+    normal.push({
+      id: 'collection-received',
+      title: 'Collection Received',
+      message: `${todayCollections.length} collection(s) received today totaling ${amount.toLocaleString('en-BD')}.`,
+    })
+  }
+
+  return { critical, warning, normal }
 }

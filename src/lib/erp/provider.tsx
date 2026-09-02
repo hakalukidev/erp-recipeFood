@@ -17,7 +17,7 @@ import {
 import { get, onValue, ref, set, update } from 'firebase/database'
 import toast from 'react-hot-toast'
 
-import { createDefaultERPData } from '@/lib/erp/defaultData'
+import { createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
 import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
 import type {
   BankAccountInput,
@@ -76,6 +76,7 @@ import type {
   QualityCheckInput,
   QualityCheckRecord,
   QualityCheckStatus,
+  RoleInput,
   RoleRecord,
   RouteInput,
   RouteRecord,
@@ -146,6 +147,8 @@ type ERPContextValue = {
   deleteUser: (userId: string) => Promise<void>
   sendPasswordReset: (email: string) => Promise<void>
   hasPermission: (permission: string) => boolean
+  saveRole: (input: RoleInput, roleId?: string) => Promise<string>
+  deleteRole: (roleId: string) => Promise<void>
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
   saveSupplier: (input: SupplierInput, supplierId?: string) => Promise<string>
@@ -185,8 +188,12 @@ type ERPContextValue = {
   completeProduction: (productionOrderId: string, input: ProductionCompleteInput) => Promise<void>
   cancelProductionOrder: (productionOrderId: string) => Promise<void>
   createOrder: (input: OrderInput) => Promise<void>
-  updateOrder: (orderId: string, input: OrderInput) => Promise<void>
-  cancelOrder: (orderId: string) => Promise<void>
+  // Section 64 (Approval System): editing/cancelling an already-created
+  // invoice is a limited, audited action — `reason` (when given) is
+  // recorded to the Audit Trail alongside the before/after snapshot; see
+  // writeActivity.
+  updateOrder: (orderId: string, input: OrderInput, reason?: string) => Promise<void>
+  cancelOrder: (orderId: string, reason?: string) => Promise<void>
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
   updateOrderApproval: (orderId: string, approvalStatus: NonNullable<OrderRecord['approvalStatus']>) => Promise<void>
   createTask: (input: TaskInput) => Promise<void>
@@ -214,7 +221,7 @@ type ERPContextValue = {
   deleteChartOfAccount: (accountId: string) => Promise<void>
   seedStandardChartOfAccounts: () => Promise<void>
   createJournalEntry: (input: JournalEntryInput) => Promise<string>
-  reverseJournalEntry: (journalEntryId: string) => Promise<void>
+  reverseJournalEntry: (journalEntryId: string, reason?: string) => Promise<void>
   saveBankAccount: (input: BankAccountInput, bankAccountId?: string) => Promise<string>
   deleteBankAccount: (bankAccountId: string) => Promise<void>
   recordBankTransaction: (input: BankTransactionInput) => Promise<string>
@@ -298,6 +305,34 @@ const ERP_TOP_LEVEL_KEYS = [
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
+
+// Section 66 (Security — IP/Device Log): a client can't read its own public
+// IP without asking someone outside the LAN, so this is a best-effort call
+// to a public lookup service with a short timeout — any failure (offline,
+// blocked, slow) just resolves to '' rather than delaying or failing login.
+async function lookupClientIp(): Promise<string> {
+  if (typeof fetch !== 'function') {
+    return ''
+  }
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 2500)
+    const response = await fetch('https://api.ipify.org?format=json', { signal: controller.signal })
+    clearTimeout(timeoutId)
+    if (!response.ok) return ''
+    const body = (await response.json()) as { ip?: string }
+    return body.ip ?? ''
+  } catch {
+    return ''
+  }
+}
+
+// Section 66 (Security — Strong Password). Exported so the create-user form
+// can show the same rule as a live hint instead of only finding out on
+// submit.
+export function isStrongPassword(password: string) {
+  return password.length >= 8 && /[A-Za-z]/.test(password) && /[0-9]/.test(password)
+}
 
 function normalizeLookup(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
@@ -1390,6 +1425,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     persistSessionExpiresAt(sessionExpiresAt)
 
     const roleName = DEFAULT_ERP_DATA.roles[authenticatedUser.roleId]?.name ?? authenticatedUser.roleId
+    // Section 66 (Security — IP/Device Log): best-effort only, never blocks
+    // sign-in if the lookup is slow, blocked by an ad-blocker, or the
+    // device is offline.
+    const ipAddress = await lookupClientIp()
     const loginHistoryId = createId('login')
     await update(ref(db, 'erp/loginHistory'), {
       [loginHistoryId]: {
@@ -1399,14 +1438,25 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         roleId: authenticatedUser.roleId,
         roleName,
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        ipAddress,
         createdAt: new Date().toISOString(),
       } satisfies LoginHistoryRecord,
     })
+
+    // Section 65 (Audit Trail): logged with an explicit actor since the
+    // currentUser React state hasn't re-rendered with this login yet.
+    await writeActivity('user_login', 'security', `${authenticatedUser.name} logged in.`, { actor: authenticatedUser })
 
     return authenticatedUser
   }
 
   function logout() {
+    // Section 65 (Audit Trail): fire-and-forget, and must happen before the
+    // state clears below — writeActivity reads the still-logged-in
+    // currentUser closed over by this render.
+    if (currentUser) {
+      void writeActivity('user_logout', 'security', `${currentUser.name} logged out.`, { actor: currentUser })
+    }
     setCurrentUserId(null)
     persistCurrentUserId(null)
     persistSessionExpiresAt(null)
@@ -1416,8 +1466,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function writeActivity(action: string, module: string, message: string) {
-    if (!currentUser) {
+  // Section 65 (Audit Trail): the one place every tracked action funnels
+  // through — Login/Logout pass an explicit `actor` (see login/logout
+  // below) since currentUser's React state hasn't caught up yet at that
+  // point; every other call site just relies on the closed-over
+  // currentUser. `oldValue`/`newValue` are recorded as JSON strings (never
+  // as live object refs) so they read back as a frozen snapshot even after
+  // the record they describe changes again later — see the Section 64
+  // Approval System example (Sales Invoice edit) in updateOrder/cancelOrder.
+  async function writeActivity(
+    action: string,
+    module: string,
+    message: string,
+    options?: { oldValue?: unknown; newValue?: unknown; reason?: string; actor?: UserRecord }
+  ) {
+    const actor = options?.actor ?? currentUser
+    if (!actor) {
       return
     }
 
@@ -1429,9 +1493,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         action,
         module,
         message,
-        userId: currentUser.id,
-        userName: currentUser.name,
+        userId: actor.id,
+        userName: actor.name,
         createdAt: new Date().toISOString(),
+        ...(options?.oldValue !== undefined ? { oldValue: JSON.stringify(options.oldValue) } : {}),
+        ...(options?.newValue !== undefined ? { newValue: JSON.stringify(options.newValue) } : {}),
+        ...(options?.reason?.trim() ? { reason: options.reason.trim() } : {}),
       },
     })
   }
@@ -1515,6 +1582,29 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         ? `Updated ${product.name} inventory details.`
         : `Added ${product.name} with ${product.stockQty} units in stock.`
     )
+
+    // Section 65 (Audit Trail — Price Change): logged as its own action
+    // whenever an edit actually moves a price field, separate from the
+    // general product_updated entry above.
+    if (existingProduct) {
+      const priceFields = ['sellingPrice', 'wholesalePrice', 'mrp', 'dealerPrice', 'distributorPrice', 'minSellingPrice'] as const
+      const oldPrices: Record<string, number | undefined> = {}
+      const newPrices: Record<string, number | undefined> = {}
+      let priceChanged = false
+      priceFields.forEach((field) => {
+        if (existingProduct[field] !== product[field]) {
+          priceChanged = true
+          oldPrices[field] = existingProduct[field]
+          newPrices[field] = product[field]
+        }
+      })
+      if (priceChanged) {
+        await writeActivity('price_change', 'inventory', `Updated pricing for ${product.name}.`, {
+          oldValue: oldPrices,
+          newValue: newPrices,
+        })
+      }
+    }
 
     if (!existingProduct) {
       await writeNotification(
@@ -4062,7 +4152,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function updateOrder(orderId: string, input: OrderInput) {
+  async function updateOrder(orderId: string, input: OrderInput, reason?: string) {
     if (!data || !currentUser) {
       return
     }
@@ -4245,7 +4335,27 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
 
-    await writeActivity('order_updated', 'sales', `Edited order ${order.billNumber} for ${customer.name}.`)
+    // Section 64 (Approval System): Old Value -> New Value -> User ->
+    // Date/Time -> Reason, all captured in one Audit Trail entry.
+    await writeActivity('order_updated', 'sales', `Edited order ${order.billNumber} for ${customer.name}.`, {
+      oldValue: {
+        billNumber: order.billNumber,
+        customerName: order.customerName,
+        total: order.total,
+        paid: order.paid,
+        due: order.due,
+        items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity, unitPrice: item.unitPrice })),
+      },
+      newValue: {
+        billNumber,
+        customerName: customer.name,
+        total,
+        paid,
+        due,
+        items: orderItems.map((item) => ({ productName: item.productName, quantity: item.quantity, unitPrice: item.unitPrice })),
+      },
+      reason,
+    })
     await writeNotification(
       'Sales order edited',
       `Order ${order.billNumber} was edited by ${currentUser?.name ?? 'Admin'}.`,
@@ -4254,7 +4364,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  async function cancelOrder(orderId: string) {
+  async function cancelOrder(orderId: string, reason?: string) {
     if (!data || !currentUser) {
       return
     }
@@ -4305,7 +4415,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
 
-    await writeActivity('order_cancelled', 'sales', `Cancelled order ${order.billNumber} for ${order.customerName}.`)
+    await writeActivity('order_cancelled', 'sales', `Cancelled order ${order.billNumber} for ${order.customerName}.`, {
+      oldValue: { status: order.status, total: order.total, due: order.due },
+      newValue: { status: 'cancelled', total: order.total, due: 0 },
+      reason,
+    })
     await writeNotification(
       'Sales order cancelled',
       `Order ${order.billNumber} was cancelled by ${currentUser?.name ?? 'Admin'}. Stock has been returned.`,
@@ -4494,6 +4608,81 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  // ---- Section 63: Role & Permission Matrix -------------------------------
+  // Role-based access control is mandatory, and every role's View / Create /
+  // Edit / Delete / Approve / Export permissions are managed independently
+  // here rather than only at seed time (see createDefaultERPData's example
+  // Role list in defaultData.ts, which just supplies sensible starting
+  // permissions for the 15 example roles the spec lists).
+  async function saveRole(input: RoleInput, roleId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before managing roles.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, roleId ? 'users:edit' : 'users:create')) {
+      throw new Error('You do not have permission to manage roles.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Role name is required.')
+    }
+
+    // Only permission ids the system actually knows about get persisted —
+    // guards against a stale checkbox list writing dead ids into the role.
+    const validPermissionIds = new Set(Object.keys(data.permissions))
+    const permissions = toPermissionSet(input.permissions.filter((id) => validPermissionIds.has(id)))
+
+    const db = getDatabaseOrThrow()
+    const existing = roleId ? data.roles[roleId] : undefined
+    if (roleId && !existing) {
+      throw new Error('Role not found.')
+    }
+    if (roleId === 'super_admin' && Object.keys(permissions).length !== validPermissionIds.size) {
+      throw new Error('Super Admin must always keep every permission.')
+    }
+
+    const id = roleId ?? createId('role')
+    const role: RoleRecord = {
+      id,
+      name,
+      description: input.description?.trim() ?? existing?.description ?? '',
+      permissions,
+    }
+
+    await update(ref(db, `erp/roles/${id}`), role)
+    await writeActivity(roleId ? 'role_updated' : 'role_created', 'users', `${roleId ? 'Updated' : 'Created'} role ${role.name}.`)
+    return id
+  }
+
+  async function deleteRole(roleId: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before deleting roles.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'users:delete')) {
+      throw new Error('You do not have permission to delete roles.')
+    }
+
+    const existing = data.roles[roleId]
+    if (!existing) {
+      throw new Error('Role not found.')
+    }
+
+    if (roleId === 'super_admin') {
+      throw new Error('The Super Admin role cannot be deleted.')
+    }
+
+    const assignedUser = users.find((user) => user.roleId === roleId)
+    if (assignedUser) {
+      throw new Error(`Cannot delete this role — ${assignedUser.name} is still assigned to it.`)
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`roles/${roleId}`]: null })
+    await writeActivity('role_deleted', 'users', `Deleted role ${existing.name}.`)
+  }
+
   async function createUser(input: UserInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before creating users.')
@@ -4505,6 +4694,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     if (!input.password) {
       throw new Error('A password is required to create a new user.')
+    }
+
+    // Section 66 (Security — Strong Password): at least 8 characters with a
+    // letter and a number. Kept in one place so the rule can only drift by
+    // editing it here — see the matching client-side hint in
+    // UserManagementPanel.tsx.
+    if (!isStrongPassword(input.password)) {
+      throw new Error('Password must be at least 8 characters and include both a letter and a number.')
     }
 
     const normalizedLoginId = normalizeLookup(input.loginId)
@@ -5607,7 +5804,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
   // Never a hard delete — reversing keeps the audit trail permanent, same
   // philosophy as every other cancellation in this system.
-  async function reverseJournalEntry(journalEntryId: string) {
+  async function reverseJournalEntry(journalEntryId: string, reason?: string) {
     if (!data || !currentUser) {
       return
     }
@@ -5636,7 +5833,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
 
     await update(ref(db, 'erp'), updates)
-    await writeActivity('journal_entry_reversed', 'finance', `Reversed journal entry ${journalEntry.journalNumber}.`)
+    // Section 64/65: an Accounting Adjustment is exactly the kind of action
+    // the Audit Trail must capture — old status, new status, who, when, why.
+    await writeActivity('journal_entry_reversed', 'finance', `Reversed journal entry ${journalEntry.journalNumber}.`, {
+      oldValue: { status: journalEntry.status, lines: journalEntry.lines },
+      newValue: { status: 'reversed' },
+      reason,
+    })
   }
 
   // ---- Bank Management (Section 35) --------------------------------------
@@ -6071,6 +6274,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteUser,
       sendPasswordReset,
       hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
+      saveRole,
+      deleteRole,
       saveProduct,
       deleteProduct,
       createStockAdjustmentRequest,
