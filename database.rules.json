@@ -92,6 +92,110 @@
       "permissions": {
         ".read": "auth != null"
       },
+      "ledgerEntries": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "chartOfAccounts": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "journalEntries": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "bankAccounts": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "bankTransactions": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "purchaseRequisitions": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "purchaseOrders": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "purchaseReturns": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "salesReturns": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "collections": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "warehouseStocks": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "stockTransfers": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "batches": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "stockAdjustments": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "stockCounts": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "billOfMaterials": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "productionOrders": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "qualityChecks": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "qcHolds": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "budgets": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "routes": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "routeVisitSchedules": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "customerVisits": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "salesTargets": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "commissionRules": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "commissionPayouts": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
       "tasks": {
         ".read": "auth != null",
         ".write": "auth != null"

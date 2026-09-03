@@ -18,7 +18,7 @@ import { get, onValue, ref, set, update } from 'firebase/database'
 import toast from 'react-hot-toast'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 
-import { createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
+import { ALL_PERMISSION_IDS, createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
 import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
 import type {
   BankAccountInput,
@@ -310,6 +310,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'budgets',
   'routes',
   'customerVisits',
+  'routeVisitSchedules',
   'salesTargets',
   'commissionRules',
   'commissionPayouts',
@@ -1331,6 +1332,53 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   )
 
   const currentPermissions = useMemo(() => getPermissions(data, currentUser), [currentUser, data])
+
+  // Self-heal the Super Admin role's permission set. New modules/actions
+  // occasionally get added to ALL_PERMISSION_IDS (e.g. the `finance:*`
+  // permissions the Sellers ledger relies on) after a project's `erp/roles`
+  // node was already seeded, and the Role & Permission Matrix UI disables
+  // editing the super_admin row on purpose (see RoleManagementSection.tsx)
+  // — so there's no in-app way to backfill a stale super_admin permission
+  // set otherwise. Runs once per session for a logged-in super_admin and
+  // only writes the keys that are actually missing.
+  useEffect(() => {
+    if (!data || !currentUser || currentUser.roleId !== 'super_admin') {
+      return
+    }
+
+    const currentSuperAdminPermissions = data.roles.super_admin?.permissions ?? {}
+    const missingPermissionIds = ALL_PERMISSION_IDS.filter((id) => currentSuperAdminPermissions[id] !== true)
+
+    if (missingPermissionIds.length === 0) {
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const db = getDatabaseOrThrow()
+        await update(ref(db, 'erp/roles/super_admin/permissions'), toPermissionSet(missingPermissionIds))
+        if (!cancelled) {
+          console.info(
+            `[self-heal] Restored ${missingPermissionIds.length} missing Super Admin permission(s): ${missingPermissionIds.join(', ')}`
+          )
+        }
+      } catch (reason) {
+        if (!cancelled) {
+          console.warn(
+            '[self-heal] Could not restore missing Super Admin permissions automatically — fix erp/roles/super_admin/permissions in the Firebase console instead.',
+            reason
+          )
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, data?.roles.super_admin])
 
   // Idle timeout + absolute session expiry. There's no backend session to
   // force-expire here, so this just watches for activity/elapsed time on

@@ -677,7 +677,7 @@ export default function CustomersPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto sm:max-h-[calc(100dvh-3rem)]">
           <DialogHeader>
             <DialogTitle>{editingCustomer ? 'Edit customer' : 'Add new customer'}</DialogTitle>
             <DialogDescription>
