@@ -421,11 +421,10 @@ export default function FinancePage() {
         <section className="space-y-4">
           <SectionHeader icon={LayoutGrid} title="Overview" description="Key figures for the selected period." />
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {[
               ['Revenue / Sales', formatCurrency(finance.revenue, currency), ArrowUpRight, 'Total invoice value'],
               ['Cash received', formatCurrency(finance.cashIn, currency), Wallet, 'Paid amount collected'],
-              ['Dealer due', formatCurrency(finance.receivable, currency), ReceiptText, 'Receivable balance'],
               ['Gross profit/loss', formatCurrency(finance.grossProfit, currency), finance.grossProfit >= 0 ? ArrowUpRight : ArrowDownLeft, 'Sales minus product cost'],
             ].map(([label, value, Icon, note]) => {
               const MetricIcon = Icon as typeof ArrowUpRight
