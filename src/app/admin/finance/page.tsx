@@ -1,24 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import {
-  ArrowDownLeft,
-  ArrowLeftRight,
-  ArrowUpRight,
-  BarChart3,
-  Banknote,
-  FileDown,
-  Landmark,
-  LayoutGrid,
-  ListChecks,
-  Plus,
-  Printer,
-  ReceiptText,
-  Trash2,
-  Truck,
-  Users,
-  Wallet,
-} from 'lucide-react'
+import { ListChecks, Plus, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Badge } from '@/components/ui/badge'
@@ -26,11 +9,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { buildFinanceDashboard } from '@/lib/erp/dashboards'
 import { EXPENSE_CATEGORIES } from '@/lib/erp/standardChartOfAccounts'
-import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
+import type { ExpenseInput } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -51,26 +32,6 @@ function isSameMonth(value: string, target: string) {
   return value.slice(0, 7) === target
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;')
-}
-
-function getOrderCost(order: OrderRecord) {
-  return order.items.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)
-}
-
-// order.total includes VAT, which is collected on the tax authority's
-// behalf and isn't revenue — Gross Profit (Section 10) is Net Sales minus
-// COGS, so every P&L figure below nets VAT back out first.
-function getOrderNetSales(order: OrderRecord) {
-  return order.total - (order.vat ?? 0)
-}
-
 const emptyExpenseForm = {
   category: EXPENSE_CATEGORIES[0] as string,
   amount: '0',
@@ -84,7 +45,7 @@ function SectionHeader({
   title,
   description,
 }: {
-  icon: typeof ArrowUpRight
+  icon: typeof ListChecks
   title: string
   description: string
 }) {
@@ -101,7 +62,7 @@ function SectionHeader({
   )
 }
 
-export default function FinancePage() {
+export default function ExpensesPage() {
   const { data, hasPermission, saveExpense, updateExpenseApproval, deleteExpense } = useERP()
   const canApproveExpense = hasPermission('finance:edit')
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
@@ -110,18 +71,10 @@ export default function FinancePage() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [expenseForm, setExpenseForm] = useState(emptyExpenseForm)
 
-  const orders = useMemo(
-    () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [data?.orders]
-  )
   const expenses = useMemo(
     () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
     [data?.expenses]
   )
-  const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
-  // Section 56 — live balances, independent of the reporting-period picker
-  // above (a dashboard is a snapshot, not something you scope by date).
-  const financeDashboard = useMemo(() => buildFinanceDashboard(data), [data])
   const currency = data?.settings.currency
 
   const filteredExpenses = useMemo(() => {
@@ -177,223 +130,13 @@ export default function FinancePage() {
     }
   }
 
-  const filteredOrders = useMemo(() => {
-    return orders.filter((order) =>
-      mode === 'daily' ? isSameDate(order.createdAt, selectedDate) : isSameMonth(order.createdAt, selectedMonth)
-    )
-  }, [mode, orders, selectedDate, selectedMonth])
-
-  const finance = useMemo(() => {
-    const revenue = filteredOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
-    const cashIn = filteredOrders.reduce((sum, order) => sum + order.paid, 0)
-    const receivable = filteredOrders.reduce((sum, order) => sum + order.due, 0)
-    const cogs = filteredOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
-    const grossProfit = revenue - cogs
-    const netCashFlow = cashIn - expenseTotal
-
-    return {
-      revenue,
-      cashIn,
-      receivable,
-      cogs,
-      grossProfit,
-      netCashFlow,
-      invoices: filteredOrders.length,
-      unitsSold: filteredOrders.reduce(
-        (sum, order) => sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
-        0
-      ),
-    }
-  }, [filteredOrders, expenseTotal])
-
-  const monthlyRows = useMemo(() => {
-    const year = Number(selectedMonth.slice(0, 4)) || new Date().getFullYear()
-
-    return Array.from({ length: 12 }).map((_, index) => {
-      const monthKey = `${year}-${String(index + 1).padStart(2, '0')}`
-      const monthOrders = orders.filter((order) => isSameMonth(order.createdAt, monthKey))
-      const revenue = monthOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
-      const cash = monthOrders.reduce((sum, order) => sum + order.paid, 0)
-      const due = monthOrders.reduce((sum, order) => sum + order.due, 0)
-      const cogs = monthOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
-
-      return {
-        key: monthKey,
-        month: new Date(`${monthKey}-01`).toLocaleDateString('en-BD', { month: 'long' }),
-        invoices: monthOrders.length,
-        revenue,
-        cash,
-        due,
-        cogs,
-        profit: revenue - cogs,
-      }
-    })
-  }, [orders, selectedMonth])
-
-  function buildInvoiceHtml(order: OrderRecord) {
-    const dealer = dealers.find((entry) => entry.id === order.dealerId)
-    const invoiceNumber = (order.billNumber || order.id).replace(/\D/g, '').slice(-8).padStart(8, '0')
-    const rows = order.items
-      .map(
-        (item, index) => `
-          <tr>
-            <td>${index + 1}</td>
-            <td>${escapeHtml(item.productName)}</td>
-            <td class="numeric">${item.quantity}</td>
-            <td class="numeric">${formatCurrency(item.unitPrice, currency)}</td>
-            <td class="numeric">${formatCurrency(item.unitPrice * item.quantity, currency)}</td>
-          </tr>
-        `
-      )
-      .join('')
-
-    return `
-      <!doctype html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Invoice ${escapeHtml(order.id)}</title>
-          <style>
-            * { box-sizing: border-box; }
-            @page { margin: 0; }
-            body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; }
-            .header { border-bottom: 2px solid #111827; display: flex; justify-content: space-between; padding-bottom: 18px; }
-            h1 { font-size: 24px; margin: 0; }
-            p { color: #4b5563; font-size: 13px; margin: 5px 0 0; }
-            .title { font-size: 28px; font-weight: 700; text-align: right; text-transform: uppercase; }
-            .grid { display: grid; gap: 20px; grid-template-columns: 1fr 1fr; margin-top: 26px; }
-            .box { border: 1px solid #d1d5db; border-radius: 8px; padding: 14px; }
-            table { border-collapse: collapse; margin-top: 18px; width: 100%; }
-            th { background: #f3f4f6; color: #374151; font-size: 12px; text-align: left; text-transform: uppercase; }
-            th, td { border: 1px solid #d1d5db; padding: 10px; }
-            td { font-size: 13px; }
-            .numeric { text-align: right; }
-            .totals { margin-left: auto; margin-top: 18px; width: 320px; }
-            .totals div { display: flex; justify-content: space-between; padding: 7px 0; }
-            .totals .grand { border-top: 2px solid #111827; font-size: 18px; font-weight: 700; }
-            .print-date { bottom: 8mm; color: #4b5563; font-size: 11px; position: fixed; right: 12mm; }
-            @media screen { body { padding: 32px; } .print-date { bottom: 20px; right: 32px; } }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <h1>${escapeHtml(data?.settings.companyName ?? 'ERP')}</h1>
-              <p>Accounting & Finance</p>
-              <p>92, Wise Market, Nawabpur Road, Dhaka-1100</p>
-              <p>+88 01897914480-83</p>
-            </div>
-            <div>
-              <p class="title">Invoice</p>
-              <p><strong>No:</strong> ${invoiceNumber}</p>
-              <p><strong>Date:</strong> ${formatDate(order.createdAt)}</p>
-              <p><strong>Due date:</strong> ${formatDate(order.deliveryDate)}</p>
-            </div>
-          </div>
-          <div class="grid">
-            <div class="box">
-              <strong>Bill To</strong>
-              <p>${escapeHtml(order.dealerName)}</p>
-              <p><strong>Mobile:</strong> ${escapeHtml(dealer?.phone || 'N/A')}</p>
-              <p><strong>Address:</strong> ${escapeHtml(dealer?.address || 'N/A')}</p>
-            </div>
-            <div class="box">
-              <strong>Payment</strong>
-              <p>Cash: ${formatCurrency(order.paid, currency)}</p>
-              <p>Due: ${formatCurrency(order.due, currency)}</p>
-            </div>
-          </div>
-          <table>
-            <thead><tr><th>#</th><th>Item</th><th class="numeric">Qty</th><th class="numeric">Rate</th><th class="numeric">Amount</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <div class="totals">
-            <div><span>Total amount</span><strong>${formatCurrency(order.subtotal ?? order.total, currency)}</strong></div>
-            <div><span>Discount</span><strong>${formatCurrency(order.discount ?? 0, currency)}</strong></div>
-            ${order.promotionalDiscount ? `<div><span>Promotional discount</span><strong>${formatCurrency(order.promotionalDiscount, currency)}</strong></div>` : ''}
-            ${order.vat ? `<div><span>VAT</span><strong>${formatCurrency(order.vat, currency)}</strong></div>` : ''}
-            <div><span>Payable amount</span><strong>${formatCurrency(order.total, currency)}</strong></div>
-            <div><span>Cash</span><strong>${formatCurrency(order.paid, currency)}</strong></div>
-            <div class="grand"><span>Due amount</span><strong>${formatCurrency(order.due, currency)}</strong></div>
-          </div>
-          <p class="print-date">${formatDate(order.createdAt)}</p>
-          <script>
-            window.addEventListener('load', () => {
-              window.focus();
-              window.print();
-            });
-          </script>
-        </body>
-      </html>
-    `
-  }
-
-  function printInvoice(order: OrderRecord) {
-    setFeedback(null)
-    const popup = window.open('', '_blank', 'width=920,height=720')
-
-    if (!popup) {
-      setFeedback('Allow popups to print or save invoice as PDF.')
-      return
-    }
-
-    popup.document.open()
-    popup.document.write(buildInvoiceHtml(order))
-    popup.document.close()
-  }
-
   return (
-    <AdminShell active="Accounting & Finance">
+    <AdminShell active="Expenses">
       <div className="space-y-8">
-        {/* Section 56: Finance Dashboard — real-time balances, not scoped to the period picker below. */}
-        <section className="space-y-4">
-          <SectionHeader icon={Landmark} title="Finance dashboard" description="Live cash, bank, and payable position as of right now." />
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            {[
-              ['Cash balance', formatCurrency(financeDashboard.cashBalance, currency), Wallet],
-              ['Bank balance', formatCurrency(financeDashboard.bankBalance, currency), Banknote],
-              ['Receivable', formatCurrency(financeDashboard.totalReceivable, currency), Users],
-              ['Payable', formatCurrency(financeDashboard.totalPayable, currency), Truck],
-              ['Due payment', formatCurrency(financeDashboard.duePayment, currency), ReceiptText],
-            ].map(([label, value, Icon]) => {
-              const MetricIcon = Icon as typeof Wallet
-              return (
-                <Card key={label as string} className="border-border/70 shadow-sm">
-                  <CardContent className="p-5">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground"><MetricIcon className="h-4 w-4" />{label as string}</div>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            {[
-              ["Today's collection", formatCurrency(financeDashboard.todayCollection, currency), ArrowUpRight],
-              ["Today's expense", formatCurrency(financeDashboard.todayExpense, currency), ArrowDownLeft],
-              ['Monthly expense', formatCurrency(financeDashboard.monthlyExpense, currency), ReceiptText],
-              ['Profit (this month)', formatCurrency(financeDashboard.profit, currency), financeDashboard.profit >= 0 ? ArrowUpRight : ArrowDownLeft],
-              ['Cash flow (this month)', formatCurrency(financeDashboard.cashFlow, currency), ArrowLeftRight],
-            ].map(([label, value, Icon]) => {
-              const MetricIcon = Icon as typeof Wallet
-              return (
-                <Card key={label as string} className="border-border/70 shadow-sm">
-                  <CardContent className="p-5">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground"><MetricIcon className="h-4 w-4" />{label as string}</div>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        </section>
-
-        <Separator />
-
         <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-medium text-foreground">Reporting period</p>
-            <p className="text-xs text-muted-foreground">Choose a day or month to scope the figures below.</p>
+            <p className="text-xs text-muted-foreground">Choose a day or month to scope the expenses below.</p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <Select value={mode} onValueChange={(value) => setMode(value as typeof mode)}>
@@ -417,143 +160,6 @@ export default function FinancePage() {
           </Card>
         ) : null}
 
-        {/* Section: Overview */}
-        <section className="space-y-4">
-          <SectionHeader icon={LayoutGrid} title="Overview" description="Key figures for the selected period." />
-
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {[
-              ['Revenue / Sales', formatCurrency(finance.revenue, currency), ArrowUpRight, 'Total invoice value'],
-              ['Cash received', formatCurrency(finance.cashIn, currency), Wallet, 'Paid amount collected'],
-              ['Gross profit/loss', formatCurrency(finance.grossProfit, currency), finance.grossProfit >= 0 ? ArrowUpRight : ArrowDownLeft, 'Sales minus product cost'],
-            ].map(([label, value, Icon, note]) => {
-              const MetricIcon = Icon as typeof ArrowUpRight
-
-              return (
-                <Card key={label as string} className="border-border/70 shadow-sm">
-                  <CardContent className="p-5">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <MetricIcon className="h-4 w-4" />
-                      {label as string}
-                    </div>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{note as string}</p>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {[
-              ['Invoices', finance.invoices.toLocaleString('en-BD'), `${finance.unitsSold} units sold`],
-              ['COGS', formatCurrency(finance.cogs, currency), 'Product purchase cost'],
-              ['Gross profit', formatCurrency(finance.grossProfit, currency), 'Revenue minus COGS'],
-              ['Net cash flow', formatCurrency(finance.netCashFlow, currency), 'Cash received minus expenses'],
-            ].map(([label, value, note]) => (
-              <Card key={label} className="border-border/70 shadow-sm">
-                <CardContent className="p-5">
-                  <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{note}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </section>
-
-        <Separator />
-
-        {/* Section: Sales & Receivables */}
-        <section className="space-y-4">
-          <SectionHeader
-            icon={ReceiptText}
-            title="Sales & receivables"
-            description="Invoice ledger alongside expense and receivable balances."
-          />
-
-          <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-            <Card className="border-border/70 shadow-sm">
-              <CardHeader>
-                <CardTitle>Sales and invoice ledger</CardTitle>
-                <CardDescription>Download invoices as PDF from the browser print dialog.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto rounded-2xl border border-border/70">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Invoice</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Client</TableHead>
-                        <TableHead>Sales</TableHead>
-                        <TableHead>Cash</TableHead>
-                        <TableHead>Due</TableHead>
-                        <TableHead>Profit</TableHead>
-                        <TableHead className="text-right">PDF</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredOrders.map((order) => {
-                        const profit = getOrderNetSales(order) - getOrderCost(order)
-
-                        return (
-                          <TableRow key={order.id} className={cn(order.due > 0 && 'bg-rose-500/10 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300')}>
-                            <TableCell className="font-medium">{order.id}</TableCell>
-                            <TableCell>{formatDate(order.createdAt)}</TableCell>
-                            <TableCell>{order.dealerName}</TableCell>
-                            <TableCell>{formatCurrency(order.total, currency)}</TableCell>
-                            <TableCell>{formatCurrency(order.paid, currency)}</TableCell>
-                            <TableCell>{formatCurrency(order.due, currency)}</TableCell>
-                            <TableCell>{formatCurrency(profit, currency)}</TableCell>
-                            <TableCell>
-                              <div className="flex justify-end gap-2">
-                                <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => printInvoice(order)} aria-label={`Print invoice ${order.id}`}>
-                                  <Printer className="h-4 w-4" />
-                                </Button>
-                                <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => printInvoice(order)} aria-label={`Download invoice ${order.id}`}>
-                                  <FileDown className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                      {filteredOrders.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={8} className="h-28 text-center text-muted-foreground">
-                            No invoices found for this period.
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/70 shadow-sm">
-              <CardHeader>
-                <CardTitle>Expense and payable view</CardTitle>
-                <CardDescription>Period expenses and outstanding dealer receivables.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-                  <p className="text-sm text-muted-foreground">Total expenses in period</p>
-                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(expenseTotal, currency)}</p>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-                  <p className="text-sm text-muted-foreground">Total dealer ledger due</p>
-                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(orders.reduce((sum, order) => sum + order.due, 0), currency)}</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
-        <Separator />
-
-        {/* Section: Expenses */}
         <section className="space-y-4">
           <SectionHeader
             icon={ListChecks}
@@ -733,50 +339,6 @@ export default function FinancePage() {
               </CardContent>
             </Card>
           </div>
-        </section>
-
-        <Separator />
-
-        {/* Section: Reports */}
-        <section className="space-y-4">
-          <SectionHeader icon={BarChart3} title="Reports" description="Full 12-month profit and loss breakdown." />
-
-          <Card className="border-border/70 shadow-sm">
-            <CardHeader>
-              <CardTitle>Monthly profit/loss report</CardTitle>
-              <CardDescription>Full 12-month view for the selected year.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto rounded-2xl border border-border/70">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/40 hover:bg-muted/40">
-                      <TableHead>Month</TableHead>
-                      <TableHead>Invoices</TableHead>
-                      <TableHead>Revenue</TableHead>
-                      <TableHead>Cash</TableHead>
-                      <TableHead>Due</TableHead>
-                      <TableHead>COGS</TableHead>
-                      <TableHead>Profit/Loss</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {monthlyRows.map((row) => (
-                      <TableRow key={row.key}>
-                        <TableCell className="font-medium">{row.month}</TableCell>
-                        <TableCell>{row.invoices}</TableCell>
-                        <TableCell>{formatCurrency(row.revenue, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.cash, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.due, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.cogs, currency)}</TableCell>
-                        <TableCell className={cn(row.profit < 0 && 'text-destructive')}>{formatCurrency(row.profit, currency)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
         </section>
       </div>
     </AdminShell>

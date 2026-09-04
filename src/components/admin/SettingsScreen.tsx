@@ -229,8 +229,8 @@ export function SettingsScreen() {
 
         {/* Section 66 — Security. Role Permission, Session Management, Login
             History, and Automatic Logout are already enforced app-wide (see
-            hasPermission/IDLE_TIMEOUT_MS in provider.tsx and the Audit Log /
-            User & Role Management pages). Database Encryption and HTTPS/SSL
+            hasPermission/IDLE_TIMEOUT_MS in provider.tsx and the User & Role
+            Management page). Database Encryption and HTTPS/SSL
             are provided by the hosting platform (Firebase Realtime Database
             encrypts data at rest and requires TLS in transit; Firebase/
             Vercel hosting serves the app over HTTPS only) rather than
@@ -250,7 +250,7 @@ export function SettingsScreen() {
                 <li>✓ Strong password required for new logins</li>
                 <li>✓ Session timeout &amp; automatic logout after inactivity</li>
                 <li>✓ Login history with device and IP address</li>
-                <li>✓ Full audit trail of every action (see Audit Log)</li>
+                <li>✓ Full audit trail of every action</li>
                 <li>✓ Data encrypted in transit (HTTPS) and at rest (Firebase)</li>
               </ul>
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/70 p-4">
