@@ -118,6 +118,29 @@ function parseAmount(value: string) {
   return normalized ? Number(normalized) : 0
 }
 
+// The quick "Add product" form only asks for a name and size, but every
+// product still needs a unique SKU internally (invoices, batches, and
+// exports all key off it) — so one is derived from the name here instead
+// of asking for it up front. Full details, including a custom SKU, can
+// still be set later from Edit product.
+function generateSku(name: string, existingSkus: Set<string>) {
+  const base =
+    name
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 20) || 'PRODUCT'
+
+  let candidate = base
+  let suffix = 1
+  while (existingSkus.has(candidate)) {
+    suffix += 1
+    candidate = `${base}-${suffix}`
+  }
+  return candidate
+}
+
 function productToForm(product: {
   name: string
   banglaName?: string
@@ -428,12 +451,14 @@ export function StockOverviewScreen() {
         nextImagePublicId = uploadResult.imagePublicId
       }
 
+      const sku = productForm.sku.trim() || generateSku(productForm.name, existingSkuSet)
+
       await saveProduct(
         {
           name: productForm.name,
           banglaName: productForm.banglaName,
           englishName: productForm.englishName,
-          sku: productForm.sku,
+          sku,
           category: productForm.category,
           subCategory: productForm.subCategory,
           brand: productForm.brand,
@@ -595,9 +620,14 @@ export function StockOverviewScreen() {
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingProductId ? 'Edit product' : 'Add product'}</DialogTitle>
-              <DialogDescription>Use the essential fields only. This form is optimized for workshop and lift inventory records.</DialogDescription>
+              <DialogDescription>
+                {editingProductId
+                  ? 'Use the essential fields only. This form is optimized for workshop and lift inventory records.'
+                  : 'Just the product name and size for now — a SKU is generated automatically. Add pricing, stock, and other details later from Edit product.'}
+              </DialogDescription>
             </DialogHeader>
             {(editingProductId ? canEditInventory : canCreateInventory) ? (
+              editingProductId ? (
               <form className="space-y-6" onSubmit={handleSaveProduct}>
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
@@ -673,9 +703,35 @@ export function StockOverviewScreen() {
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setAddProductOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : editingProductId ? 'Update product' : 'Save product'}</Button>
+                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : 'Update product'}</Button>
                 </DialogFooter>
               </form>
+              ) : (
+              <form className="space-y-5" onSubmit={handleSaveProduct}>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Product name</p>
+                  <Input
+                    placeholder="Mustard Oil 200ml"
+                    value={productForm.name}
+                    onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))}
+                    autoFocus
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">Size <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <Input
+                    placeholder="200 ml"
+                    value={productForm.packSize}
+                    onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setAddProductOpen(false)}>Cancel</Button>
+                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : 'Save product'}</Button>
+                </DialogFooter>
+              </form>
+              )
             ) : <p className="text-sm text-muted-foreground">Your current role can view products but cannot create or edit them.</p>}
           </DialogContent>
         </Dialog>
