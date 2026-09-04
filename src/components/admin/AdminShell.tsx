@@ -7,7 +7,6 @@ import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   Boxes,
-  Building2,
   Calculator,
   CheckCheck,
   History,
@@ -80,15 +79,8 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'orders:view',
       },
       {
-        label: 'Dealer Management',
-        description: 'Dealer-wise sales, collection, outstanding, target, return, discount, commission, and stock',
-        href: '/admin/dealer-management',
-        icon: Building2,
-        permission: 'orders:view',
-      },
-      {
-        label: 'Inventory / Stock',
-        description: 'Products, stock control, and warranty-linked inventory',
+        label: 'Product List',
+        description: 'Product catalog with name, image, and price, plus stock control',
         href: '/admin/stock/overview',
         icon: Boxes,
         permission: 'products:view',

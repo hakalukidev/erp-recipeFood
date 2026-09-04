@@ -1052,7 +1052,7 @@ export default function RateCardPage() {
                 <Plus className="mr-2 h-4 w-4" /> Add product line
               </Button>
               <p className="text-xs text-muted-foreground">
-                Product missing from the list? Add it first from Inventory / Stock. Same product twice (e.g. a
+                Product missing from the list? Add it first from Product List. Same product twice (e.g. a
                 different bag/carton size) is fine — add a second line.
               </p>
             </div>

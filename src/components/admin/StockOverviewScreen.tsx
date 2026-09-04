@@ -1,19 +1,10 @@
 "use client"
 
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
-import {
-  AlertTriangle,
-  Boxes,
-  PackageX,
-  PencilLine,
-  Search,
-  Sparkles,
-  Trash2,
-} from 'lucide-react'
+import { PencilLine, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
-import { StockControlSection } from './StockControlSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -27,11 +18,9 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { buildInventoryDashboard } from '@/lib/erp/dashboards'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
-import { formatCurrency, formatDate, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
+import { formatCurrency, toArray } from '@/lib/erp/utils'
 
 // Doubles as the Section 15 "Stock Type" classification — Raw Material,
 // Packaging Material, Semi-Finished Goods, Finished Goods, Damaged Goods,
@@ -48,15 +37,6 @@ const productTypeOptions = [
   'Trading Goods',
 ]
 const unitOptions = ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Box', 'Carton', 'Pack', 'Set', 'Dozen']
-
-function statValueFontSizeClass(value: string) {
-  const length = value.length
-  if (length <= 6) return 'text-2xl md:text-3xl'
-  if (length <= 9) return 'text-xl md:text-2xl'
-  if (length <= 13) return 'text-lg md:text-xl'
-  if (length <= 17) return 'text-base md:text-lg'
-  return 'text-sm md:text-base'
-}
 
 type ProductFormState = {
   name: string
@@ -91,8 +71,6 @@ type ProductFormState = {
   imageUrl: string
   imagePublicId: string
 }
-
-type InventoryView = 'products' | 'low-stock'
 
 type ProductImageUploadResult = {
   imageUrl: string
@@ -208,21 +186,6 @@ function productToForm(product: {
   }
 }
 
-function statusBadgeClass(status: ReturnType<typeof getProductStatus>) {
-  if (status === 'active') {
-    return 'border-emerald-200 bg-emerald-500/10 text-emerald-700'
-  }
-
-  if (status === 'low-stock') {
-    return 'border-amber-200 bg-amber-500/10 text-amber-700'
-  }
-
-  return 'border-rose-200 bg-rose-500/10 text-rose-700'
-}
-
-function statusLabel(status: ReturnType<typeof getProductStatus>) {
-  return status.replace('-', ' ')
-}
 async function uploadProductImage(file: File): Promise<ProductImageUploadResult> {
   const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME
   const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET
@@ -304,7 +267,6 @@ export function StockOverviewScreen() {
   )
   const [isCreatingStarterCatalog, setIsCreatingStarterCatalog] = useState(false)
   const [busyProductId, setBusyProductId] = useState<string | null>(null)
-  const [activeInventoryView, setActiveInventoryView] = useState<InventoryView>('products')
   const [productImageFile, setProductImageFile] = useState<File | null>(null)
   const [productImagePreview, setProductImagePreview] = useState<string | null>(null)
   const [pendingImageDeleteId, setPendingImageDeleteId] = useState<string | null>(null)
@@ -326,24 +288,11 @@ export function StockOverviewScreen() {
     )
   }, [deferredSearch, products])
 
-  const productExportHeaders = ['Product', 'SKU', 'Stock', 'Cost', 'Sell Price']
+  const productExportHeaders = ['Product', 'Price']
   const productExportRows = useMemo(
-    () =>
-      filteredProducts.map((product) => [
-        product.name,
-        product.sku,
-        product.stockQty,
-        product.purchasePrice,
-        product.sellingPrice,
-      ]),
+    () => filteredProducts.map((product) => [product.name, product.sellingPrice]),
     [filteredProducts]
   )
-
-  const lowStockProducts = useMemo(() => products.filter((product) => product.stockQty <= product.minStock), [products])
-  const totalInventoryValue = useMemo(() => products.reduce((sum, product) => sum + product.purchasePrice * product.stockQty, 0), [products])
-  const totalUnits = useMemo(() => products.reduce((sum, product) => sum + product.stockQty, 0), [products])
-  // Section 57 — Inventory Dashboard.
-  const inventoryDashboard = useMemo(() => buildInventoryDashboard(data), [data])
 
   function resetProductEditor() {
     setEditingProductId(null)
@@ -407,7 +356,7 @@ export function StockOverviewScreen() {
         created += 1
       }
 
-      setFeedback(`Created ${created} product${created === 1 ? '' : 's'} from the starter catalog. Set pricing and opening stock from the Inventory list.`)
+      setFeedback(`Created ${created} product${created === 1 ? '' : 's'} from the starter catalog. Set pricing from the Product List.`)
       setStarterCatalogOpen(false)
     } catch (reason) {
       setFeedback(reason instanceof Error ? `${reason.message} (${created} created before this error.)` : 'Unable to create the starter catalog.')
@@ -520,7 +469,7 @@ export function StockOverviewScreen() {
         await deleteCloudinaryImage(pendingImageDeleteId)
       }
 
-      setFeedback(editingProductId ? 'Product updated successfully.' : 'Product added to inventory successfully.')
+      setFeedback(editingProductId ? 'Product updated successfully.' : 'Product added to the list successfully.')
       setAddProductOpen(false)
       resetProductEditor()
     } catch (reason) {
@@ -536,7 +485,7 @@ export function StockOverviewScreen() {
       return
     }
 
-    if (!window.confirm(`Delete ${product.name} from inventory?`)) {
+    if (!window.confirm(`Delete ${product.name} from the product list?`)) {
       return
     }
 
@@ -549,7 +498,7 @@ export function StockOverviewScreen() {
       }
 
       await deleteProduct(productId)
-      setFeedback(`${product.name} was deleted from inventory.`)
+      setFeedback(`${product.name} was deleted from the product list.`)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete product.')
     } finally {
@@ -558,11 +507,16 @@ export function StockOverviewScreen() {
   }
 
   return (
-    <AdminShell active="Inventory / Stock">
+    <AdminShell active="Product List">
       <div className="space-y-6">
         <Card className="border-border/70 shadow-sm">
-          <CardContent className="flex flex-col gap-6 p-6">
-            <div className="flex flex-wrap gap-3 xl:justify-end">
+          <CardHeader>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <CardTitle>Product list</CardTitle>
+                <CardDescription>Every product — name, image, and price.</CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
                 <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory}>
                   Add product
                 </Button>
@@ -570,196 +524,72 @@ export function StockOverviewScreen() {
                   <Sparkles className="mr-2 h-4 w-4" />
                   Load starter catalog
                 </Button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-              {[
-                { label: 'Products', value: String(products.length) },
-                { label: 'Units in stock', value: String(totalUnits) },
-                { label: 'Inventory value', value: formatCurrency(totalInventoryValue, currency) },
-                { label: 'Low stock', value: String(lowStockProducts.length) },
-              ].map((stat) => (
-                <div key={stat.label} className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
-                  <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  <p className={`mt-1 truncate font-semibold tracking-tight ${statValueFontSizeClass(stat.value)}`}>{stat.value}</p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {feedback ? (
-          <Card className="border-border/70 bg-primary/5 shadow-sm">
-            <CardContent className="p-4 text-sm text-primary">{feedback}</CardContent>
-          </Card>
-        ) : null}
-
-        {/* Section 57: Inventory Dashboard */}
-        <Card className="border-border/70 shadow-sm">
-          <CardHeader>
-            <CardTitle>Inventory dashboard</CardTitle>
-            <CardDescription>Stock value, expiry exposure, and a product / batch breakdown.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
-              {[
-                { label: 'Total stock value', value: formatCurrency(inventoryDashboard.totalStockValue, currency), icon: Boxes },
-                { label: 'Raw material', value: formatCurrency(inventoryDashboard.rawMaterialValue, currency), icon: Boxes },
-                { label: 'Finished goods', value: formatCurrency(inventoryDashboard.finishedGoodsValue, currency), icon: Boxes },
-                { label: 'Damaged', value: formatCurrency(inventoryDashboard.damagedValue, currency), icon: AlertTriangle },
-                { label: 'Low stock', value: String(inventoryDashboard.lowStockCount), icon: AlertTriangle },
-                { label: 'Out of stock', value: String(inventoryDashboard.outOfStockCount), icon: PackageX },
-                { label: 'Near expiry', value: String(inventoryDashboard.nearExpiryBatches.length), icon: AlertTriangle },
-                { label: 'Expired', value: String(inventoryDashboard.expiredBatches.length), icon: PackageX },
-              ].map((stat) => {
-                const Icon = stat.icon
-                return (
-                  <div key={stat.label} className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
-                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground"><Icon className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{stat.label}</span></div>
-                    <p className={`mt-1 truncate font-semibold tracking-tight ${statValueFontSizeClass(stat.value)}`}>{stat.value}</p>
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-2">
-              <div>
-                <p className="mb-2 text-sm font-medium text-foreground">Product-wise stock</p>
-                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Product</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Value</th></tr></thead>
-                    <tbody>
-                      {inventoryDashboard.productWiseStock.slice(0, 100).map((product) => (
-                        <tr key={product.id} className="border-t border-border/70">
-                          <td className="p-2.5">{product.name}<span className="block text-xs text-muted-foreground">{product.sku}</span></td>
-                          <td className="p-2.5 text-right">{product.stockQty}</td>
-                          <td className="p-2.5 text-right">{formatCurrency(product.purchasePrice * product.stockQty, currency)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!inventoryDashboard.productWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No products yet.</p> : null}
-                </div>
-              </div>
-
-              <div>
-                <p className="mb-2 text-sm font-medium text-foreground">Batch-wise stock</p>
-                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Batch</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Expiry</th></tr></thead>
-                    <tbody>
-                      {inventoryDashboard.batchWiseStock.slice(0, 100).map((batch) => (
-                        <tr key={batch.id} className="border-t border-border/70">
-                          <td className="p-2.5">{batch.productName}<span className="block text-xs text-muted-foreground">{batch.batchNumber}</span></td>
-                          <td className="p-2.5 text-right">{batch.quantity}</td>
-                          <td className="p-2.5 text-right">{batch.expiryDate ? formatDate(batch.expiryDate) : '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!inventoryDashboard.batchWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No batches recorded yet.</p> : null}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/70 shadow-sm">
-          <CardHeader>
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>
-                  {activeInventoryView === 'products' ? 'Inventory list' : 'Low stock focus'}
-                </CardTitle>
-                <CardDescription>
-                  {activeInventoryView === 'products'
-                    ? 'Search by product, model, or category. Edit and delete actions are available in each row.'
-                    : 'Products that need replenishment soon.'}
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant={activeInventoryView === 'products' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('products')}>Products</Button>
-                <Button variant={activeInventoryView === 'low-stock' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('low-stock')}>Low stock focus</Button>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              {activeInventoryView === 'products' ? (
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center w-full lg:max-w-3xl">
-                  <div className="relative w-full sm:max-w-xs">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search inventory..." />
-                  </div>
-                </div>
-              ) : <div />}
-
-              {activeInventoryView === 'products' ? (
-                <ExportMenu filenameBase="products" title="Products" headers={productExportHeaders} rows={productExportRows} />
-              ) : null}
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border border-border/70">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    {activeInventoryView === 'products' ? (
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Product</TableHead>
-                        <TableHead>Model / SKU</TableHead>
-                        <TableHead>Stock</TableHead>
-                        <TableHead>Cost</TableHead>
-                        <TableHead>Sell price</TableHead>
-                        <TableHead>Updated</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    ) : (
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Product</TableHead>
-                        <TableHead>Available</TableHead>
-                        <TableHead>Minimum</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Updated</TableHead>
-                      </TableRow>
-                    )}
-                  </TableHeader>
-                  <TableBody>
-                    {activeInventoryView === 'products' ? filteredProducts.map((product) => {
-                      const status = getProductStatus(product.stockQty, product.minStock)
-
-                      return (
-                        <TableRow key={product.id}>
-                          <TableCell><div className="flex items-center gap-3">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-14 w-14 rounded-xl border border-border/70 object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/30 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">No image</div>}<div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.category || 'General equipment'}{product.subCategory ? ` · ${product.subCategory}` : ''}</p><div className="mt-1 flex flex-wrap gap-1">{product.batchApplicable ? <Badge variant="outline" className="border-sky-200 bg-sky-500/10 text-[10px] text-sky-700">Batch</Badge> : null}{product.expiryApplicable ? <Badge variant="outline" className="border-violet-200 bg-violet-500/10 text-[10px] text-violet-700">Expiry</Badge> : null}{product.isActive === false ? <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge> : null}</div></div></div></TableCell>
-                          <TableCell className="font-medium"><p>{product.sku}</p>{product.serialNumber ? <p className="text-xs font-normal text-muted-foreground">SN: {product.serialNumber}</p> : null}{product.warrantyMonths ? <p className="text-xs font-normal text-muted-foreground">{product.warrantyMonths}mo warranty</p> : null}</TableCell>
-                          <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} {product.unit || 'units'}</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
-                          <TableCell>{formatCurrency(product.purchasePrice, currency)}</TableCell>
-                          <TableCell>{formatCurrency(product.sellingPrice, currency)}</TableCell>
-                          <TableCell>{formatDateTime(product.updatedAt)}</TableCell>
-                          <TableCell>{canEditInventory || canDeleteInventory ? <div className="flex justify-end gap-2">{canEditInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button> : null}{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
-                        </TableRow>
-                      )
-                    }) : lowStockProducts.map((product) => {
-                      const status = getProductStatus(product.stockQty, product.minStock)
-
-                      return (
-                        <TableRow key={product.id}>
-                          <TableCell><div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.sku}</p></div></TableCell>
-                          <TableCell>{product.stockQty}</TableCell>
-                          <TableCell>{product.minStock}</TableCell>
-                          <TableCell><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></TableCell>
-                          <TableCell>{formatDateTime(product.updatedAt)}</TableCell>
-                        </TableRow>
-                      )
-                    })}
-
-                    {activeInventoryView === 'products' && !filteredProducts.length ? <TableRow><TableCell colSpan={7} className="py-12 text-center text-sm text-muted-foreground">No products matched your search.</TableCell></TableRow> : null}
-                    {activeInventoryView === 'low-stock' && !lowStockProducts.length ? <TableRow><TableCell colSpan={5} className="py-12 text-center text-sm text-muted-foreground">No low-stock products right now.</TableCell></TableRow> : null}
-                  </TableBody>
-                </Table>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="relative w-full sm:max-w-xs">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search products..." />
               </div>
+              <ExportMenu filenameBase="products" title="Products" headers={productExportHeaders} rows={productExportRows} />
             </div>
+
+            {feedback ? <p className="rounded-xl bg-primary/5 p-3 text-sm text-primary">{feedback}</p> : null}
+
+            {filteredProducts.length ? (
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {filteredProducts.map((product) => (
+                  <div key={product.id} className="group overflow-hidden rounded-2xl border border-border/70 bg-card">
+                    <div className="aspect-square w-full overflow-hidden bg-muted/30">
+                      {product.imageUrl ? (
+                        <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
+                          No image
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2 p-3">
+                      <p className="truncate text-sm font-semibold text-foreground" title={product.name}>{product.name}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-base font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
+                        {product.isActive === false ? <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge> : null}
+                      </div>
+                      {canEditInventory || canDeleteInventory ? (
+                        <div className="flex gap-2 pt-1">
+                          {canEditInventory ? (
+                            <Button variant="outline" size="sm" className="h-8 flex-1 rounded-lg px-2" onClick={() => openEditProductDialog(product.id)}>
+                              <PencilLine className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                          {canDeleteInventory ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 flex-1 rounded-lg border-rose-200 px-2 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                              onClick={() => void handleDeleteProduct(product.id)}
+                              disabled={busyProductId === product.id}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {products.length ? 'No products matched your search.' : 'No products yet — add one to get started.'}
+              </p>
+            )}
           </CardContent>
         </Card>
+
+        {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading products...</CardContent></Card> : null}
 
         <Dialog open={addProductOpen} onOpenChange={setAddProductOpen}>
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
@@ -846,7 +676,7 @@ export function StockOverviewScreen() {
                   <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : editingProductId ? 'Update product' : 'Save product'}</Button>
                 </DialogFooter>
               </form>
-            ) : <p className="text-sm text-muted-foreground">Your current role can view stock but cannot create or edit products.</p>}
+            ) : <p className="text-sm text-muted-foreground">Your current role can view products but cannot create or edit them.</p>}
           </DialogContent>
         </Dialog>
 
@@ -855,7 +685,7 @@ export function StockOverviewScreen() {
             <DialogHeader>
               <DialogTitle>Load Recipe Food starter catalog</DialogTitle>
               <DialogDescription>
-                Creates the Category/SKU structure from the product spec (Mustard Oil, Tejpatta, Suji, Muri, Spice Products) with zero opening stock and zero price — update pricing and stock afterward from the Inventory list.
+                Creates the Category/SKU structure from the product spec (Mustard Oil, Tejpatta, Suji, Muri, Spice Products) with zero opening stock and zero price — update pricing afterward from the Product List.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-5">
@@ -900,10 +730,6 @@ export function StockOverviewScreen() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-
-        {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading inventory...</CardContent></Card> : null}
-
-        <StockControlSection />
       </div>
     </AdminShell>
   )
