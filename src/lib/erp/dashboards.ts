@@ -1,7 +1,7 @@
 // Sections 55-58: Managing Director / Finance / Inventory / Sales Dashboards.
 //
 // These read-only snapshots sit on top of the modules that already own the
-// underlying data (Finance, Manufacturing, Stock, Sales) rather than
+// underlying data (Finance, Stock, Sales) rather than
 // introducing a parallel source of truth. The Chart-of-Accounts balance math
 // (accountBalance/periodTotal) mirrors how the Automatic Accounting Engine
 // posts ledger entries so a dashboard figure always agrees with the books.
@@ -280,8 +280,8 @@ export function buildInventoryDashboard(data: ERPData | null) {
 // ---- Section 55: Managing Director Dashboard (extras) --------------------
 // Supplements buildDashboardSnapshot (Today's Sales, Top Products, Low
 // Stock, order/notification feeds already built there) with the rest of
-// Section 55's bullet list — everything that needs the accounting,
-// manufacturing, or target data those existing helpers don't touch.
+// Section 55's bullet list — everything that needs the accounting or
+// target data those existing helpers don't touch.
 export function buildManagingDirectorExtras(data: ERPData | null) {
   const now = new Date()
   const inMonth = atOrAfter(monthStart(now))
@@ -304,18 +304,6 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
 
   const products = toArray(data?.products)
   const inventoryValue = products.reduce((sum, product) => sum + stockValue(product), 0)
-
-  const productionOrdersThisMonth = toArray(data?.productionOrders).filter(
-    (order) => order.status === 'completed' && inMonth(order.updatedAt)
-  )
-  const production = {
-    orders: productionOrdersThisMonth.length,
-    finishedGoodsQty: productionOrdersThisMonth.reduce((sum, order) => sum + order.finishedGoodsQty, 0),
-  }
-  const productionVariance = {
-    lossQty: productionOrdersThisMonth.reduce((sum, order) => sum + order.productionLossQty, 0),
-    alertCount: productionOrdersThisMonth.filter((order) => order.varianceAlert).length,
-  }
 
   const { cashBalance, bankBalance, totalReceivable, totalPayable } = buildAccountingPosition(data)
   const { grossProfit, netProfit } = buildProfitAndLoss(data, inMonth)
@@ -348,7 +336,6 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     outstanding,
     purchase,
     inventoryValue,
-    production,
     grossProfit,
     netProfit,
     expense,
@@ -360,7 +347,6 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     salesTarget,
     achievementPercent,
     nearExpiryBatches,
-    productionVariance,
   }
 }
 
@@ -594,11 +580,6 @@ export function buildBusinessAlerts(data: ERPData | null): BusinessAlerts {
   if (overdueOrders.length) {
     warning.push({ id: 'overdue-customer', title: 'Overdue Customer', message: `${overdueOrders.length} invoice(s) past their due date with an outstanding balance.` })
   }
-  const varianceOrders = toArray(data?.productionOrders).filter((order) => order.varianceAlert)
-  if (varianceOrders.length) {
-    warning.push({ id: 'production-variance', title: 'Production Variance', message: `${varianceOrders.length} production order(s) exceeded standard loss.` })
-  }
-
   // ---- Normal -------------------------------------------------------------
   const now = new Date()
   const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`

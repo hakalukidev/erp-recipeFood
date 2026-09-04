@@ -10,7 +10,6 @@ import {
   Building2,
   Calculator,
   CheckCheck,
-  Factory,
   History,
   LayoutDashboard,
   Lock,
@@ -101,13 +100,6 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Products, stock control, and warranty-linked inventory',
         href: '/admin/stock/overview',
         icon: Boxes,
-        permission: 'products:view',
-      },
-      {
-        label: 'Manufacturing',
-        description: 'Recipes/BOM, production planning, and cost calculation',
-        href: '/admin/manufacturing',
-        icon: Factory,
         permission: 'products:view',
       },
       {

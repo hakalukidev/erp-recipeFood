@@ -625,106 +625,6 @@ export type StockCountInput = {
   items: Array<{ productId: string; physicalQty: number }>
 }
 
-// ---- Manufacturing / BOM (Section 21) ------------------------------------
-// Sections 22-23: a BOM *is* the Recipe/Formula — every finished product's
-// formula, versioned. Editing one never mutates or deletes the old record
-// (see saveBillOfMaterial in provider.tsx): it writes a brand-new id with
-// version = previous + 1, links back via previousVersionId, and flips the
-// old version's isActive off. Only an approved, active version can be used
-// to plan new production.
-export type BomComponent = {
-  productId: string
-  productName: string
-  quantityPerBatch: number
-  percentage?: number
-}
-
-export type BomApprovalStatus = 'draft' | 'approved' | 'rejected'
-
-export type BillOfMaterialRecord = {
-  id: string
-  formulaCode: string
-  finishedProductId: string
-  finishedProductName: string
-  version: number
-  previousVersionId: string
-  isActive: boolean
-  outputQuantity: number
-  expectedYieldPercentage: number
-  processingLossPercentage: number
-  packagingRequirement: string
-  components: BomComponent[]
-  approvalStatus: BomApprovalStatus
-  approvedBy: string
-  approvedByName: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type BillOfMaterialInput = {
-  finishedProductId: string
-  outputQuantity: number
-  expectedYieldPercentage?: number
-  processingLossPercentage?: number
-  packagingRequirement?: string
-  components: Array<{ productId: string; quantityPerBatch: number; percentage?: number }>
-}
-
-export type ProductionOrderStatus = 'planned' | 'material-issued' | 'completed' | 'cancelled'
-export type ProductionQualityStatus = 'pending' | 'passed' | 'failed'
-
-export type ProductionMaterialLine = {
-  productId: string
-  productName: string
-  requiredQty: number
-  issuedQty: number
-  unitCost: number
-}
-
-// Section 24 (Production Cost): every component is tracked separately so
-// Total Production Cost ÷ Finished Quantity = Unit Production Cost is a
-// real, auditable sum rather than one lump "overhead" figure.
-export type ProductionOrderRecord = {
-  id: string
-  productionNumber: string
-  bomId: string
-  finishedProductId: string
-  finishedProductName: string
-  plannedBatches: number
-  plannedOutputQty: number
-  materials: ProductionMaterialLine[]
-  status: ProductionOrderStatus
-  qualityCheckStatus: ProductionQualityStatus
-  qualityCheckNote: string
-  finishedGoodsQty: number
-  // Section 26: goods produced from a failed QC don't reach sellable stock
-  // — they're recorded here and mirrored into a QcHoldRecord instead.
-  qcHoldQty: number
-  rawMaterialCost: number
-  packagingCost: number
-  directLabourCost: number
-  electricityCost: number
-  gasFuelCost: number
-  factoryOverheadCost: number
-  processingCost: number
-  otherCost: number
-  totalCost: number
-  unitCost: number
-  // Section 25 (Production Loss): planned vs. actual output variance —
-  // the recipe's processingLossPercentage is the "standard loss" this is
-  // compared against.
-  productionLossQty: number
-  productionLossPercentage: number
-  varianceAlert: boolean
-  createdAt: string
-  updatedAt: string
-}
-
-export type ProductionOrderInput = {
-  bomId: string
-  plannedBatches: number
-}
-
 // ---- Rate Card / Costing Sheet --------------------------------------------
 // One order/shipment moving Company → Depot → Dealer, entered ONCE and
 // printable as any of three vouchers from the same record (see
@@ -885,19 +785,6 @@ export type QcHoldRecord = {
   status: QcHoldStatus
   createdAt: string
   updatedAt: string
-}
-
-export type ProductionCompleteInput = {
-  finishedGoodsQty: number
-  qualityCheckStatus: ProductionQualityStatus
-  qualityCheckNote?: string
-  directLabourCost?: number
-  electricityCost?: number
-  gasFuelCost?: number
-  factoryOverheadCost?: number
-  processingCost?: number
-  otherCost?: number
-  qc?: QualityCheckInput
 }
 
 // ---- Sales Return (Section 11) ------------------------------------------
@@ -1206,8 +1093,6 @@ export type ERPData = {
   batches: Record<string, BatchRecord>
   stockAdjustments: Record<string, StockAdjustmentRecord>
   stockCounts: Record<string, StockCountRecord>
-  billOfMaterials: Record<string, BillOfMaterialRecord>
-  productionOrders: Record<string, ProductionOrderRecord>
   rateCards: Record<string, RateCardRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
