@@ -22,7 +22,6 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   ShoppingCart,
-  Truck,
   Users,
   Wallet,
   X,
@@ -101,13 +100,6 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/stock/overview',
         icon: Boxes,
         permission: 'products:view',
-      },
-      {
-        label: 'Suppliers & Imports',
-        description: 'Purchase orders, LC tracking, and landed cost',
-        href: '/admin/suppliers',
-        icon: Truck,
-        permission: 'suppliers:view',
       },
       {
         label: 'Customers (CRM)',
@@ -461,23 +453,6 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     batches.slice(0, limit).forEach((batch) =>
       results.push({ id: batch.id, category: 'Batch', title: batch.batchNumber, subtitle: batch.productName, href: '/admin/stock/overview' })
     )
-
-    const purchaseOrders = toArray(data.purchaseOrders).filter(
-      (po) =>
-        po.poNumber.toLowerCase().includes(term) ||
-        po.supplierName.toLowerCase().includes(term) ||
-        (po.grnNumber ?? '').toLowerCase().includes(term)
-    )
-    purchaseOrders.slice(0, limit).forEach((po) => {
-      const matchedGrn = po.grnNumber && po.grnNumber.toLowerCase().includes(term)
-      results.push({
-        id: po.id,
-        category: matchedGrn ? 'GRN' : 'PO',
-        title: matchedGrn ? po.grnNumber : po.poNumber,
-        subtitle: po.supplierName,
-        href: '/admin/suppliers',
-      })
-    })
 
     const payments = toArray(data.bankTransactions).filter(
       (transaction) =>

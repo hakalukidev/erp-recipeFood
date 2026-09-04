@@ -196,10 +196,6 @@ export function buildFinanceDashboard(data: ERPData | null) {
   const { netProfit } = buildProfitAndLoss(data, inMonth)
   const cashFlow = cashFlowForPeriod(data, inMonth)
 
-  const duePayment = toArray(data?.purchaseOrders)
-    .filter((purchaseOrder) => purchaseOrder.status !== 'cancelled')
-    .reduce((sum, purchaseOrder) => sum + purchaseOrder.due, 0)
-
   return {
     cashBalance,
     bankBalance,
@@ -210,7 +206,11 @@ export function buildFinanceDashboard(data: ERPData | null) {
     monthlyExpense,
     profit: netProfit,
     cashFlow,
-    duePayment,
+    // Kept as its own field (rather than reusing totalPayable directly in
+    // the UI) so callers don't need to know it now mirrors the ledger's
+    // accounts-payable balance — the purchase-order-specific due total this
+    // used to sum no longer exists.
+    duePayment: totalPayable,
   }
 }
 
@@ -298,10 +298,6 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     .filter((entry) => inMonth(entry.collectionDate))
     .reduce((sum, entry) => sum + entry.amount, 0)
 
-  const purchase = toArray(data?.purchases)
-    .filter((entry) => inMonth(entry.createdAt))
-    .reduce((sum, entry) => sum + entry.total, 0)
-
   const products = toArray(data?.products)
   const inventoryValue = products.reduce((sum, product) => sum + stockValue(product), 0)
 
@@ -334,7 +330,6 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     yearlySales,
     collection,
     outstanding,
-    purchase,
     inventoryValue,
     grossProfit,
     netProfit,

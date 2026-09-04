@@ -47,36 +47,6 @@ export type LoginHistoryRecord = {
   createdAt: string
 }
 
-export type SupplierRecord = {
-  id: string
-  supplierCode?: string
-  name: string
-  company: string
-  contactPerson?: string
-  phone: string
-  email: string
-  location: string
-  productCategory?: string
-  supplierType: 'local' | 'foreign' | 'importer'
-  country: string
-  lcNumber: string
-  lcStatus: 'not-required' | 'pending' | 'opened' | 'released' | 'closed'
-  productCost: number
-  shippingCost: number
-  customsDuty: number
-  otherCost: number
-  currency: string
-  paymentTerms?: string
-  creditDays?: number
-  openingBalance?: number
-  bankAccount?: string
-  supplierRating?: number
-  status?: 'active' | 'inactive'
-  notes: string
-  createdAt: string
-  updatedAt: string
-}
-
 export type CustomerType = 'retailer' | 'wholesaler' | 'distributor' | 'dealer' | 'corporate'
 
 export type CustomerRecord = {
@@ -138,7 +108,6 @@ export type ProductRecord = {
   conversionRatio?: number
   packSize?: string
   weight?: number
-  supplierId: string
   purchasePrice: number
   sellingPrice: number
   wholesalePrice: number
@@ -222,10 +191,9 @@ export type OrderRecord = {
 }
 
 // One ledger entry per debit or credit leg of the auto-posted double entry
-// (see createOrder / cancelOrder / receivePurchaseOrder / createSalesReturn
-// in provider.tsx). `orderId`/`billNumber` double as a generic reference id
-// and document number — a sales order for invoice/collection entries, a
-// purchase order for GRN/accounts-payable entries, a sales return for
+// (see createOrder / cancelOrder / createSalesReturn in provider.tsx).
+// `orderId`/`billNumber` double as a generic reference id and document
+// number — a sales order for invoice/collection entries, a sales return for
 // return-adjustment entries, an expense for expense-payment entries, or a
 // journal entry for a manual posting (see Section 27-29).
 //
@@ -420,148 +388,14 @@ export type BankTransactionInput = {
   note?: string
 }
 
-// ---- Purchase Requisition (Section 13) ----------------------------------
-// System-generated whenever a product's stock falls below its reorder
-// level (minStock) — see maybeCreatePurchaseRequisition in provider.tsx.
-export type PurchaseRequisitionStatus = 'open' | 'ordered' | 'dismissed'
-
-export type PurchaseRequisitionRecord = {
-  id: string
-  productId: string
-  productName: string
-  currentStock: number
-  reorderLevel: number
-  suggestedQty: number
-  status: PurchaseRequisitionStatus
-  note: string
-  createdAt: string
-  updatedAt: string
-}
-
-// ---- Purchase Order / GRN (Sections 12 & 14) ----------------------------
-export type PurchaseOrderItem = {
-  productId: string
-  productName: string
-  quantity: number
-  unitCost: number
-  receivedQuantity: number
-  rejectedQuantity: number
-  batchNumber?: string
-  manufacturingDate?: string
-  expiryDate?: string
-}
-
-export type PurchaseOrderStatus = 'ordered' | 'received' | 'cancelled'
-export type QualityCheckStatus = 'pending' | 'passed' | 'failed' | 'partial'
-export type BillStatus = 'unbilled' | 'billed' | 'paid'
-
-// ---- Purchase Approval Workflow (Section 48) -----------------------------
-// Requester (implicit — whoever submits the PO) → Department Head →
-// Purchase Manager → Finance → Management. A purchase order can only be
-// received (goods/GRN take effect) once it has cleared every stage —
-// "Approval অনুযায়ী Purchase Order হবে".
-export type PurchaseApprovalStage = 'department_head' | 'purchase_manager' | 'finance' | 'management' | 'completed'
-
-export type PurchaseOrderApproval = {
-  stage: Exclude<PurchaseApprovalStage, 'completed'>
-  status: 'approved' | 'rejected'
-  byUserId: string
-  byUserName: string
-  note: string
-  at: string
-}
-
-export type PurchaseOrderRecord = {
-  id: string
-  poNumber: string
-  requisitionId?: string
-  supplierId: string
-  supplierName: string
-  items: PurchaseOrderItem[]
-  currency: string
-  subtotal: number
-  status: PurchaseOrderStatus
-  qualityCheckStatus: QualityCheckStatus
-  qualityCheckNote: string
-  grnNumber: string
-  // GRN cost roll-up (Section 14): landed cost = goods + transport + other.
-  transportCost: number
-  otherCost: number
-  totalLandedCost: number
-  billStatus: BillStatus
-  paid: number
-  due: number
-  expectedDate: string
-  approvalStatus: ApprovalStatus
-  approvalStage: PurchaseApprovalStage
-  approvals: PurchaseOrderApproval[]
-  createdAt: string
-  updatedAt: string
-}
-
-export type PurchaseOrderInput = {
-  requisitionId?: string
-  supplierId: string
-  items: Array<{ productId: string; quantity: number; unitCost: number }>
-  currency?: string
-  expectedDate?: string
-}
-
-export type PurchaseReceiveInput = {
-  items: Array<{
-    productId: string
-    receivedQuantity: number
-    rejectedQuantity?: number
-    batchNumber?: string
-    manufacturingDate?: string
-    expiryDate?: string
-  }>
-  qualityCheckNote?: string
-  grnNumber?: string
-  transportCost?: number
-  otherCost?: number
-  qc?: QualityCheckInput
-}
-
-// ---- Purchase Return (Section 30 — Supplier Payable ledger) -------------
-// The supplier-side counterpart of Sales Return: goods already received
-// (and stocked) on a GRN'd purchase order go back to the supplier, stock
-// comes back out, and whatever's still unpaid on that PO is reduced.
-export type PurchaseReturnItem = {
-  productId: string
-  productName: string
-  quantity: number
-  unitCost: number
-}
-
-export type PurchaseReturnRecord = {
-  id: string
-  returnNumber: string
-  purchaseOrderId: string
-  poNumber: string
-  supplierId: string
-  supplierName: string
-  items: PurchaseReturnItem[]
-  totalValue: number
-  reason: string
-  processedBy: string
-  processedByName: string
-  createdAt: string
-}
-
-export type PurchaseReturnInput = {
-  purchaseOrderId: string
-  items: Array<{ productId: string; quantity: number }>
-  reason?: string
-}
-
 // ---- Batches / FIFO-FEFO (Section 18) -----------------------------------
-// Created at GRN time (see receivePurchaseOrder) whenever a received line
-// carries a batch number or expiry date. A sale now genuinely consumes the
-// soonest-expiring batch(es) first (see consumeBatchesFefo/createOrder in
-// provider.tsx) — quantity here decreases as an order is created/edited and
-// is restored on cancel/edit-away, same reverse-then-repost pattern as the
-// rest of the sale's stock/ledger effects.
+// Historically created at GRN time whenever a received line carried a batch
+// number or expiry date (the supplier/purchase-order module that produced
+// these has since been removed). A sale still consumes the soonest-expiring
+// batch(es) first (see consumeBatchesFefo/createOrder in provider.tsx) —
+// quantity here decreases as an order is created/edited and is restored on
+// cancel/edit-away, same reverse-then-repost pattern as the rest of the
+// sale's stock/ledger effects.
 export type BatchRecord = {
   id: string
   productId: string
@@ -731,8 +565,10 @@ export type RateCardInput = {
 }
 
 // ---- Quality Control (Section 26) ---------------------------------------
-// One QC module, used from both Production (completeProduction) and
-// Purchase (receivePurchaseOrder) — the detailed lab-test parameters.
+// One QC module — the detailed lab-test parameters. Production
+// (completeProduction) is the only source that creates these today; 'purchase'
+// is kept only so historical records from the removed supplier/purchase-order
+// module still type-check.
 export type QcSourceType = 'purchase' | 'production'
 export type QcTestResult = 'pass' | 'fail'
 
@@ -849,20 +685,6 @@ export type CollectionInput = {
   amount: number
   method: CollectionMethod
   collectionDate?: string
-}
-
-export type PurchaseRecord = {
-  id: string
-  productId: string
-  productName: string
-  supplierId: string
-  supplierName: string
-  quantity: number
-  unitCost: number
-  currency: string
-  total: number
-  status: 'pending' | 'received'
-  createdAt: string
 }
 
 export type NotificationRecord = {
@@ -1076,7 +898,6 @@ export type ERPData = {
   permissions: Record<string, PermissionDefinition>
   roles: Record<string, RoleRecord>
   users: Record<string, UserRecord>
-  suppliers: Record<string, SupplierRecord>
   customers: Record<string, CustomerRecord>
   products: Record<string, ProductRecord>
   orders: Record<string, OrderRecord>
@@ -1085,9 +906,6 @@ export type ERPData = {
   journalEntries: Record<string, JournalEntryRecord>
   bankAccounts: Record<string, BankAccountRecord>
   bankTransactions: Record<string, BankTransactionRecord>
-  purchaseRequisitions: Record<string, PurchaseRequisitionRecord>
-  purchaseOrders: Record<string, PurchaseOrderRecord>
-  purchaseReturns: Record<string, PurchaseReturnRecord>
   salesReturns: Record<string, SalesReturnRecord>
   collections: Record<string, CollectionRecord>
   batches: Record<string, BatchRecord>
@@ -1096,7 +914,6 @@ export type ERPData = {
   rateCards: Record<string, RateCardRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
-  purchases: Record<string, PurchaseRecord>
   notifications: Record<string, NotificationRecord>
   activities: Record<string, ActivityRecord>
   loginHistory: Record<string, LoginHistoryRecord>
@@ -1142,7 +959,6 @@ export type ProductInput = {
   conversionRatio?: number
   packSize?: string
   weight?: number
-  supplierId?: string
   purchasePrice: number
   sellingPrice: number
   wholesalePrice?: number
@@ -1191,41 +1007,6 @@ export type CustomerInput = {
   previousBillNumber?: string
   previousPurchaseDetails?: string
   previousPurchaseAmount?: number
-}
-
-export type SupplierInput = {
-  supplierCode?: string
-  name: string
-  company?: string
-  contactPerson?: string
-  phone: string
-  email?: string
-  location?: string
-  productCategory?: string
-  supplierType?: SupplierRecord['supplierType']
-  country?: string
-  lcNumber?: string
-  lcStatus?: SupplierRecord['lcStatus']
-  productCost?: number
-  shippingCost?: number
-  customsDuty?: number
-  otherCost?: number
-  currency?: string
-  paymentTerms?: string
-  creditDays?: number
-  openingBalance?: number
-  bankAccount?: string
-  supplierRating?: number
-  status?: SupplierRecord['status']
-  notes?: string
-}
-
-export type PurchaseInput = {
-  productId: string
-  quantity: number
-  unitCost: number
-  supplierId: string
-  currency: string
 }
 
 export type OrderInput = {

@@ -114,16 +114,11 @@ export default function FinancePage() {
     () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.orders]
   )
-  const purchases = useMemo(
-    () => toArray(data?.purchases).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [data?.purchases]
-  )
   const expenses = useMemo(
     () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
     [data?.expenses]
   )
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
-  const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   // Section 56 — live balances, independent of the reporting-period picker
   // above (a dashboard is a snapshot, not something you scope by date).
   const financeDashboard = useMemo(() => buildFinanceDashboard(data), [data])
@@ -188,32 +183,19 @@ export default function FinancePage() {
     )
   }, [mode, orders, selectedDate, selectedMonth])
 
-  const filteredPurchases = useMemo(() => {
-    return purchases.filter((purchase) =>
-      mode === 'daily' ? isSameDate(purchase.createdAt, selectedDate) : isSameMonth(purchase.createdAt, selectedMonth)
-    )
-  }, [mode, purchases, selectedDate, selectedMonth])
-
   const finance = useMemo(() => {
     const revenue = filteredOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
     const cashIn = filteredOrders.reduce((sum, order) => sum + order.paid, 0)
     const receivable = filteredOrders.reduce((sum, order) => sum + order.due, 0)
     const cogs = filteredOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
-    const purchaseExpense = filteredPurchases.reduce((sum, purchase) => sum + purchase.total, 0)
-    const importCharges = suppliers.reduce(
-      (sum, supplier) => sum + supplier.shippingCost + supplier.customsDuty + supplier.otherCost,
-      0
-    )
     const grossProfit = revenue - cogs
-    const netCashFlow = cashIn - purchaseExpense - expenseTotal
+    const netCashFlow = cashIn - expenseTotal
 
     return {
       revenue,
       cashIn,
       receivable,
       cogs,
-      purchaseExpense,
-      importCharges,
       grossProfit,
       netCashFlow,
       invoices: filteredOrders.length,
@@ -222,7 +204,7 @@ export default function FinancePage() {
         0
       ),
     }
-  }, [filteredOrders, filteredPurchases, suppliers, expenseTotal])
+  }, [filteredOrders, expenseTotal])
 
   const monthlyRows = useMemo(() => {
     const year = Number(selectedMonth.slice(0, 4)) || new Date().getFullYear()
@@ -230,12 +212,10 @@ export default function FinancePage() {
     return Array.from({ length: 12 }).map((_, index) => {
       const monthKey = `${year}-${String(index + 1).padStart(2, '0')}`
       const monthOrders = orders.filter((order) => isSameMonth(order.createdAt, monthKey))
-      const monthPurchases = purchases.filter((purchase) => isSameMonth(purchase.createdAt, monthKey))
       const revenue = monthOrders.reduce((sum, order) => sum + getOrderNetSales(order), 0)
       const cash = monthOrders.reduce((sum, order) => sum + order.paid, 0)
       const due = monthOrders.reduce((sum, order) => sum + order.due, 0)
       const cogs = monthOrders.reduce((sum, order) => sum + getOrderCost(order), 0)
-      const expense = monthPurchases.reduce((sum, purchase) => sum + purchase.total, 0)
 
       return {
         key: monthKey,
@@ -245,11 +225,10 @@ export default function FinancePage() {
         cash,
         due,
         cogs,
-        expense,
         profit: revenue - cogs,
       }
     })
-  }, [orders, purchases, selectedMonth])
+  }, [orders, selectedMonth])
 
   function buildInvoiceHtml(order: OrderRecord) {
     const customer = customers.find((entry) => entry.id === order.customerId)
@@ -470,8 +449,8 @@ export default function FinancePage() {
             {[
               ['Invoices', finance.invoices.toLocaleString('en-BD'), `${finance.unitsSold} units sold`],
               ['COGS', formatCurrency(finance.cogs, currency), 'Product purchase cost'],
-              ['Purchase expense', formatCurrency(finance.purchaseExpense, currency), 'Inventory purchases in period'],
-              ['Net cash flow', formatCurrency(finance.netCashFlow, currency), 'Cash received minus purchases'],
+              ['Gross profit', formatCurrency(finance.grossProfit, currency), 'Revenue minus COGS'],
+              ['Net cash flow', formatCurrency(finance.netCashFlow, currency), 'Cash received minus expenses'],
             ].map(([label, value, note]) => (
               <Card key={label} className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
@@ -491,7 +470,7 @@ export default function FinancePage() {
           <SectionHeader
             icon={ReceiptText}
             title="Sales & receivables"
-            description="Invoice ledger alongside expense, import, and payable balances."
+            description="Invoice ledger alongside expense and receivable balances."
           />
 
           <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
@@ -557,30 +536,16 @@ export default function FinancePage() {
             <Card className="border-border/70 shadow-sm">
               <CardHeader>
                 <CardTitle>Expense and payable view</CardTitle>
-                <CardDescription>Purchase expenses, supplier import charges, and outstanding receivables.</CardDescription>
+                <CardDescription>Period expenses and outstanding customer receivables.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-                  <p className="text-sm text-muted-foreground">Supplier import charges</p>
-                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(finance.importCharges, currency)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Shipping + customs + other costs</p>
+                  <p className="text-sm text-muted-foreground">Total expenses in period</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(expenseTotal, currency)}</p>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Total customer ledger due</p>
                   <p className="mt-2 text-2xl font-semibold">{formatCurrency(customers.reduce((sum, customer) => sum + customer.due, 0), currency)}</p>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-                  <p className="text-sm text-muted-foreground">Total supplier landed cost</p>
-                  <p className="mt-2 text-2xl font-semibold">
-                    {formatCurrency(
-                      suppliers.reduce(
-                        (sum, supplier) =>
-                          sum + supplier.productCost + supplier.shippingCost + supplier.customsDuty + supplier.otherCost,
-                        0
-                      ),
-                      currency
-                    )}
-                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -793,7 +758,6 @@ export default function FinancePage() {
                       <TableHead>Cash</TableHead>
                       <TableHead>Due</TableHead>
                       <TableHead>COGS</TableHead>
-                      <TableHead>Purchases</TableHead>
                       <TableHead>Profit/Loss</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -806,7 +770,6 @@ export default function FinancePage() {
                         <TableCell>{formatCurrency(row.cash, currency)}</TableCell>
                         <TableCell>{formatCurrency(row.due, currency)}</TableCell>
                         <TableCell>{formatCurrency(row.cogs, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.expense, currency)}</TableCell>
                         <TableCell className={cn(row.profit < 0 && 'text-destructive')}>{formatCurrency(row.profit, currency)}</TableCell>
                       </TableRow>
                     ))}

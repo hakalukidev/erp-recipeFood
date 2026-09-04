@@ -80,7 +80,6 @@ export function hasPermission(data: ERPData | null, user: UserRecord | null, per
 
 export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
   const orders = sortByCreatedAtDesc(toArray(data?.orders))
-  const purchases = sortByCreatedAtDesc(toArray(data?.purchases))
   const products = toArray(data?.products)
   const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
   const notifications = rawNotifications.filter((item) => {
@@ -92,9 +91,7 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
   const activities = sortByCreatedAtDesc(toArray(data?.activities))
 
   const todayOrders = orders.filter((order) => isSameCalendarDay(order.createdAt))
-  const todayPurchases = purchases.filter((purchase) => isSameCalendarDay(purchase.createdAt))
   const todaySales = todayOrders.reduce((total, order) => total + order.total, 0)
-  const todayPurchase = todayPurchases.reduce((total, purchase) => total + purchase.total, 0)
   const todayCost = todayOrders.reduce(
     (total, order) =>
       total +
@@ -140,17 +137,10 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
       return `${orderDate.getFullYear()}-${orderDate.getMonth()}` === key
     })
     const revenue = monthOrders.reduce((sum, order) => sum + order.total, 0)
-    const expense = purchases
-      .filter((purchase) => {
-        const purchaseDate = new Date(purchase.createdAt)
-        return `${purchaseDate.getFullYear()}-${purchaseDate.getMonth()}` === key
-      })
-      .reduce((sum, purchase) => sum + purchase.total, 0)
 
     return {
       month: label,
       revenue,
-      expense,
       orders: monthOrders.length,
     }
   })
@@ -158,9 +148,7 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
   return {
     metrics: {
       todaySales,
-      todayPurchase,
       todayProfit: todaySales - todayCost,
-      todayExpense: todayPurchase,
       pendingDelivery: orders.filter((order) => ['pending', 'ready'].includes(order.status)).length,
       pendingPayment: orders.filter((order) => order.due > 0).length,
       todaysOrders: todayOrders.length,
@@ -231,7 +219,7 @@ export function buildPaymentStatusCounts(data: ERPData | null) {
 
 export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
   const orders = toArray(data?.orders)
-  const purchases = toArray(data?.purchases)
+  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
 
   if (range === '7d' || range === '30d') {
     const days = range === '7d' ? 7 : 30
@@ -243,12 +231,12 @@ export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
       const label = date.toLocaleDateString('en-BD', { day: 'numeric', month: 'short' })
 
       const dayOrders = orders.filter((order) => new Date(order.createdAt).toDateString() === key)
-      const dayPurchases = purchases.filter((purchase) => new Date(purchase.createdAt).toDateString() === key)
+      const dayExpenses = expenses.filter((expense) => new Date(expense.date).toDateString() === key)
 
       return {
         month: label,
         revenue: dayOrders.reduce((sum, order) => sum + order.total, 0),
-        expense: dayPurchases.reduce((sum, purchase) => sum + purchase.total, 0),
+        expense: dayExpenses.reduce((sum, expense) => sum + expense.amount, 0),
         orders: dayOrders.length,
       }
     })
@@ -265,15 +253,15 @@ export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
       const orderDate = new Date(order.createdAt)
       return `${orderDate.getFullYear()}-${orderDate.getMonth()}` === key
     })
-    const monthPurchases = purchases.filter((purchase) => {
-      const purchaseDate = new Date(purchase.createdAt)
-      return `${purchaseDate.getFullYear()}-${purchaseDate.getMonth()}` === key
+    const monthExpenses = expenses.filter((expense) => {
+      const expenseDate = new Date(expense.date)
+      return `${expenseDate.getFullYear()}-${expenseDate.getMonth()}` === key
     })
 
     return {
       month: label,
       revenue: monthOrders.reduce((sum, order) => sum + order.total, 0),
-      expense: monthPurchases.reduce((sum, purchase) => sum + purchase.total, 0),
+      expense: monthExpenses.reduce((sum, expense) => sum + expense.amount, 0),
       orders: monthOrders.length,
     }
   })

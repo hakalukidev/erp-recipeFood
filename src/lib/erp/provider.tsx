@@ -55,19 +55,9 @@ import type {
   OrderRecord,
   ProductInput,
   ProductRecord,
-  PurchaseInput,
-  PurchaseApprovalStage,
-  PurchaseOrderApproval,
-  PurchaseOrderInput,
-  PurchaseOrderRecord,
-  PurchaseReceiveInput,
-  PurchaseRequisitionRecord,
-  PurchaseReturnInput,
-  PurchaseReturnRecord,
   QcHoldRecord,
   QualityCheckInput,
   QualityCheckRecord,
-  QualityCheckStatus,
   RateCardInput,
   RateCardLineItem,
   RateCardRecord,
@@ -82,8 +72,6 @@ import type {
   StockAdjustmentRecord,
   StockCountInput,
   StockCountRecord,
-  SupplierInput,
-  SupplierRecord,
   UserInput,
   UserRecord,
 } from '@/lib/erp/types'
@@ -126,22 +114,12 @@ type ERPContextValue = {
   deleteRole: (roleId: string) => Promise<void>
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
-  saveSupplier: (input: SupplierInput, supplierId?: string) => Promise<string>
-  deleteSupplier: (supplierId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
   deleteProduct: (productId: string) => Promise<void>
   createStockAdjustmentRequest: (input: StockAdjustmentInput) => Promise<string>
   approveStockAdjustment: (adjustmentId: string) => Promise<void>
   rejectStockAdjustment: (adjustmentId: string) => Promise<void>
   createStockCount: (input: StockCountInput) => Promise<string>
-  recordPurchase: (input: PurchaseInput) => Promise<void>
-  dismissPurchaseRequisition: (requisitionId: string) => Promise<void>
-  createPurchaseOrder: (input: PurchaseOrderInput) => Promise<string>
-  updatePurchaseOrderApproval: (purchaseOrderId: string, decision: 'approved' | 'rejected', note?: string) => Promise<void>
-  receivePurchaseOrder: (purchaseOrderId: string, input: PurchaseReceiveInput) => Promise<void>
-  cancelPurchaseOrder: (purchaseOrderId: string) => Promise<void>
-  recordSupplierPayment: (purchaseOrderId: string, amount: number) => Promise<void>
-  createPurchaseReturn: (input: PurchaseReturnInput) => Promise<string>
   createSalesReturn: (input: SalesReturnInput) => Promise<string>
   recordCollection: (input: CollectionInput) => Promise<string>
   releaseQcHold: (qcHoldId: string) => Promise<void>
@@ -208,7 +186,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'permissions',
   'roles',
   'users',
-  'suppliers',
   'customers',
   'products',
   'orders',
@@ -217,9 +194,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'journalEntries',
   'bankAccounts',
   'bankTransactions',
-  'purchaseRequisitions',
-  'purchaseOrders',
-  'purchaseReturns',
   'salesReturns',
   'collections',
   'batches',
@@ -228,7 +202,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'rateCards',
   'qualityChecks',
   'qcHolds',
-  'purchases',
   'notifications',
   'activities',
   'loginHistory',
@@ -374,45 +347,6 @@ function normalizeCustomerMap(customers?: Record<string, CustomerRecord> | null)
   )
 }
 
-function normalizeSupplierRecord(supplier: SupplierRecord): SupplierRecord {
-  const now = new Date().toISOString()
-
-  return {
-    ...supplier,
-    supplierCode: supplier.supplierCode || '',
-    company: supplier.company || supplier.name || 'Supplier',
-    contactPerson: supplier.contactPerson || '',
-    phone: supplier.phone || '',
-    email: supplier.email || '',
-    location: supplier.location || '',
-    productCategory: supplier.productCategory || '',
-    supplierType: supplier.supplierType ?? 'local',
-    country: supplier.country || 'Bangladesh',
-    lcNumber: supplier.lcNumber || '',
-    lcStatus: supplier.lcStatus ?? 'not-required',
-    productCost: Number(supplier.productCost ?? 0),
-    shippingCost: Number(supplier.shippingCost ?? 0),
-    customsDuty: Number(supplier.customsDuty ?? 0),
-    otherCost: Number(supplier.otherCost ?? 0),
-    currency: supplier.currency || 'BDT',
-    paymentTerms: supplier.paymentTerms || '',
-    creditDays: Number(supplier.creditDays ?? 0),
-    openingBalance: Number(supplier.openingBalance ?? 0),
-    bankAccount: supplier.bankAccount || '',
-    supplierRating: Number(supplier.supplierRating ?? 0),
-    status: supplier.status ?? 'active',
-    notes: supplier.notes || '',
-    createdAt: supplier.createdAt || now,
-    updatedAt: supplier.updatedAt || supplier.createdAt || now,
-  }
-}
-
-function normalizeSupplierMap(suppliers?: Record<string, SupplierRecord> | null) {
-  return Object.fromEntries(
-    Object.entries(suppliers ?? {}).map(([id, supplier]) => [id, normalizeSupplierRecord(supplier)])
-  )
-}
-
 function normalizeProductRecord(product: ProductRecord): ProductRecord {
   return {
     ...product,
@@ -471,53 +405,6 @@ function normalizeExpenseMap(expenses?: Record<string, ExpenseRecord> | null) {
   return Object.fromEntries(
     Object.entries(expenses ?? {}).map(([id, expense]) => [id, normalizeExpenseRecord(expense)])
   )
-}
-
-// Section 48 — purchase orders created before the Purchase Approval
-// Workflow existed already went straight from Requester to Received under
-// the old flow; default them to fully "approved" so they don't retroactively
-// get blocked from being received.
-function normalizePurchaseOrderRecord(purchaseOrder: PurchaseOrderRecord): PurchaseOrderRecord {
-  return {
-    ...purchaseOrder,
-    approvalStatus: purchaseOrder.approvalStatus ?? 'approved',
-    approvalStage: purchaseOrder.approvalStage ?? 'completed',
-    approvals: purchaseOrder.approvals ?? [],
-  }
-}
-
-function normalizePurchaseOrderMap(purchaseOrders?: Record<string, PurchaseOrderRecord> | null) {
-  return Object.fromEntries(
-    Object.entries(purchaseOrders ?? {}).map(([id, purchaseOrder]) => [id, normalizePurchaseOrderRecord(purchaseOrder)])
-  )
-}
-
-// Section 48 — Purchase Approval Workflow chain, in order. Each stage is
-// gated on the closest existing permission this codebase already has (there
-// is no per-role "Department Head" / "Purchase Manager" / "Management"
-// permission catalog, and no role-edit UI to grant a brand-new one — see
-// the Sales/Expense approval gates for the same constraint), so Department
-// Head and Purchase Manager share suppliers:edit while still being recorded
-// as two distinct sign-offs in the audit trail.
-export const PURCHASE_APPROVAL_STAGE_ORDER: Array<Exclude<PurchaseApprovalStage, 'completed'>> = [
-  'department_head',
-  'purchase_manager',
-  'finance',
-  'management',
-]
-
-export const PURCHASE_APPROVAL_STAGE_LABEL: Record<Exclude<PurchaseApprovalStage, 'completed'>, string> = {
-  department_head: 'Department Head',
-  purchase_manager: 'Purchase Manager',
-  finance: 'Finance',
-  management: 'Management',
-}
-
-export const PURCHASE_APPROVAL_STAGE_PERMISSION: Record<Exclude<PurchaseApprovalStage, 'completed'>, string> = {
-  department_head: 'suppliers:edit',
-  purchase_manager: 'suppliers:edit',
-  finance: 'finance:edit',
-  management: 'orders:approve',
 }
 
 // Cost of Goods Sold for an order — sum of each line's cost price at the
@@ -722,55 +609,6 @@ async function checkBudgetOverrun(
   }
 }
 
-// Section 13 (Purchase Requisition): whenever a stock-moving action leaves a
-// product below its reorder level (minStock), the system should auto-flag
-// it — and clear the flag once a later receipt brings stock back up. Called
-// from every place stock moves (sales, edits, purchase receipts). Returns
-// the requisition it just opened, if any, so the caller can notify about it.
-function syncPurchaseRequisitionForStock(
-  data: ERPData,
-  product: ProductRecord,
-  nextStock: number,
-  updates: Record<string, unknown>
-): PurchaseRequisitionRecord | null {
-  const existingOpen = Object.values(data.purchaseRequisitions).find(
-    (requisition) => requisition.productId === product.id && requisition.status === 'open'
-  )
-  const now = new Date().toISOString()
-
-  if (nextStock < product.minStock) {
-    if (existingOpen) {
-      updates[`purchaseRequisitions/${existingOpen.id}/currentStock`] = nextStock
-      return null
-    }
-
-    const id = createId('requisition')
-    const suggestedQty = Math.max(product.maxStock - nextStock, product.minStock * 2 - nextStock, 1)
-    const requisition: PurchaseRequisitionRecord = {
-      id,
-      productId: product.id,
-      productName: product.name,
-      currentStock: nextStock,
-      reorderLevel: product.minStock,
-      suggestedQty,
-      status: 'open',
-      note: `${product.name} stock below reorder level.`,
-      createdAt: now,
-      updatedAt: now,
-    }
-    updates[`purchaseRequisitions/${id}`] = requisition
-    return requisition
-  }
-
-  if (existingOpen) {
-    updates[`purchaseRequisitions/${existingOpen.id}/status`] = 'dismissed'
-    updates[`purchaseRequisitions/${existingOpen.id}/note`] = 'Stock replenished above reorder level.'
-    updates[`purchaseRequisitions/${existingOpen.id}/updatedAt`] = now
-  }
-
-  return null
-}
-
 // A single write batch can touch the same batch record's quantity more than
 // once (e.g. updateOrder releasing the old allocation and consuming a new
 // one in the same update) — read back whatever this batch already staged so
@@ -853,7 +691,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     permissions: DEFAULT_ERP_DATA.permissions,
     roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
     users: source.users ?? {},
-    suppliers: normalizeSupplierMap(source.suppliers),
     customers: normalizeCustomerMap(source.customers),
     products: normalizeProductMap(source.products),
     orders: normalizeOrderMap(source.orders),
@@ -862,9 +699,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     journalEntries: source.journalEntries ?? {},
     bankAccounts: source.bankAccounts ?? {},
     bankTransactions: source.bankTransactions ?? {},
-    purchaseRequisitions: source.purchaseRequisitions ?? {},
-    purchaseOrders: normalizePurchaseOrderMap(source.purchaseOrders),
-    purchaseReturns: source.purchaseReturns ?? {},
     salesReturns: source.salesReturns ?? {},
     collections: source.collections ?? {},
     batches: source.batches ?? {},
@@ -873,7 +707,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     rateCards: source.rateCards ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
-    purchases: source.purchases ?? {},
     notifications: source.notifications ?? {},
     activities: source.activities ?? {},
     loginHistory: source.loginHistory ?? {},
@@ -964,7 +797,6 @@ function normalizeProductInput(input: ProductInput) {
     conversionRatio: Math.max(input.conversionRatio ?? 1, 0),
     packSize: input.packSize?.trim() ?? '',
     weight: Math.max(input.weight ?? 0, 0),
-    supplierId: input.supplierId?.trim() ?? '',
     purchasePrice: input.purchasePrice,
     sellingPrice: input.sellingPrice,
     wholesalePrice: input.wholesalePrice ?? input.sellingPrice,
@@ -1015,35 +847,6 @@ function normalizeCustomerInput(input: CustomerInput) {
     previousBillNumber: input.previousBillNumber?.trim() ?? '',
     previousPurchaseDetails: input.previousPurchaseDetails?.trim() ?? '',
     previousPurchaseAmount: Math.max(input.previousPurchaseAmount ?? 0, 0),
-  }
-}
-
-function normalizeSupplierInput(input: SupplierInput) {
-  return {
-    supplierCode: input.supplierCode?.trim() ?? '',
-    name: input.name.trim(),
-    company: input.company?.trim() || input.name.trim(),
-    contactPerson: input.contactPerson?.trim() ?? '',
-    phone: input.phone.trim(),
-    email: input.email?.trim() ?? '',
-    location: input.location?.trim() ?? '',
-    productCategory: input.productCategory?.trim() ?? '',
-    supplierType: input.supplierType ?? 'local',
-    country: input.country?.trim() || 'Bangladesh',
-    lcNumber: input.lcNumber?.trim() ?? '',
-    lcStatus: input.lcStatus ?? 'not-required',
-    productCost: Math.max(input.productCost ?? 0, 0),
-    shippingCost: Math.max(input.shippingCost ?? 0, 0),
-    customsDuty: Math.max(input.customsDuty ?? 0, 0),
-    otherCost: Math.max(input.otherCost ?? 0, 0),
-    currency: input.currency?.trim().toUpperCase() || 'BDT',
-    paymentTerms: input.paymentTerms?.trim() ?? '',
-    creditDays: Math.max(input.creditDays ?? 0, 0),
-    openingBalance: Math.max(input.openingBalance ?? 0, 0),
-    bankAccount: input.bankAccount?.trim() ?? '',
-    supplierRating: Math.min(Math.max(input.supplierRating ?? 0, 0), 5),
-    status: input.status ?? 'active',
-    notes: input.notes?.trim() ?? '',
   }
 }
 
@@ -1513,10 +1316,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('SKU or model code is required.')
     }
 
-    if (normalized.supplierId && !data.suppliers[normalized.supplierId]) {
-      throw new Error('Selected supplier was not found.')
-    }
-
     const db = getDatabaseOrThrow()
     const existingProduct = productId ? data.products[productId] : null
     const id = existingProduct?.id ?? createId('product')
@@ -1532,8 +1331,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const updates: Record<string, unknown> = {
       [`products/${id}`]: product,
     }
-
-    syncPurchaseRequisitionForStock(data, product, product.stockQty, updates)
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -1718,7 +1515,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
       [`products/${product.id}/updatedAt`]: now,
     }
-    syncPurchaseRequisitionForStock(data, product, nextStock, updates)
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -1899,514 +1695,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('customer_deleted', 'customers', `Deleted customer ${customer.name}.`)
   }
 
-  async function saveSupplier(input: SupplierInput, supplierId?: string) {
-    if (!data) {
-      throw new Error('ERP data not loaded yet.')
-    }
-
-    const normalized = normalizeSupplierInput(input)
-
-    if (!normalized.name) {
-      throw new Error('Supplier name is required.')
-    }
-
-    if (!normalized.phone) {
-      throw new Error('Supplier phone number is required.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existingSupplier = supplierId ? data.suppliers[supplierId] : null
-    const id = existingSupplier?.id ?? createId('supplier')
-    const now = new Date().toISOString()
-    const supplier = {
-      id,
-      ...normalized,
-      createdAt: existingSupplier?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/suppliers'), { [id]: supplier })
-    await writeActivity(
-      existingSupplier ? 'supplier_updated' : 'supplier_created',
-      'suppliers',
-      existingSupplier
-        ? `Updated ${supplier.name} supplier and import details.`
-        : `Added supplier ${supplier.name}.`
-    )
-
-    return id
-  }
-
-  async function deleteSupplier(supplierId: string) {
-    if (!data) {
-      return
-    }
-
-    const supplier = data.suppliers[supplierId]
-    if (!supplier) {
-      throw new Error('Supplier not found.')
-    }
-
-    const hasProducts = Object.values(data.products).some((product) => product.supplierId === supplierId)
-    const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.supplierId === supplierId)
-    if (hasProducts || hasPurchases) {
-      throw new Error('Suppliers with product or purchase history cannot be deleted.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`suppliers/${supplierId}`]: null,
-    })
-    await writeActivity('supplier_deleted', 'suppliers', `Deleted supplier ${supplier.name}.`)
-  }
-
-  async function recordPurchase(input: PurchaseInput) {
-    if (!data) {
-      return
-    }
-
-    const db = getDatabaseOrThrow()
-    const product = data.products[input.productId]
-    const supplier = data.suppliers[input.supplierId]
-    if (!product || !supplier) {
-      throw new Error('Product or supplier not found.')
-    }
-
-    const purchaseId = createId('purchase')
-    const nextStock = product.stockQty + input.quantity
-    const now = new Date().toISOString()
-
-    const updates: Record<string, unknown> = {
-      [`purchases/${purchaseId}`]: {
-        id: purchaseId,
-        productId: product.id,
-        productName: product.name,
-        supplierId: supplier.id,
-        supplierName: supplier.name,
-        quantity: input.quantity,
-        unitCost: input.unitCost,
-        currency: input.currency,
-        total: input.quantity * input.unitCost,
-        status: 'received',
-        createdAt: now,
-      },
-      [`products/${product.id}/stockQty`]: nextStock,
-      [`products/${product.id}/purchasePrice`]: input.unitCost,
-      [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
-      [`products/${product.id}/updatedAt`]: now,
-    }
-    syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-
-    await update(ref(db, 'erp'), updates)
-
-    await writeActivity('purchase_received', 'inventory', `Restocked ${product.name} by ${input.quantity} units.`)
-    await writeNotification(
-      'Purchase recorded',
-      `Restocked ${product.name} by ${input.quantity} units from ${supplier.name} by ${currentUser?.name ?? 'Admin'}.`,
-      'info',
-      ['super_admin', 'manager', 'accounts']
-    )
-  }
-
-  // Section 13: dismiss an auto-raised (or already-ordered) requisition
-  // without placing a purchase order for it.
-  async function dismissPurchaseRequisition(requisitionId: string) {
-    if (!data) {
-      return
-    }
-
-    const requisition = data.purchaseRequisitions[requisitionId]
-    if (!requisition) {
-      throw new Error('Purchase requisition not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`purchaseRequisitions/${requisitionId}/status`]: 'dismissed',
-      [`purchaseRequisitions/${requisitionId}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity(
-      'requisition_dismissed',
-      'inventory',
-      `Dismissed purchase requisition for ${requisition.productName}.`
-    )
-  }
-
-  // Section 12, stage 1-2: Purchase Requisition (optional link) → Purchase
-  // Order placed with a supplier. No stock or accounting effect yet — that
-  // only happens once goods are actually received (receivePurchaseOrder).
-  async function createPurchaseOrder(input: PurchaseOrderInput) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before creating a purchase order.')
-    }
-
-    const supplier = data.suppliers[input.supplierId]
-    if (!supplier) {
-      throw new Error('Supplier not found.')
-    }
-
-    if (!input.items.length) {
-      throw new Error('Add at least one product to the purchase order.')
-    }
-
-    const items = input.items.map((item) => {
-      const product = data.products[item.productId]
-      if (!product) throw new Error('Product not found.')
-      if (item.quantity <= 0) throw new Error(`Quantity for ${product.name} must be greater than zero.`)
-      if (item.unitCost < 0) throw new Error(`Unit cost for ${product.name} cannot be negative.`)
-      return {
-        productId: product.id,
-        productName: product.name,
-        quantity: item.quantity,
-        unitCost: item.unitCost,
-        receivedQuantity: 0,
-        rejectedQuantity: 0,
-      }
-    })
-
-    const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unitCost, 0)
-    const db = getDatabaseOrThrow()
-    const id = createId('po')
-    const now = new Date().toISOString()
-    const poNumber = `PO-${Date.now().toString().slice(-8)}`
-
-    const purchaseOrder: PurchaseOrderRecord = {
-      id,
-      poNumber,
-      requisitionId: input.requisitionId ?? '',
-      supplierId: supplier.id,
-      supplierName: supplier.name,
-      items,
-      currency: input.currency?.trim().toUpperCase() || 'BDT',
-      subtotal,
-      status: 'ordered',
-      qualityCheckStatus: 'pending',
-      qualityCheckNote: '',
-      grnNumber: '',
-      transportCost: 0,
-      otherCost: 0,
-      totalLandedCost: subtotal,
-      billStatus: 'unbilled',
-      paid: 0,
-      due: 0,
-      expectedDate: input.expectedDate?.trim() ?? '',
-      // Section 48: the Requester's submission is the first step of the
-      // chain — it now needs to clear Department Head → Purchase Manager →
-      // Finance → Management before it can be received.
-      approvalStatus: 'pending',
-      approvalStage: 'department_head',
-      approvals: [],
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    const updates: Record<string, unknown> = {
-      [`purchaseOrders/${id}`]: purchaseOrder,
-    }
-
-    if (input.requisitionId && data.purchaseRequisitions[input.requisitionId]) {
-      updates[`purchaseRequisitions/${input.requisitionId}/status`] = 'ordered'
-      updates[`purchaseRequisitions/${input.requisitionId}/updatedAt`] = now
-    }
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity('purchase_order_created', 'inventory', `Created purchase order ${poNumber} with ${supplier.name}.`)
-    await writeNotification(
-      'Purchase order created',
-      `Purchase order ${poNumber} was placed with ${supplier.name} by ${currentUser.name}.`,
-      'info',
-      ['super_admin', 'manager', 'accounts']
-    )
-
-    return id
-  }
-
-  // Section 48 — Purchase Approval Workflow: advances (or rejects) the
-  // purchase order at whichever stage it is currently sitting at. Approving
-  // the last stage (Management) flips the order to fully approved, which is
-  // what unlocks receivePurchaseOrder above. Rejecting at any stage cancels
-  // the order outright — since createPurchaseOrder never touches stock or
-  // the ledger, that's a plain status flip, nothing to reverse.
-  async function updatePurchaseOrderApproval(purchaseOrderId: string, decision: 'approved' | 'rejected', note?: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const purchaseOrder = data.purchaseOrders[purchaseOrderId]
-    if (!purchaseOrder) {
-      throw new Error('Purchase order not found.')
-    }
-
-    if (purchaseOrder.approvalStage === 'completed' || purchaseOrder.approvalStatus !== 'pending') {
-      throw new Error('This purchase order has already been through the approval chain.')
-    }
-
-    const currentStage = purchaseOrder.approvalStage
-    const requiredPermission = PURCHASE_APPROVAL_STAGE_PERMISSION[currentStage]
-    if (!hasPermissionCheck(data, currentUser, requiredPermission)) {
-      throw new Error(`You do not have permission to act as ${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} on this purchase order.`)
-    }
-
-    const now = new Date().toISOString()
-    const approval: PurchaseOrderApproval = {
-      stage: currentStage,
-      status: decision,
-      byUserId: currentUser.id,
-      byUserName: currentUser.name,
-      note: note?.trim() ?? '',
-      at: now,
-    }
-    const approvals = [...purchaseOrder.approvals, approval]
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {
-      [`purchaseOrders/${purchaseOrderId}/approvals`]: approvals,
-      [`purchaseOrders/${purchaseOrderId}/updatedAt`]: now,
-    }
-
-    if (decision === 'rejected') {
-      updates[`purchaseOrders/${purchaseOrderId}/approvalStatus`] = 'rejected'
-      updates[`purchaseOrders/${purchaseOrderId}/status`] = 'cancelled'
-    } else {
-      const currentIndex = PURCHASE_APPROVAL_STAGE_ORDER.indexOf(currentStage)
-      const nextStage: PurchaseApprovalStage = PURCHASE_APPROVAL_STAGE_ORDER[currentIndex + 1] ?? 'completed'
-      updates[`purchaseOrders/${purchaseOrderId}/approvalStage`] = nextStage
-      if (nextStage === 'completed') {
-        updates[`purchaseOrders/${purchaseOrderId}/approvalStatus`] = 'approved'
-      }
-    }
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity(
-      'purchase_order_approval_changed',
-      'inventory',
-      `${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} ${decision} purchase order ${purchaseOrder.poNumber}.`
-    )
-    await writeNotification(
-      'Purchase order approval updated',
-      `Purchase order ${purchaseOrder.poNumber} was ${decision} at the ${PURCHASE_APPROVAL_STAGE_LABEL[currentStage]} stage by ${currentUser.name}.`,
-      decision === 'approved' ? 'info' : 'warning',
-      ['super_admin', 'manager', 'accounts']
-    )
-  }
-
-  // Section 12, stage 3-6: Goods Receive → Quality Check → GRN → Stock
-  // Receive, all in one step — only quality-passed quantities are added to
-  // stock, and the accepted value becomes the Supplier Bill / Accounts
-  // Payable (stage 7-8) posted to the ledger.
-  async function receivePurchaseOrder(purchaseOrderId: string, input: PurchaseReceiveInput) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const purchaseOrder = data.purchaseOrders[purchaseOrderId]
-    if (!purchaseOrder) {
-      throw new Error('Purchase order not found.')
-    }
-
-    if (purchaseOrder.status !== 'ordered') {
-      throw new Error('Only orders awaiting receipt can be received.')
-    }
-
-    // Section 48: "Approval অনুযায়ী Purchase Order হবে" — goods can only be
-    // received once the order has cleared the full approval chain.
-    if (purchaseOrder.approvalStatus !== 'approved') {
-      throw new Error('This purchase order is still awaiting approval and cannot be received yet.')
-    }
-
-    if (!input.items.length) {
-      throw new Error('Specify received quantities for at least one product.')
-    }
-
-    const receiptByProduct = new Map<
-      string,
-      { receivedQuantity: number; rejectedQuantity: number; batchNumber?: string; manufacturingDate?: string; expiryDate?: string }
-    >()
-    input.items.forEach((item) => {
-      if (item.receivedQuantity < 0 || (item.rejectedQuantity ?? 0) < 0) {
-        throw new Error('Received/rejected quantities cannot be negative.')
-      }
-      receiptByProduct.set(item.productId, {
-        receivedQuantity: item.receivedQuantity,
-        rejectedQuantity: item.rejectedQuantity ?? 0,
-        batchNumber: item.batchNumber?.trim(),
-        manufacturingDate: item.manufacturingDate?.trim(),
-        expiryDate: item.expiryDate?.trim(),
-      })
-    })
-
-    // Section 14 (GRN): every received line records its batch, manufacturing
-    // date, and expiry date alongside the accepted/rejected split.
-    const items = purchaseOrder.items.map((item) => {
-      const receipt = receiptByProduct.get(item.productId)
-      if (!receipt) {
-        return item
-      }
-      const receivedQuantity = Math.min(receipt.receivedQuantity, item.quantity)
-      const rejectedQuantity = Math.min(receipt.rejectedQuantity, item.quantity - receivedQuantity)
-      return {
-        ...item,
-        receivedQuantity,
-        rejectedQuantity,
-        batchNumber: receipt.batchNumber || item.batchNumber || '',
-        manufacturingDate: receipt.manufacturingDate || item.manufacturingDate || '',
-        expiryDate: receipt.expiryDate || item.expiryDate || '',
-      }
-    })
-
-    const totalAccepted = items.reduce((sum, item) => sum + item.receivedQuantity, 0)
-    const totalRejected = items.reduce((sum, item) => sum + item.rejectedQuantity, 0)
-    const goodsAmount = items.reduce((sum, item) => sum + item.receivedQuantity * item.unitCost, 0)
-    const transportCost = Math.max(input.transportCost ?? 0, 0)
-    const otherCost = Math.max(input.otherCost ?? 0, 0)
-    const totalLandedCost = goodsAmount + transportCost + otherCost
-
-    let qualityCheckStatus: QualityCheckStatus = 'passed'
-    if (totalRejected > 0) {
-      qualityCheckStatus = totalAccepted === 0 ? 'failed' : 'partial'
-    }
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-
-    const updates: Record<string, unknown> = {
-      [`purchaseOrders/${purchaseOrderId}/items`]: items,
-      [`purchaseOrders/${purchaseOrderId}/status`]: 'received',
-      [`purchaseOrders/${purchaseOrderId}/qualityCheckStatus`]: qualityCheckStatus,
-      [`purchaseOrders/${purchaseOrderId}/qualityCheckNote`]: input.qualityCheckNote?.trim() ?? '',
-      [`purchaseOrders/${purchaseOrderId}/grnNumber`]: input.grnNumber?.trim() || `GRN-${Date.now().toString().slice(-8)}`,
-      [`purchaseOrders/${purchaseOrderId}/transportCost`]: transportCost,
-      [`purchaseOrders/${purchaseOrderId}/otherCost`]: otherCost,
-      [`purchaseOrders/${purchaseOrderId}/totalLandedCost`]: totalLandedCost,
-      [`purchaseOrders/${purchaseOrderId}/billStatus`]: totalLandedCost > 0 ? 'billed' : 'unbilled',
-      [`purchaseOrders/${purchaseOrderId}/due`]: totalLandedCost,
-      [`purchaseOrders/${purchaseOrderId}/updatedAt`]: now,
-    }
-
-    items.forEach((item) => {
-      if (item.receivedQuantity <= 0) {
-        return
-      }
-      const product = data.products[item.productId]
-      if (!product) {
-        return
-      }
-      const nextStock = product.stockQty + item.receivedQuantity
-      updates[`products/${product.id}/stockQty`] = nextStock
-      updates[`products/${product.id}/purchasePrice`] = item.unitCost
-      updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
-      updates[`products/${product.id}/updatedAt`] = now
-      syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-
-      // Section 18: a batch/expiry-tracked receipt becomes a pickable batch
-      // for FEFO suggestions — purely informational until something
-      // explicitly consumes it.
-      if (item.batchNumber || item.expiryDate) {
-        const batchId = createId('batch')
-        updates[`batches/${batchId}`] = {
-          id: batchId,
-          productId: product.id,
-          productName: product.name,
-          batchNumber: item.batchNumber || `AUTO-${batchId.slice(-6).toUpperCase()}`,
-          manufacturingDate: item.manufacturingDate || '',
-          expiryDate: item.expiryDate || '',
-          quantity: item.receivedQuantity,
-          purchaseOrderId: purchaseOrderId,
-          createdAt: now,
-          updatedAt: now,
-        } satisfies BatchRecord
-      }
-
-      // Section 26: quantity that failed QC never enters sellable stock —
-      // it's parked here instead of just vanishing, so it stays trackable
-      // (rework/return-to-supplier/scrap) rather than an unexplained gap
-      // between what was ordered and what was stocked.
-      if (item.rejectedQuantity > 0) {
-        const holdId = createId('qchold')
-        updates[`qcHolds/${holdId}`] = {
-          id: holdId,
-          sourceType: 'purchase',
-          sourceId: purchaseOrderId,
-          sourceReference: purchaseOrder.poNumber,
-          productId: product.id,
-          productName: product.name,
-          quantity: item.rejectedQuantity,
-          unitCost: item.unitCost,
-          reason: input.qualityCheckNote?.trim() || 'Failed quality check on receipt',
-          status: 'held',
-          createdAt: now,
-          updatedAt: now,
-        } satisfies QcHoldRecord
-      }
-    })
-
-    if (input.qc) {
-      const qcId = createId('qc')
-      const primaryItem = items.find((item) => item.receivedQuantity > 0 || item.rejectedQuantity > 0) ?? items[0]
-      const primaryProduct = primaryItem ? data.products[primaryItem.productId] : undefined
-      updates[`qualityChecks/${qcId}`] = {
-        id: qcId,
-        sourceType: 'purchase',
-        sourceId: purchaseOrderId,
-        sourceReference: purchaseOrder.poNumber,
-        productId: primaryProduct?.id ?? '',
-        productName: primaryProduct?.name ?? '',
-        batchNumber: input.qc.batchNumber?.trim() ?? '',
-        moisture: input.qc.moisture?.trim() ?? '',
-        colour: input.qc.colour?.trim() ?? '',
-        aroma: input.qc.aroma?.trim() ?? '',
-        weight: input.qc.weight?.trim() ?? '',
-        qualityGrade: input.qc.qualityGrade?.trim() ?? '',
-        testResult: qualityCheckStatus === 'failed' ? 'fail' : 'pass',
-        qcOfficerName: input.qc.qcOfficerName?.trim() || currentUser.name,
-        remarks: input.qc.remarks?.trim() ?? '',
-        createdAt: now,
-      } satisfies QualityCheckRecord
-    }
-
-    if (totalLandedCost > 0) {
-      const debitId = createId('ledger')
-      updates[`ledgerEntries/${debitId}`] = {
-        id: debitId,
-        date: now,
-        orderId: purchaseOrderId,
-        billNumber: purchaseOrder.poNumber,
-        account: 'inventory',
-        accountRef: '',
-        description: `GRN for ${purchaseOrder.poNumber} (goods + transport + other)`,
-        debit: totalLandedCost,
-        credit: 0,
-        createdAt: now,
-      } satisfies LedgerEntryRecord
-      const creditId = createId('ledger')
-      updates[`ledgerEntries/${creditId}`] = {
-        id: creditId,
-        date: now,
-        orderId: purchaseOrderId,
-        billNumber: purchaseOrder.poNumber,
-        account: 'accounts_payable',
-        accountRef: purchaseOrder.supplierId,
-        description: `Supplier bill for ${purchaseOrder.poNumber}`,
-        debit: 0,
-        credit: totalLandedCost,
-        createdAt: now,
-      } satisfies LedgerEntryRecord
-    }
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity('purchase_order_received', 'inventory', `Received purchase order ${purchaseOrder.poNumber} (GRN).`)
-    await writeNotification(
-      'Goods received',
-      `Purchase order ${purchaseOrder.poNumber} received via GRN${totalRejected > 0 ? ` — ${totalRejected} unit(s) failed quality check` : ''}.`,
-      totalRejected > 0 ? 'warning' : 'info',
-      ['super_admin', 'manager', 'accounts']
-    )
-  }
-
   // Resolves a QC Hold either back into sellable stock (release — the
   // batch turned out fine on re-test, or a decision was made to accept it
-  // after all) or as a permanent write-off (scrap). Works for holds from
-  // either Purchase or Production since both post through the same model.
+  // after all) or as a permanent write-off (scrap).
   async function releaseQcHold(qcHoldId: string) {
     if (!data || !currentUser) {
       return
@@ -2437,75 +1728,40 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
       [`products/${product.id}/updatedAt`]: now,
     }
-    syncPurchaseRequisitionForStock(data, product, nextStock, updates)
 
     const value = hold.quantity * hold.unitCost
     if (value > 0) {
-      if (hold.sourceType === 'production') {
-        // Reverse the write-off booked when the hold was created — this
-        // cost is a real finished-goods asset now, not a loss.
-        const debitId = createId('ledger')
-        updates[`ledgerEntries/${debitId}`] = {
-          id: debitId,
-          date: now,
-          orderId: hold.sourceId,
-          billNumber: hold.sourceReference,
-          account: 'inventory',
-          accountRef: '',
-          description: `QC hold released — ${hold.sourceReference}`,
-          debit: value,
-          credit: 0,
-          createdAt: now,
-        } satisfies LedgerEntryRecord
-        const creditId = createId('ledger')
-        updates[`ledgerEntries/${creditId}`] = {
-          id: creditId,
-          date: now,
-          orderId: hold.sourceId,
-          billNumber: hold.sourceReference,
-          account: 'cogs',
-          accountRef: '',
-          description: `Reversed write-off — ${hold.sourceReference}`,
-          debit: 0,
-          credit: value,
-          createdAt: now,
-        } satisfies LedgerEntryRecord
-      } else {
-        // Rejected purchase quantity was never billed at receipt time —
-        // releasing it means accepting it after all, so bill it now.
-        const purchaseOrder = data.purchaseOrders[hold.sourceId]
-        const debitId = createId('ledger')
-        updates[`ledgerEntries/${debitId}`] = {
-          id: debitId,
-          date: now,
-          orderId: hold.sourceId,
-          billNumber: hold.sourceReference,
-          account: 'inventory',
-          accountRef: '',
-          description: `QC hold released — ${hold.sourceReference}`,
-          debit: value,
-          credit: 0,
-          createdAt: now,
-        } satisfies LedgerEntryRecord
-        const creditId = createId('ledger')
-        updates[`ledgerEntries/${creditId}`] = {
-          id: creditId,
-          date: now,
-          orderId: hold.sourceId,
-          billNumber: hold.sourceReference,
-          account: 'accounts_payable',
-          accountRef: purchaseOrder?.supplierId ?? '',
-          description: `Supplier bill for released QC hold — ${hold.sourceReference}`,
-          debit: 0,
-          credit: value,
-          createdAt: now,
-        } satisfies LedgerEntryRecord
-        if (purchaseOrder) {
-          updates[`purchaseOrders/${purchaseOrder.id}/due`] = purchaseOrder.due + value
-          updates[`purchaseOrders/${purchaseOrder.id}/totalLandedCost`] = purchaseOrder.totalLandedCost + value
-          updates[`purchaseOrders/${purchaseOrder.id}/billStatus`] = 'billed'
-        }
-      }
+      // Reverse the write-off booked when the hold was created — this
+      // cost is a real finished-goods asset now, not a loss. (Historical
+      // 'purchase'-sourced holds, from the now-removed supplier/purchase-order
+      // module, are reversed the same way — there's no accounts-payable bill
+      // to reopen any more.)
+      const debitId = createId('ledger')
+      updates[`ledgerEntries/${debitId}`] = {
+        id: debitId,
+        date: now,
+        orderId: hold.sourceId,
+        billNumber: hold.sourceReference,
+        account: 'inventory',
+        accountRef: '',
+        description: `QC hold released — ${hold.sourceReference}`,
+        debit: value,
+        credit: 0,
+        createdAt: now,
+      } satisfies LedgerEntryRecord
+      const creditId = createId('ledger')
+      updates[`ledgerEntries/${creditId}`] = {
+        id: creditId,
+        date: now,
+        orderId: hold.sourceId,
+        billNumber: hold.sourceReference,
+        account: 'cogs',
+        accountRef: '',
+        description: `Reversed write-off — ${hold.sourceReference}`,
+        debit: 0,
+        credit: value,
+        createdAt: now,
+      } satisfies LedgerEntryRecord
     }
 
     await update(ref(db, 'erp'), updates)
@@ -2540,223 +1796,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'inventory',
       `Scrapped ${hold.quantity} unit(s) of ${hold.productName} on QC hold from ${hold.sourceReference}.`
     )
-  }
-
-  async function cancelPurchaseOrder(purchaseOrderId: string) {
-    if (!data) {
-      return
-    }
-
-    const purchaseOrder = data.purchaseOrders[purchaseOrderId]
-    if (!purchaseOrder) {
-      throw new Error('Purchase order not found.')
-    }
-
-    if (purchaseOrder.status !== 'ordered') {
-      throw new Error('Only orders awaiting receipt can be cancelled.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`purchaseOrders/${purchaseOrderId}/status`]: 'cancelled',
-      [`purchaseOrders/${purchaseOrderId}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity('purchase_order_cancelled', 'inventory', `Cancelled purchase order ${purchaseOrder.poNumber}.`)
-  }
-
-  // Closes the Accounts Payable loop from Section 12: Dr Accounts Payable /
-  // Cr Cash for whatever was just paid to the supplier against a GRN'd bill.
-  async function recordSupplierPayment(purchaseOrderId: string, amount: number) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const purchaseOrder = data.purchaseOrders[purchaseOrderId]
-    if (!purchaseOrder) {
-      throw new Error('Purchase order not found.')
-    }
-
-    if (amount <= 0) {
-      throw new Error('Payment amount must be greater than zero.')
-    }
-
-    if (amount > purchaseOrder.due) {
-      throw new Error('Payment cannot exceed the outstanding due amount.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    const nextDue = purchaseOrder.due - amount
-
-    const updates: Record<string, unknown> = {
-      [`purchaseOrders/${purchaseOrderId}/paid`]: purchaseOrder.paid + amount,
-      [`purchaseOrders/${purchaseOrderId}/due`]: nextDue,
-      [`purchaseOrders/${purchaseOrderId}/billStatus`]: nextDue <= 0 ? 'paid' : 'billed',
-      [`purchaseOrders/${purchaseOrderId}/updatedAt`]: now,
-    }
-
-    const debitId = createId('ledger')
-    updates[`ledgerEntries/${debitId}`] = {
-      id: debitId,
-      date: now,
-      orderId: purchaseOrderId,
-      billNumber: purchaseOrder.poNumber,
-      account: 'accounts_payable',
-      accountRef: purchaseOrder.supplierId,
-      description: `Payment against ${purchaseOrder.poNumber}`,
-      debit: amount,
-      credit: 0,
-      createdAt: now,
-    } satisfies LedgerEntryRecord
-    const creditId = createId('ledger')
-    updates[`ledgerEntries/${creditId}`] = {
-      id: creditId,
-      date: now,
-      orderId: purchaseOrderId,
-      billNumber: purchaseOrder.poNumber,
-      account: 'cash',
-      accountRef: '',
-      description: `Payment against ${purchaseOrder.poNumber}`,
-      debit: 0,
-      credit: amount,
-      createdAt: now,
-    } satisfies LedgerEntryRecord
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity(
-      'supplier_payment_recorded',
-      'finance',
-      `Recorded a payment of ${amount} against ${purchaseOrder.poNumber} (${purchaseOrder.supplierName}).`
-    )
-  }
-
-  // Section 30 (Supplier Payable ledger): the supplier-side counterpart of
-  // createSalesReturn — goods already received on a GRN'd PO go back out,
-  // and whatever's still unbilled-and-unpaid on that PO shrinks by the
-  // returned value. Only what was actually accepted into stock (received
-  // minus rejected minus already-returned) can be returned again.
-  async function createPurchaseReturn(input: PurchaseReturnInput) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before recording a purchase return.')
-    }
-
-    const purchaseOrder = data.purchaseOrders[input.purchaseOrderId]
-    if (!purchaseOrder) {
-      throw new Error('Purchase order not found.')
-    }
-
-    if (purchaseOrder.status !== 'received') {
-      throw new Error('Only a received purchase order can have goods returned against it.')
-    }
-
-    if (!input.items.length) {
-      throw new Error('Add at least one product to return.')
-    }
-
-    const alreadyReturnedByProduct = new Map<string, number>()
-    Object.values(data.purchaseReturns)
-      .filter((entry) => entry.purchaseOrderId === purchaseOrder.id)
-      .forEach((purchaseReturn) => {
-        purchaseReturn.items.forEach((item) => {
-          alreadyReturnedByProduct.set(item.productId, (alreadyReturnedByProduct.get(item.productId) ?? 0) + item.quantity)
-        })
-      })
-
-    const items = input.items.map((requested) => {
-      const poItem = purchaseOrder.items.find((item) => item.productId === requested.productId)
-      if (!poItem) {
-        throw new Error('That product was not part of the original purchase order.')
-      }
-      if (requested.quantity <= 0) {
-        throw new Error(`Return quantity for ${poItem.productName} must be greater than zero.`)
-      }
-      const accepted = poItem.receivedQuantity - poItem.rejectedQuantity
-      const alreadyReturned = alreadyReturnedByProduct.get(requested.productId) ?? 0
-      if (alreadyReturned + requested.quantity > accepted) {
-        throw new Error(`Cannot return more than what was accepted into stock for ${poItem.productName}.`)
-      }
-      const product = data.products[requested.productId]
-      if (product && product.stockQty < requested.quantity) {
-        throw new Error(`Not enough ${poItem.productName} left in stock to return.`)
-      }
-      return { productId: poItem.productId, productName: poItem.productName, quantity: requested.quantity, unitCost: poItem.unitCost }
-    })
-
-    const totalValue = items.reduce((sum, item) => sum + item.unitCost * item.quantity, 0)
-
-    const db = getDatabaseOrThrow()
-    const id = createId('preturn')
-    const now = new Date().toISOString()
-    const returnNumber = `PRTN-${Date.now().toString().slice(-8)}`
-
-    const purchaseReturn: PurchaseReturnRecord = {
-      id,
-      returnNumber,
-      purchaseOrderId: purchaseOrder.id,
-      poNumber: purchaseOrder.poNumber,
-      supplierId: purchaseOrder.supplierId,
-      supplierName: purchaseOrder.supplierName,
-      items,
-      totalValue,
-      reason: input.reason?.trim() ?? '',
-      processedBy: currentUser.id,
-      processedByName: currentUser.name,
-      createdAt: now,
-    }
-
-    const nextDue = Math.max(purchaseOrder.due - totalValue, 0)
-    const updates: Record<string, unknown> = {
-      [`purchaseReturns/${id}`]: purchaseReturn,
-      [`purchaseOrders/${purchaseOrder.id}/due`]: nextDue,
-      [`purchaseOrders/${purchaseOrder.id}/billStatus`]: nextDue <= 0 ? 'paid' : 'billed',
-      [`purchaseOrders/${purchaseOrder.id}/updatedAt`]: now,
-    }
-
-    items.forEach((item) => {
-      const product = data.products[item.productId]
-      if (!product) return
-      const nextStock = product.stockQty - item.quantity
-      updates[`products/${product.id}/stockQty`] = nextStock
-      updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
-      updates[`products/${product.id}/updatedAt`] = now
-    })
-
-    if (totalValue > 0) {
-      const debitId = createId('ledger')
-      updates[`ledgerEntries/${debitId}`] = {
-        id: debitId,
-        date: now,
-        orderId: purchaseOrder.id,
-        billNumber: returnNumber,
-        account: 'accounts_payable',
-        accountRef: purchaseOrder.supplierId,
-        description: `Purchase return ${returnNumber} for ${purchaseOrder.poNumber}`,
-        debit: totalValue,
-        credit: 0,
-        createdAt: now,
-      } satisfies LedgerEntryRecord
-      const creditId = createId('ledger')
-      updates[`ledgerEntries/${creditId}`] = {
-        id: creditId,
-        date: now,
-        orderId: purchaseOrder.id,
-        billNumber: returnNumber,
-        account: 'inventory',
-        accountRef: '',
-        description: `Purchase return ${returnNumber} for ${purchaseOrder.poNumber}`,
-        debit: 0,
-        credit: totalValue,
-        createdAt: now,
-      } satisfies LedgerEntryRecord
-    }
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity(
-      'purchase_return_recorded',
-      'inventory',
-      `Recorded purchase return ${returnNumber} against ${purchaseOrder.poNumber} (${purchaseOrder.supplierName}).`
-    )
-    return id
   }
 
   // Section 11: Customer Return → Return Inspection → Good/Bad Stock
@@ -2857,7 +1896,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/stockQty`] = nextStock
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
-      syncPurchaseRequisitionForStock(data, product, nextStock, updates)
     })
 
     const returnDebitId = createId('ledger')
@@ -3164,17 +2202,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`ledgerEntries/${entry.id}`] = entry
     })
 
-    const newRequisitions: PurchaseRequisitionRecord[] = []
     requestedByProduct.forEach((quantity, productId) => {
       const product = data.products[productId]
       const nextStock = product.stockQty - quantity
       updates[`products/${product.id}/stockQty`] = nextStock
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
-      const requisition = syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      if (requisition) {
-        newRequisitions.push(requisition)
-      }
     })
 
     await update(ref(db, 'erp'), updates)
@@ -3199,14 +2232,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       )
     }
 
-    for (const requisition of newRequisitions) {
-      await writeNotification(
-        'Purchase requisition raised',
-        `${requisition.productName} stock (${requisition.currentStock}) is below its reorder level (${requisition.reorderLevel}) — a purchase requisition was auto-created.`,
-        'warning',
-        ['super_admin', 'manager', 'accounts']
-      )
-    }
   }
 
   async function updateOrder(orderId: string, input: OrderInput, reason?: string) {
@@ -3357,7 +2382,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/stockQty`] = nextStock
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
-      syncPurchaseRequisitionForStock(data, product, nextStock, updates)
     })
 
     // Section 18 completion: release whatever batches the original lines
@@ -3453,7 +2477,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/stockQty`] = nextStock
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
-      syncPurchaseRequisitionForStock(data, product, nextStock, updates)
     })
 
     // Section 18 completion: restore every batch this order's lines had
@@ -4974,16 +3997,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createStockCount,
       saveCustomer,
       deleteCustomer,
-      saveSupplier,
-      deleteSupplier,
-      recordPurchase,
-      dismissPurchaseRequisition,
-      createPurchaseOrder,
-      updatePurchaseOrderApproval,
-      receivePurchaseOrder,
-      cancelPurchaseOrder,
-      recordSupplierPayment,
-      createPurchaseReturn,
       createSalesReturn,
       recordCollection,
       releaseQcHold,

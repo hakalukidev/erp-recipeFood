@@ -180,7 +180,6 @@ export function SalesScreen() {
   const openOrders = orders.filter((order) => order.status !== 'completed' && order.status !== 'cancelled').length
   const readyOrders = orders.filter((order) => order.status === 'ready').length
   const receivableTotal = orders.reduce((sum, order) => sum + order.due, 0)
-  const supplierPayableEstimate = toArray(data?.purchases).reduce((sum, purchase) => sum + purchase.total, 0)
   const overdueOrders = orders.filter((order) => {
     if (order.due <= 0) {
       return false
@@ -730,9 +729,9 @@ export function SalesScreen() {
           </Card>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Supplier payable estimate</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(supplierPayableEstimate, data?.settings.currency)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">From recorded purchases</p>
+              <p className="text-sm text-muted-foreground">Overdue</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{overdueOrders.length}</p>
+              <p className="mt-2 text-xs text-muted-foreground">Orders past their payment due date</p>
             </CardContent>
           </Card>
         </div>

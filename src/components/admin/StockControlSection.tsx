@@ -444,7 +444,7 @@ export function StockControlSection() {
                 {batches.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
-                      No batches recorded yet — these fill in when a GRN specifies a batch number or expiry date.
+                      No batches recorded yet.
                     </TableCell>
                   </TableRow>
                 ) : null}

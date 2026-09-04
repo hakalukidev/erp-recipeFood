@@ -290,7 +290,6 @@ export function DashboardScreen() {
                   { label: 'Yearly sales', value: formatCurrency(mdExtras.yearlySales, data?.settings.currency), icon: TrendingUp },
                   { label: 'Collection', value: formatCurrency(mdExtras.collection, data?.settings.currency), icon: Wallet },
                   { label: 'Outstanding', value: formatCurrency(mdExtras.outstanding, data?.settings.currency), icon: AlertTriangle },
-                  { label: 'Purchase', value: formatCurrency(mdExtras.purchase, data?.settings.currency), icon: ShoppingCart },
                   { label: 'Inventory value', value: formatCurrency(mdExtras.inventoryValue, data?.settings.currency), icon: Package },
                   { label: 'Gross profit', value: formatCurrency(mdExtras.grossProfit, data?.settings.currency), icon: TrendingUp },
                   { label: 'Net profit', value: formatCurrency(mdExtras.netProfit, data?.settings.currency), icon: mdExtras.netProfit >= 0 ? TrendingUp : TrendingDown },
