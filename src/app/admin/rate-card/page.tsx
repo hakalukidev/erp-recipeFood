@@ -1,7 +1,19 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { Calculator, ChevronDown, ChevronRight, Plus, Printer, Search, Trash2 } from 'lucide-react'
+import {
+  Calculator,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Package,
+  Plus,
+  Printer,
+  Search,
+  Trash2,
+  Wallet,
+  TrendingUp,
+} from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
@@ -21,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
@@ -814,20 +827,28 @@ export default function RateCardPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-5xl overflow-y-auto sm:max-h-[calc(100dvh-3rem)]">
-          <DialogHeader>
-            <DialogTitle>{editingId ? 'Edit rate card' : 'New rate card'}</DialogTitle>
-            <DialogDescription>One entry — print the Company, Depot or Dealer voucher from it anytime.</DialogDescription>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-5xl overflow-y-auto p-0 sm:max-h-[calc(100dvh-3rem)]">
+          <DialogHeader className="border-b border-border/60 px-6 pb-4 pt-6">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <FileText className="h-4.5 w-4.5" />
+              </span>
+              <div>
+                <DialogTitle>{editingId ? 'Edit rate card' : 'New rate card'}</DialogTitle>
+                <DialogDescription>One entry — print the Company, Depot or Dealer voucher from it anytime.</DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="space-y-5 px-6 pb-6">
+            <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Invoice No</label>
                 <Input
                   value={form.invoiceNo}
                   onChange={(event) => setForm((current) => ({ ...current, invoiceNo: event.target.value }))}
                   placeholder="M-001/09"
+                  className="bg-background"
                 />
               </div>
               <div className="space-y-1">
@@ -854,6 +875,7 @@ export default function RateCardPage() {
                   type="date"
                   value={form.date}
                   onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))}
+                  className="bg-background"
                 />
               </div>
               <div className="space-y-1">
@@ -862,43 +884,50 @@ export default function RateCardPage() {
                   type="date"
                   value={form.deliveryDate}
                   onChange={(event) => setForm((current) => ({ ...current, deliveryDate: event.target.value }))}
+                  className="bg-background"
                 />
               </div>
             </div>
 
-            <div>
+            <div className="overflow-hidden rounded-xl border border-border/60">
               <button
                 type="button"
                 onClick={() => setShowDepotDetails((current) => !current)}
-                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+                className="flex w-full items-center gap-1.5 px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground"
               >
                 {showDepotDetails ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                Depot &amp; account details <span className="text-xs">(optional — used on the Depot and Dealer vouchers)</span>
+                <span className="font-medium">Depot &amp; account details</span>
+                <span className="text-xs">(optional — used on the Depot and Dealer vouchers)</span>
               </button>
               {showDepotDetails ? (
-                <div className="mt-3 space-y-4 rounded-lg bg-muted/30 p-4">
+                <div className="space-y-4 border-t border-border/60 bg-muted/20 p-4">
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <Input
                       value={form.depotName}
                       onChange={(event) => setForm((current) => ({ ...current, depotName: event.target.value }))}
                       placeholder="Depot / distributor name"
+                      className="bg-background"
                     />
                     <Input
                       value={form.depotAddress}
                       onChange={(event) => setForm((current) => ({ ...current, depotAddress: event.target.value }))}
                       placeholder="Address"
+                      className="bg-background"
                     />
                     <Input
                       value={form.depotMobile}
                       onChange={(event) => setForm((current) => ({ ...current, depotMobile: event.target.value }))}
                       placeholder="Mobile"
+                      className="bg-background"
                     />
                     <Input
                       value={form.depotHelpline}
                       onChange={(event) => setForm((current) => ({ ...current, depotHelpline: event.target.value }))}
                       placeholder="Help line"
+                      className="bg-background"
                     />
                   </div>
+                  <Separator />
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground">Previous due</label>
@@ -906,6 +935,7 @@ export default function RateCardPage() {
                         type="number"
                         value={form.previousDue}
                         onChange={(event) => setForm((current) => ({ ...current, previousDue: event.target.value }))}
+                        className="bg-background"
                       />
                     </div>
                     <div className="space-y-1">
@@ -914,6 +944,7 @@ export default function RateCardPage() {
                         type="number"
                         value={form.damage}
                         onChange={(event) => setForm((current) => ({ ...current, damage: event.target.value }))}
+                        className="bg-background"
                       />
                     </div>
                     <div className="space-y-1">
@@ -922,6 +953,7 @@ export default function RateCardPage() {
                         type="number"
                         value={form.routeDiscount}
                         onChange={(event) => setForm((current) => ({ ...current, routeDiscount: event.target.value }))}
+                        className="bg-background"
                       />
                     </div>
                     <div className="space-y-1">
@@ -930,6 +962,7 @@ export default function RateCardPage() {
                         type="number"
                         value={form.targetIncentive}
                         onChange={(event) => setForm((current) => ({ ...current, targetIncentive: event.target.value }))}
+                        className="bg-background"
                       />
                     </div>
                   </div>
@@ -942,109 +975,166 @@ export default function RateCardPage() {
                 scrolling table (overflow-x-auto) clips that popover to a tiny
                 sliver instead of letting it float over the rest of the row. */}
             <div className="space-y-3">
-              {form.items.map((item, index) => (
-                <div key={item.key} className="space-y-3 rounded-lg bg-muted/30 p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background text-xs font-medium text-muted-foreground">
-                      {index + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <Combobox
-                        options={productOptions}
-                        value={item.productId}
-                        onChange={(value) => {
-                          const selected = products.find((product) => product.id === value)
-                          updateItem(item.key, {
-                            productId: value,
-                            productName: selected?.name ?? item.productName,
-                            // Only prefill Raw M the first time — never overwrite a rate
-                            // the user has already typed.
-                            rawRate: item.rawRate === '0' ? String(selected?.purchasePrice ?? 0) : item.rawRate,
-                          })
-                        }}
-                        placeholder="Select a product"
-                        searchPlaceholder="Search products..."
-                      />
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product lines</p>
+              {form.items.map((item, index) => {
+                const lineTotal = (Number(item.qty) || 0) * (Number(item.dealerRate) || 0)
+                return (
+                  <div
+                    key={item.key}
+                    className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm transition-colors hover:border-border"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <Combobox
+                          options={productOptions}
+                          value={item.productId}
+                          onChange={(value) => {
+                            const selected = products.find((product) => product.id === value)
+                            updateItem(item.key, {
+                              productId: value,
+                              productName: selected?.name ?? item.productName,
+                              // Only prefill Raw M the first time — never overwrite a rate
+                              // the user has already typed.
+                              rawRate: item.rawRate === '0' ? String(selected?.purchasePrice ?? 0) : item.rawRate,
+                            })
+                          }}
+                          placeholder="Select a product"
+                          searchPlaceholder="Search products..."
+                        />
+                      </div>
+                      <div className="hidden shrink-0 text-right sm:block">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Line total</p>
+                        <p className="text-sm font-semibold tabular-nums">{formatAmount(lineTotal)}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeItem(item.key)}
+                        disabled={form.items.length === 1}
+                        aria-label={`Remove product ${index + 1}`}
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeItem(item.key)}
-                      disabled={form.items.length === 1}
-                      aria-label={`Remove product ${index + 1}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Quantity
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Qty</label>
+                            <Input
+                              type="number"
+                              value={item.qty}
+                              onChange={(event) => updateItem(item.key, { qty: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Per Ctn/Bgs</label>
+                            <Input
+                              value={item.perCtnBgs}
+                              onChange={(event) => updateItem(item.key, { perCtnBgs: event.target.value })}
+                              placeholder="1 bg"
+                              className="bg-background"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Costing
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Raw M</label>
+                            <Input
+                              type="number"
+                              value={item.rawRate}
+                              onChange={(event) => updateItem(item.key, { rawRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Manuf</label>
+                            <Input
+                              type="number"
+                              value={item.manufRate}
+                              onChange={(event) => updateItem(item.key, { manufRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Trade rates
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Depot</label>
+                            <Input
+                              type="number"
+                              value={item.depotRate}
+                              onChange={(event) => updateItem(item.key, { depotRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">Dealer</label>
+                            <Input
+                              type="number"
+                              value={item.dealerRate}
+                              onChange={(event) => updateItem(item.key, { dealerRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Market rates
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">TP</label>
+                            <Input
+                              type="number"
+                              value={item.tpRate}
+                              onChange={(event) => updateItem(item.key, { tpRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground">MRP</label>
+                            <Input
+                              type="number"
+                              value={item.mrpRate}
+                              onChange={(event) => updateItem(item.key, { mrpRate: event.target.value })}
+                              className="bg-background"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right sm:hidden">
+                      <span className="text-xs text-muted-foreground">Line total: </span>
+                      <span className="text-sm font-semibold tabular-nums">{formatAmount(lineTotal)}</span>
+                    </div>
                   </div>
-                  <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-8">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">QTY</label>
-                      <Input
-                        type="number"
-                        value={item.qty}
-                        onChange={(event) => updateItem(item.key, { qty: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Raw M</label>
-                      <Input
-                        type="number"
-                        value={item.rawRate}
-                        onChange={(event) => updateItem(item.key, { rawRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Mnu Ra</label>
-                      <Input
-                        type="number"
-                        value={item.manufRate}
-                        onChange={(event) => updateItem(item.key, { manufRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Dep Rate</label>
-                      <Input
-                        type="number"
-                        value={item.depotRate}
-                        onChange={(event) => updateItem(item.key, { depotRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Del Rate</label>
-                      <Input
-                        type="number"
-                        value={item.dealerRate}
-                        onChange={(event) => updateItem(item.key, { dealerRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">TP Rate</label>
-                      <Input
-                        type="number"
-                        value={item.tpRate}
-                        onChange={(event) => updateItem(item.key, { tpRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">MRP Rate</label>
-                      <Input
-                        type="number"
-                        value={item.mrpRate}
-                        onChange={(event) => updateItem(item.key, { mrpRate: event.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Per Ctn/Bgs</label>
-                      <Input
-                        value={item.perCtnBgs}
-                        onChange={(event) => updateItem(item.key, { perCtnBgs: event.target.value })}
-                        placeholder="500 ps = 1 bg"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             <div className="flex items-center justify-between">
@@ -1057,19 +1147,36 @@ export default function RateCardPage() {
               </p>
             </div>
 
-            <div className="rounded-lg bg-muted/30 p-4">
-              <div className="grid grid-cols-3 gap-3 text-center text-sm">
-                <div>
-                  <p className="text-muted-foreground">Goods Amount</p>
-                  <p className="text-lg font-semibold">{formatAmount(totals.dealerRateTotal)}</p>
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-background p-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-foreground/5 text-foreground">
+                    <Package className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Goods Amount</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatAmount(totals.dealerRateTotal)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Depot Net Profit</p>
-                  <p className="text-lg font-semibold text-primary">{formatAmount(depotNetProfit)}</p>
+                <div className="flex items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    <TrendingUp className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Depot Net Profit</p>
+                    <p className="text-lg font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {formatAmount(depotNetProfit)}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-muted-foreground">Depot Receivable</p>
-                  <p className="text-lg font-semibold text-primary">{formatAmount(depotReceivable)}</p>
+                <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Wallet className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Depot Receivable</p>
+                    <p className="text-lg font-semibold tabular-nums text-primary">{formatAmount(depotReceivable)}</p>
+                  </div>
                 </div>
               </div>
 
@@ -1087,43 +1194,43 @@ export default function RateCardPage() {
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                       <p className="text-muted-foreground">Raw Rate total</p>
-                      <p className="font-semibold">{formatAmount(totals.rawRateTotal)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.rawRateTotal)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Manuf Rate total</p>
-                      <p className="font-semibold">{formatAmount(totals.manufRateTotal)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.manufRateTotal)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Depot Rate total</p>
-                      <p className="font-semibold">{formatAmount(totals.depotRateTotal)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.depotRateTotal)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Pouch/Carton amount</p>
-                      <p className="font-semibold">{formatAmount(totals.pouchCartonAmount)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.pouchCartonAmount)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Usable money (÷ Depot)</p>
-                      <p className="font-semibold">
+                      <p className="font-semibold tabular-nums">
                         {formatAmount(totals.usableMoney)} · {totals.usableMoneyPercent.toFixed(2)}%
                       </p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Usable u Depot</p>
-                      <p className="font-semibold">
+                      <p className="font-semibold tabular-nums">
                         {formatAmount(totals.usableUDepot)} · {totals.usableUDepotPercent.toFixed(2)}%
                       </p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Selling total (TP total)</p>
-                      <p className="font-semibold">{formatAmount(totals.tpRateTotal)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.tpRateTotal)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Consumer total (MRP total)</p>
-                      <p className="font-semibold">{formatAmount(totals.mrpRateTotal)}</p>
+                      <p className="font-semibold tabular-nums">{formatAmount(totals.mrpRateTotal)}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Damage / discount / incentive</p>
-                      <p className="font-semibold">
+                      <p className="font-semibold tabular-nums">
                         {formatAmount(
                           (Number(form.damage) || 0) + (Number(form.routeDiscount) || 0) + (Number(form.targetIncentive) || 0)
                         )}
@@ -1144,15 +1251,15 @@ export default function RateCardPage() {
             </div>
 
             {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+          </div>
 
-            <div className="flex justify-end gap-3">
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={handleSave} disabled={saving}>
-                {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create rate card'}
-              </Button>
-            </div>
+          <div className="sticky bottom-0 flex justify-end gap-3 border-t border-border/60 bg-background/95 px-6 py-4 backdrop-blur">
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create rate card'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
