@@ -9,6 +9,7 @@ import {
   BookOpenText,
   Boxes,
   Building2,
+  Calculator,
   CheckCheck,
   Factory,
   FileSpreadsheet,
@@ -152,6 +153,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Build a product price quotation and export it as PDF',
         href: '/admin/quotation',
         icon: FileText,
+        permission: 'products:view',
+      },
+      {
+        label: 'Rate Card / Costing',
+        description: 'Raw material → manufacturing → depot → dealer rate cascade with profit margins, and Company/Depot/Dealer vouchers',
+        href: '/admin/rate-card',
+        icon: Calculator,
         permission: 'products:view',
       },
       {

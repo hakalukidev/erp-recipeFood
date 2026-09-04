@@ -81,6 +81,9 @@ import type {
   QualityCheckInput,
   QualityCheckRecord,
   QualityCheckStatus,
+  RateCardInput,
+  RateCardLineItem,
+  RateCardRecord,
   RoleInput,
   RoleRecord,
   RouteInput,
@@ -237,6 +240,8 @@ type ERPContextValue = {
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
+  saveRateCard: (input: RateCardInput, rateCardId?: string) => Promise<string>
+  deleteRateCard: (rateCardId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
   // Section 81 (Data Migration)
   importProducts: (rows: ProductInput[]) => Promise<ImportResult>
@@ -299,6 +304,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'stockCounts',
   'billOfMaterials',
   'productionOrders',
+  'rateCards',
   'qualityChecks',
   'qcHolds',
   'purchases',
@@ -998,6 +1004,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     stockCounts: source.stockCounts ?? {},
     billOfMaterials: source.billOfMaterials ?? {},
     productionOrders: source.productionOrders ?? {},
+    rateCards: source.rateCards ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     purchases: source.purchases ?? {},
@@ -6376,6 +6383,101 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
   }
 
+  // ---- Rate Card / Costing Sheet -----------------------------------------
+  // See the RateCardRecord comment in types.ts for what each derived total
+  // means; this is the one place those formulas are computed so the saved
+  // record, the list screen, and every printed voucher all agree.
+  function computeRateCardTotals(items: RateCardLineItem[]) {
+    const rawRateTotal = items.reduce((sum, item) => sum + item.qty * item.rawRate, 0)
+    const manufRateTotal = items.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
+    const depotRateTotal = items.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
+    const dealerRateTotal = items.reduce((sum, item) => sum + item.qty * item.dealerRate, 0)
+    const pouchCartonAmount = manufRateTotal - rawRateTotal
+    const usableMoney = depotRateTotal - manufRateTotal
+    const usableUDepot = dealerRateTotal - manufRateTotal
+
+    return {
+      rawRateTotal,
+      manufRateTotal,
+      depotRateTotal,
+      dealerRateTotal,
+      pouchCartonAmount,
+      usableMoney,
+      usableMoneyPercent: dealerRateTotal ? (usableMoney / dealerRateTotal) * 100 : 0,
+      usableUDepot,
+      usableUDepotPercent: dealerRateTotal ? (usableUDepot / dealerRateTotal) * 100 : 0,
+    }
+  }
+
+  async function saveRateCard(input: RateCardInput, rateCardId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const invoiceNo = input.invoiceNo.trim()
+    if (!invoiceNo) {
+      throw new Error('Invoice number is required.')
+    }
+    if (!input.recipientName.trim()) {
+      throw new Error('Recipient name is required.')
+    }
+    const items = input.items
+      .filter((item) => item.productName.trim())
+      .map((item) => ({
+        ...item,
+        productName: item.productName.trim(),
+        qty: Number(item.qty) || 0,
+        rawRate: Number(item.rawRate) || 0,
+        manufRate: Number(item.manufRate) || 0,
+        depotRate: Number(item.depotRate) || 0,
+        dealerRate: Number(item.dealerRate) || 0,
+      }))
+    if (items.length === 0) {
+      throw new Error('Add at least one product line.')
+    }
+
+    const existing = rateCardId ? data.rateCards[rateCardId] : null
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('ratecard')
+    const now = new Date().toISOString()
+    const rateCard: RateCardRecord = {
+      id,
+      invoiceNo,
+      voucherType: input.voucherType,
+      recipientName: input.recipientName.trim(),
+      date: input.date,
+      items,
+      remarks: input.remarks?.trim() ?? '',
+      ...computeRateCardTotals(items),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/rateCards'), { [id]: rateCard })
+    await writeActivity(
+      existing ? 'ratecard_updated' : 'ratecard_created',
+      'sales',
+      `${existing ? 'Updated' : 'Created'} ${input.voucherType} rate card ${invoiceNo} for ${rateCard.recipientName}.`
+    )
+
+    return id
+  }
+
+  async function deleteRateCard(rateCardId: string) {
+    if (!data) {
+      return
+    }
+
+    const rateCard = data.rateCards[rateCardId]
+    if (!rateCard) {
+      throw new Error('Rate card not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`rateCards/${rateCardId}`]: null })
+    await writeActivity('ratecard_deleted', 'sales', `Deleted rate card ${rateCard.invoiceNo}.`)
+  }
+
   // ---- Data Migration (Section 81) ---------------------------------------
   // Bulk counterparts of saveProduct/saveCustomer/saveSupplier/etc. for the
   // Data Migration screen's Excel/CSV upload. A migration sheet can be
@@ -6883,6 +6985,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveCourier,
       updateCourierStatus,
       deleteCourier,
+      saveRateCard,
+      deleteRateCard,
       saveSettings,
       importProducts,
       importCustomers,

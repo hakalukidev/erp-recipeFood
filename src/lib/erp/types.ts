@@ -792,6 +792,63 @@ export type ProductionOrderInput = {
   plannedBatches: number
 }
 
+// ---- Rate Card / Costing Sheet --------------------------------------------
+// Company → Depot → Dealer price cascade for a batch of products, mirroring
+// the client's paper invoice: each line carries four per-unit rates (Raw
+// Material, Manufacturing, Depot Sales, Dealer Sales), and the header totals
+// + margin figures below are derived from those lines — see
+// computeRateCardTotals in provider.tsx for the exact formulas:
+//   pouchCartonAmount = manufRateTotal − rawRateTotal
+//   usableMoney        = depotRateTotal − manufRateTotal   (margin up to Depot)
+//   usableUDepot        = dealerRateTotal − manufRateTotal  (margin skipping Depot)
+//   both percentages are the figure above ÷ dealerRateTotal
+// `voucherType` decides which rate columns the printed voucher shows —
+// see RATE_CARD_VOUCHER_COLUMNS in the Rate Card screen: 'company' (internal)
+// sees every column and the margin box, 'depot' sees only Manuf/Depot rate,
+// 'dealer' only Depot/Dealer rate — margin figures never print for either.
+export type RateCardVoucherType = 'company' | 'depot' | 'dealer'
+
+export type RateCardLineItem = {
+  productId?: string
+  productName: string
+  qty: number
+  rawRate: number
+  manufRate: number
+  depotRate: number
+  dealerRate: number
+  perCtnBgs?: string
+}
+
+export type RateCardRecord = {
+  id: string
+  invoiceNo: string
+  voucherType: RateCardVoucherType
+  recipientName: string
+  date: string
+  items: RateCardLineItem[]
+  remarks?: string
+  rawRateTotal: number
+  manufRateTotal: number
+  depotRateTotal: number
+  dealerRateTotal: number
+  pouchCartonAmount: number
+  usableMoney: number
+  usableMoneyPercent: number
+  usableUDepot: number
+  usableUDepotPercent: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type RateCardInput = {
+  invoiceNo: string
+  voucherType: RateCardVoucherType
+  recipientName: string
+  date: string
+  items: RateCardLineItem[]
+  remarks?: string
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module, used from both Production (completeProduction) and
 // Purchase (receivePurchaseOrder) — the detailed lab-test parameters.
@@ -1335,6 +1392,7 @@ export type ERPData = {
   stockCounts: Record<string, StockCountRecord>
   billOfMaterials: Record<string, BillOfMaterialRecord>
   productionOrders: Record<string, ProductionOrderRecord>
+  rateCards: Record<string, RateCardRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   purchases: Record<string, PurchaseRecord>

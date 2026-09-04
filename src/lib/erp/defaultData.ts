@@ -655,6 +655,7 @@ export function createDefaultERPData(): ERPData {
     stockCounts: {},
     billOfMaterials: {},
     productionOrders: {},
+    rateCards: {},
     qualityChecks: {},
     qcHolds: {},
     purchases: {

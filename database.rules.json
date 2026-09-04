@@ -160,6 +160,10 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
+      "rateCards": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
       "qualityChecks": {
         ".read": "auth != null",
         ".write": "auth != null"
