@@ -1,16 +1,10 @@
 // Sections 55-58: Managing Director / Finance / Inventory / Sales Dashboards.
 //
 // These read-only snapshots sit on top of the modules that already own the
-// underlying data (Accounting, Finance, Manufacturing, Stock, Sales) rather
-// than introducing a parallel source of truth. The Chart-of-Accounts balance
-// math (accountBalance/periodTotal) intentionally mirrors the Trial Balance /
-// Balance Sheet / Cash Flow tabs in the Accounting page (src/app/admin/
-// accounting/page.tsx) so a dashboard figure always agrees with the books —
-// it's re-declared here (rather than imported) because that file is a page
-// module, not a shared library. The same primitives are exported for reuse
-// by the Section 59 Management Reports sources (src/lib/erp/reportSources.ts)
-// so the Reports module's Trial Balance / Ledger / Cash Book / etc. always
-// agree with these dashboards and the Accounting page too.
+// underlying data (Finance, Manufacturing, Stock, Sales) rather than
+// introducing a parallel source of truth. The Chart-of-Accounts balance math
+// (accountBalance/periodTotal) mirrors how the Automatic Accounting Engine
+// posts ledger entries so a dashboard figure always agrees with the books.
 import type {
   AccountType,
   BatchRecord,
@@ -241,8 +235,6 @@ function batchExpiryStatus(batch: BatchRecord, now: number) {
 
 export function buildInventoryDashboard(data: ERPData | null) {
   const products = toArray(data?.products)
-  const warehouses = toArray(data?.warehouses)
-  const warehouseStocks = toArray(data?.warehouseStocks)
   const batches = toArray(data?.batches).filter((batch) => batch.quantity > 0)
   const now = Date.now()
 
@@ -260,33 +252,6 @@ export function buildInventoryDashboard(data: ERPData | null) {
   const expiredBatches = batches
     .filter((batch) => batchExpiryStatus(batch, now) === 'expired')
     .sort((a, b) => new Date(b.expiryDate).getTime() - new Date(a.expiryDate).getTime())
-
-  const warehouseById = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse]))
-  const productById = new Map(products.map((product) => [product.id, product]))
-
-  type WarehouseRow = { warehouseId: string; warehouseName: string; quantity: number; value: number }
-  const warehouseRows = new Map<string, WarehouseRow>()
-  const addWarehouseRow = (warehouseId: string, quantity: number, value: number) => {
-    const key = warehouseId || 'unassigned'
-    const row = warehouseRows.get(key) ?? {
-      warehouseId: key,
-      warehouseName: warehouseById.get(warehouseId)?.name ?? 'Unassigned',
-      quantity: 0,
-      value: 0,
-    }
-    row.quantity += quantity
-    row.value += value
-    warehouseRows.set(key, row)
-  }
-  if (warehouseStocks.length) {
-    warehouseStocks.forEach((stock) => {
-      const value = (productById.get(stock.productId)?.purchasePrice ?? 0) * stock.quantity
-      addWarehouseRow(stock.warehouseId, stock.quantity, value)
-    })
-  } else {
-    products.forEach((product) => addWarehouseRow(product.warehouseId, product.stockQty, stockValue(product)))
-  }
-  const warehouseWiseStock = Array.from(warehouseRows.values()).sort((a, b) => b.value - a.value)
 
   const productWiseStock = [...products].sort((a, b) => stockValue(b) - stockValue(a))
 
@@ -307,7 +272,6 @@ export function buildInventoryDashboard(data: ERPData | null) {
     outOfStockProducts,
     nearExpiryBatches,
     expiredBatches,
-    warehouseWiseStock,
     productWiseStock,
     batchWiseStock,
   }
@@ -401,9 +365,8 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
 }
 
 // ---- Section 58: Sales Dashboard -----------------------------------------
-// Exported so the Section 59 "Target vs Achievement" report source
-// (src/lib/erp/reportSources.ts) computes achievement the same way this
-// dashboard does, for any period — not just the current month.
+// Exported so "Target vs Achievement" figures can be computed the same way
+// this dashboard does, for any period — not just the current month.
 export function achievedAmountFor(target: SalesTargetRecord, orders: OrderRecordLite[], customerById: Map<string, CustomerLite>) {
   if (target.entityType === 'sales-officer') {
     return orders.filter((order) => order.salesPersonId === target.entityId).reduce((sum, order) => sum + order.total, 0)
@@ -527,119 +490,6 @@ export function buildSalesDashboard(data: ERPData | null) {
     targetVsAchievement,
   }
 }
-
-// ---- Section 60: Profit Analysis -----------------------------------------
-// Product Sales - COGS = Gross Profit, sliced by every dimension the spec
-// lists. Both figures are derived the same way the Automatic Accounting
-// Engine posts them for a sale (see buildInvoiceLedgerEntries in
-// provider.tsx): per line, Sales = unitPrice x quantity net of the order's
-// discount/promotional-discount (apportioned across lines by revenue share
-// so the pieces still add up to the order total), and COGS = purchasePrice
-// x quantity — purchasePrice is snapshotted onto the order line at sale
-// time, so this stays accurate even if a product's cost changes later.
-export type ProfitAnalysisRow = {
-  key: string
-  label: string
-  sales: number
-  cogs: number
-  grossProfit: number
-  marginPercent: number
-  orders: number
-}
-
-function toProfitRow(key: string, label: string, sales: number, cogs: number, orders: number): ProfitAnalysisRow {
-  const grossProfit = sales - cogs
-  return { key, label, sales, cogs, grossProfit, marginPercent: sales > 0 ? (grossProfit / sales) * 100 : 0, orders }
-}
-
-function orderNetSales(order: OrderRecord) {
-  const subtotal = order.subtotal ?? order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
-  return subtotal - (order.discount ?? 0) - (order.promotionalDiscount ?? 0)
-}
-
-function orderCogs(order: OrderRecord) {
-  return order.items.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0)
-}
-
-// One row per distinct key from `keyOf` (Company/Customer/Dealer/
-// Territory/Sales Officer-wise, and Invoice-wise since a bill number is
-// already unique per order).
-function aggregateOrderProfit(
-  orders: OrderRecord[],
-  keyOf: (order: OrderRecord) => string | undefined,
-  fallback = 'Unassigned'
-): ProfitAnalysisRow[] {
-  const rows = new Map<string, { sales: number; cogs: number; orders: number }>()
-  orders.forEach((order) => {
-    const label = keyOf(order) || fallback
-    const row = rows.get(label) ?? { sales: 0, cogs: 0, orders: 0 }
-    row.sales += orderNetSales(order)
-    row.cogs += orderCogs(order)
-    row.orders += 1
-    rows.set(label, row)
-  })
-  return Array.from(rows.entries())
-    .map(([label, row]) => toProfitRow(label, label, row.sales, row.cogs, row.orders))
-    .sort((a, b) => b.grossProfit - a.grossProfit)
-}
-
-// Product/Category-wise needs line-item granularity — an order's discount
-// is apportioned across its lines by gross-revenue share so the per-line
-// rows still sum back to the same order-level net sales aggregateOrderProfit
-// uses.
-function aggregateItemProfit(
-  orders: OrderRecord[],
-  keyOf: (item: OrderRecord['items'][number], order: OrderRecord) => string | undefined,
-  fallback = 'Unassigned'
-): ProfitAnalysisRow[] {
-  const rows = new Map<string, { sales: number; cogs: number; orders: Set<string> }>()
-  orders.forEach((order) => {
-    const grossRevenue = order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
-    const totalDiscount = (order.discount ?? 0) + (order.promotionalDiscount ?? 0)
-    order.items.forEach((item) => {
-      const label = keyOf(item, order) || fallback
-      const itemRevenue = item.unitPrice * item.quantity
-      const discountShare = grossRevenue > 0 ? (itemRevenue / grossRevenue) * totalDiscount : 0
-      const row = rows.get(label) ?? { sales: 0, cogs: 0, orders: new Set<string>() }
-      row.sales += itemRevenue - discountShare
-      row.cogs += item.purchasePrice * item.quantity
-      row.orders.add(order.id)
-      rows.set(label, row)
-    })
-  })
-  return Array.from(rows.entries())
-    .map(([label, row]) => toProfitRow(label, label, row.sales, row.cogs, row.orders.size))
-    .sort((a, b) => b.grossProfit - a.grossProfit)
-}
-
-export function buildProfitAnalysis(data: ERPData | null, inPeriod: (date: string) => boolean = () => true) {
-  const orders = toArray(data?.orders).filter((order) => order.status !== 'cancelled' && inPeriod(order.createdAt))
-  const customers = toArray(data?.customers)
-  const products = toArray(data?.products)
-  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
-  const productById = new Map(products.map((product) => [product.id, product]))
-
-  // Section 60 example: Product Sales 100,000 - COGS 70,000 = Gross Profit
-  // 30,000 — one company-wide row (this ERP runs a single company; the
-  // breakdown is ready to extend once multi-company is supported).
-  const companyName = data?.settings.companyName || 'Company'
-  const companyWise = aggregateOrderProfit(orders, () => companyName, companyName)
-
-  const productWise = aggregateItemProfit(orders, (item) => item.productName)
-  const categoryWise = aggregateItemProfit(orders, (item) => productById.get(item.productId)?.category)
-  const customerWise = aggregateOrderProfit(orders, (order) => order.customerName)
-  const dealerOrders = orders.filter((order) => customerById.get(order.customerId)?.customerType === 'dealer')
-  const dealerWise = aggregateOrderProfit(dealerOrders, (order) => order.customerName)
-  const territoryWise = aggregateOrderProfit(orders, (order) => customerById.get(order.customerId)?.territory)
-  const salesOfficerWise = aggregateOrderProfit(orders, (order) => order.salesPersonName)
-  const invoiceWise = orders
-    .map((order) => toProfitRow(order.id, order.billNumber, orderNetSales(order), orderCogs(order), 1))
-    .sort((a, b) => b.grossProfit - a.grossProfit)
-
-  return { companyWise, productWise, categoryWise, customerWise, dealerWise, territoryWise, salesOfficerWise, invoiceWise }
-}
-
-export type ProfitAnalysisDimension = keyof ReturnType<typeof buildProfitAnalysis>
 
 // ---- Section 61: Real-time Business Intelligence (Management Dashboard) --
 // Alerts grouped Critical/Warning/Normal, same buckets and examples the

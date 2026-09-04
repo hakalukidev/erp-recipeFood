@@ -493,7 +493,7 @@ export default function SuppliersPage() {
                       </TableCell>
                       <TableCell className="min-w-44">
                         <p className="font-semibold">{formatCurrency(landedCost, supplier.currency)}</p>
-                        <p className="text-xs text-muted-foreground">Total until warehouse</p>
+                        <p className="text-xs text-muted-foreground">Total landed cost</p>
                       </TableCell>
                       <TableCell className="min-w-44">
                         <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>

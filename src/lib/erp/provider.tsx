@@ -38,18 +38,12 @@ import type {
   CommissionPayoutRecord,
   CommissionRuleInput,
   CommissionRuleRecord,
-  CourierInput,
-  CourierRecord,
   CustomerInput,
   CustomerRecord,
-  CustomerVisitInput,
-  CustomerVisitRecord,
   ERPData,
   ExpenseApprovalStatus,
   ExpenseInput,
   ExpenseRecord,
-  ImportResult,
-  ImportRowError,
   InvestorInput,
   JournalEntryInput,
   JournalEntryLine,
@@ -60,8 +54,6 @@ import type {
   OrderInput,
   OrderItem,
   OrderItemBatchAllocation,
-  OpeningBalanceRow,
-  OpeningStockRow,
   OrderRecord,
   ProductInput,
   ProductRecord,
@@ -86,31 +78,19 @@ import type {
   RateCardRecord,
   RoleInput,
   RoleRecord,
-  RouteInput,
-  RouteRecord,
-  RouteVisitScheduleInput,
-  RouteVisitScheduleRecord,
   SalesReturnInput,
   SalesReturnRecord,
   SalesTargetInput,
   SalesTargetRecord,
-  SellerInput,
-  SellerTransactionInput,
   SettingsInput,
   StockAdjustmentInput,
   StockAdjustmentRecord,
   StockCountInput,
   StockCountRecord,
-  StockTransferInput,
-  StockTransferRecord,
   SupplierInput,
   SupplierRecord,
-  TaskInput,
-  TaskRecord,
   UserInput,
   UserRecord,
-  WarehouseInput,
-  WarehouseStockRecord,
 } from '@/lib/erp/types'
 import {
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
@@ -132,14 +112,6 @@ import {
 } from '@/lib/firebase/config'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
-
-export const VISIT_OUTCOME_LABEL: Record<CustomerVisitRecord['outcome'], string> = {
-  'order-placed': 'Order placed',
-  'collection-made': 'Collection made',
-  'order-and-collection': 'Order + collection',
-  'no-order': 'No order',
-  'store-closed': 'Store closed',
-}
 
 type ERPContextValue = {
   data: ERPData | null
@@ -167,8 +139,6 @@ type ERPContextValue = {
   approveStockAdjustment: (adjustmentId: string) => Promise<void>
   rejectStockAdjustment: (adjustmentId: string) => Promise<void>
   createStockCount: (input: StockCountInput) => Promise<string>
-  saveWarehouse: (input: WarehouseInput, warehouseId?: string) => Promise<string>
-  deleteWarehouse: (warehouseId: string) => Promise<void>
   recordPurchase: (input: PurchaseInput) => Promise<void>
   dismissPurchaseRequisition: (requisitionId: string) => Promise<void>
   createPurchaseOrder: (input: PurchaseOrderInput) => Promise<string>
@@ -179,12 +149,6 @@ type ERPContextValue = {
   createPurchaseReturn: (input: PurchaseReturnInput) => Promise<string>
   createSalesReturn: (input: SalesReturnInput) => Promise<string>
   recordCollection: (input: CollectionInput) => Promise<string>
-  createStockTransferRequest: (input: StockTransferInput) => Promise<string>
-  approveStockTransfer: (transferId: string) => Promise<void>
-  rejectStockTransfer: (transferId: string) => Promise<void>
-  dispatchStockTransfer: (transferId: string) => Promise<void>
-  receiveStockTransfer: (transferId: string) => Promise<void>
-  cancelStockTransfer: (transferId: string) => Promise<void>
   releaseQcHold: (qcHoldId: string) => Promise<void>
   scrapQcHold: (qcHoldId: string) => Promise<void>
   saveBillOfMaterial: (input: BillOfMaterialInput, previousVersionId?: string) => Promise<string>
@@ -204,8 +168,6 @@ type ERPContextValue = {
   cancelOrder: (orderId: string, reason?: string) => Promise<void>
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
   updateOrderApproval: (orderId: string, approvalStatus: NonNullable<OrderRecord['approvalStatus']>) => Promise<void>
-  createTask: (input: TaskInput) => Promise<void>
-  updateTaskStatus: (taskId: string, status: TaskRecord['status']) => Promise<void>
   markNotificationRead: (notificationId: string) => Promise<void>
   markAllNotificationsRead: (notificationIds: string[]) => Promise<void>
   saveExpense: (input: ExpenseInput, expenseId?: string) => Promise<void>
@@ -214,12 +176,6 @@ type ERPContextValue = {
   deleteExpense: (expenseId: string) => Promise<void>
   saveBudget: (input: BudgetInput, budgetId?: string) => Promise<void>
   deleteBudget: (budgetId: string) => Promise<void>
-  saveRoute: (input: RouteInput, routeId?: string) => Promise<string>
-  deleteRoute: (routeId: string) => Promise<void>
-  recordCustomerVisit: (input: CustomerVisitInput) => Promise<string>
-  deleteCustomerVisit: (visitId: string) => Promise<void>
-  saveRouteVisitSchedule: (input: RouteVisitScheduleInput, scheduleId?: string) => Promise<string>
-  deleteRouteVisitSchedule: (scheduleId: string) => Promise<void>
   saveSalesTarget: (input: SalesTargetInput, targetId?: string) => Promise<string>
   deleteSalesTarget: (targetId: string) => Promise<void>
   saveCommissionRule: (input: CommissionRuleInput, ruleId?: string) => Promise<string>
@@ -233,26 +189,9 @@ type ERPContextValue = {
   saveBankAccount: (input: BankAccountInput, bankAccountId?: string) => Promise<string>
   deleteBankAccount: (bankAccountId: string) => Promise<void>
   recordBankTransaction: (input: BankTransactionInput) => Promise<string>
-  saveSeller: (input: SellerInput, sellerId?: string) => Promise<void>
-  deleteSeller: (sellerId: string) => Promise<void>
-  recordSellerTransaction: (input: SellerTransactionInput) => Promise<void>
-  deleteSellerTransaction: (transactionId: string) => Promise<void>
-  saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
-  updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
-  deleteCourier: (courierId: string) => Promise<void>
   saveRateCard: (input: RateCardInput, rateCardId?: string) => Promise<string>
   deleteRateCard: (rateCardId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
-  // Section 81 (Data Migration)
-  importProducts: (rows: ProductInput[]) => Promise<ImportResult>
-  importCustomers: (rows: CustomerInput[]) => Promise<ImportResult>
-  importSuppliers: (rows: SupplierInput[]) => Promise<ImportResult>
-  importOpeningStock: (rows: OpeningStockRow[]) => Promise<ImportResult>
-  importOpeningReceivable: (rows: OpeningBalanceRow[]) => Promise<ImportResult>
-  importOpeningPayable: (rows: OpeningBalanceRow[]) => Promise<ImportResult>
-  importOpeningCash: (amount: number) => Promise<void>
-  importOpeningBank: (rows: BankAccountInput[]) => Promise<ImportResult>
-  importEmployees: (rows: UserInput[]) => Promise<ImportResult>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -282,7 +221,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'permissions',
   'roles',
   'users',
-  'warehouses',
   'suppliers',
   'customers',
   'products',
@@ -297,8 +235,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'purchaseReturns',
   'salesReturns',
   'collections',
-  'warehouseStocks',
-  'stockTransfers',
   'batches',
   'stockAdjustments',
   'stockCounts',
@@ -308,21 +244,14 @@ const ERP_TOP_LEVEL_KEYS = [
   'qualityChecks',
   'qcHolds',
   'purchases',
-  'tasks',
   'notifications',
   'activities',
   'loginHistory',
   'expenses',
   'budgets',
-  'routes',
-  'customerVisits',
-  'routeVisitSchedules',
   'salesTargets',
   'commissionRules',
   'commissionPayouts',
-  'sellers',
-  'sellerTransactions',
-  'couriers',
   'investors',
   'settings',
   'meta',
@@ -530,7 +459,6 @@ function normalizeOrderRecord(order: OrderRecord): OrderRecord {
     approvalReasons: order.approvalReasons ?? [],
     promotionalDiscount: Number(order.promotionalDiscount ?? 0),
     vat: Number(order.vat ?? 0),
-    warehouseId: order.warehouseId || '',
     remarks: order.remarks || '',
   }
 }
@@ -858,51 +786,10 @@ function syncPurchaseRequisitionForStock(
   return null
 }
 
-function warehouseStockKey(productId: string, warehouseId: string) {
-  return `${productId}__${warehouseId}`
-}
-
-// Section 15/17: keeps the per-warehouse breakdown in sync wherever stock
-// actually moves. `product.stockQty` (the company-wide total everything
-// else already reads) is updated separately by each caller — this only
-// tracks which warehouse physically holds how much of it. A blank
-// warehouseId is a no-op: not every stock movement names a specific
-// warehouse yet, and that's fine — the aggregate total still stays right.
-function adjustWarehouseStock(
-  data: ERPData,
-  updates: Record<string, unknown>,
-  product: ProductRecord,
-  warehouseId: string,
-  delta: number
-) {
-  if (!warehouseId || delta === 0) {
-    return
-  }
-
-  const key = warehouseStockKey(product.id, warehouseId)
-  // A single write batch can adjust the same product+warehouse twice (e.g.
-  // editing an order that keeps the same warehouse) — read back whatever
-  // this batch already staged so the second call composes instead of
-  // clobbering the first.
-  const pending = updates[`warehouseStocks/${key}`] as WarehouseStockRecord | undefined
-  const baseQuantity = pending?.quantity ?? data.warehouseStocks[key]?.quantity ?? 0
-  const nextQuantity = Math.max(baseQuantity + delta, 0)
-  const now = new Date().toISOString()
-
-  updates[`warehouseStocks/${key}`] = {
-    id: key,
-    productId: product.id,
-    productName: product.name,
-    warehouseId,
-    quantity: nextQuantity,
-    updatedAt: now,
-  } satisfies WarehouseStockRecord
-}
-
 // A single write batch can touch the same batch record's quantity more than
 // once (e.g. updateOrder releasing the old allocation and consuming a new
-// one in the same update) — read back whatever this batch already staged,
-// same trick as adjustWarehouseStock above.
+// one in the same update) — read back whatever this batch already staged so
+// the second call composes instead of clobbering the first.
 function batchQuantity(data: ERPData, updates: Record<string, unknown>, batchId: string) {
   const pendingQty = updates[`batches/${batchId}/quantity`] as number | undefined
   if (pendingQty !== undefined) return pendingQty
@@ -913,23 +800,22 @@ function batchQuantity(data: ERPData, updates: Record<string, unknown>, batchId:
 // batch(es) it should, soonest-expiry-first, instead of only ever touching
 // the product's total stockQty. Batches with no expiry date sort last
 // (nothing to prioritize by). Only ever consumes as much as tracked batches
-// for this product+warehouse actually hold; any shortfall is left to the
-// untracked portion of stockQty — batches stay a best-effort FEFO layer on
-// top of stockQty, not a hard sub-ledger that can block a sale.
+// for this product actually hold; any shortfall is left to the untracked
+// portion of stockQty — batches stay a best-effort FEFO layer on top of
+// stockQty, not a hard sub-ledger that can block a sale.
 function consumeBatchesFefo(
   data: ERPData,
   updates: Record<string, unknown>,
   productId: string,
-  warehouseId: string,
   quantity: number
 ): OrderItemBatchAllocation[] {
-  if (!warehouseId || quantity <= 0) {
+  if (quantity <= 0) {
     return []
   }
 
   const now = new Date().toISOString()
   const candidates = Object.values(data.batches)
-    .filter((batch) => batch.productId === productId && batch.warehouseId === warehouseId)
+    .filter((batch) => batch.productId === productId)
     .sort((a, b) => {
       if (!a.expiryDate && !b.expiryDate) return a.createdAt.localeCompare(b.createdAt)
       if (!a.expiryDate) return 1
@@ -982,7 +868,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     permissions: DEFAULT_ERP_DATA.permissions,
     roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
     users: source.users ?? {},
-    warehouses: source.warehouses ?? {},
     suppliers: normalizeSupplierMap(source.suppliers),
     customers: normalizeCustomerMap(source.customers),
     products: normalizeProductMap(source.products),
@@ -997,8 +882,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     purchaseReturns: source.purchaseReturns ?? {},
     salesReturns: source.salesReturns ?? {},
     collections: source.collections ?? {},
-    warehouseStocks: source.warehouseStocks ?? {},
-    stockTransfers: source.stockTransfers ?? {},
     batches: source.batches ?? {},
     stockAdjustments: source.stockAdjustments ?? {},
     stockCounts: source.stockCounts ?? {},
@@ -1008,21 +891,14 @@ function normalizeERPData(data: ERPData | null): ERPData {
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     purchases: source.purchases ?? {},
-    tasks: source.tasks ?? {},
     notifications: source.notifications ?? {},
     activities: source.activities ?? {},
     loginHistory: source.loginHistory ?? {},
     expenses: normalizeExpenseMap(source.expenses),
     budgets: source.budgets ?? {},
-    routes: source.routes ?? {},
-    customerVisits: source.customerVisits ?? {},
-    routeVisitSchedules: source.routeVisitSchedules ?? {},
     salesTargets: source.salesTargets ?? {},
     commissionRules: source.commissionRules ?? {},
     commissionPayouts: source.commissionPayouts ?? {},
-    sellers: source.sellers ?? {},
-    sellerTransactions: source.sellerTransactions ?? {},
-    couriers: source.couriers ?? {},
     investors: source.investors ?? {},
     settings: {
       ...DEFAULT_ERP_DATA.settings,
@@ -1105,7 +981,6 @@ function normalizeProductInput(input: ProductInput) {
     conversionRatio: Math.max(input.conversionRatio ?? 1, 0),
     packSize: input.packSize?.trim() ?? '',
     weight: Math.max(input.weight ?? 0, 0),
-    warehouseId: input.warehouseId,
     supplierId: input.supplierId?.trim() ?? '',
     purchasePrice: input.purchasePrice,
     sellingPrice: input.sellingPrice,
@@ -1123,13 +998,6 @@ function normalizeProductInput(input: ProductInput) {
     description: input.description?.trim() ?? '',
     imageUrl: input.imageUrl?.trim() ?? '',
     imagePublicId: input.imagePublicId?.trim() ?? '',
-  }
-}
-
-function normalizeWarehouseInput(input: WarehouseInput) {
-  return {
-    name: input.name.trim(),
-    location: input.location.trim(),
   }
 }
 
@@ -1341,10 +1209,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   const currentPermissions = useMemo(() => getPermissions(data, currentUser), [currentUser, data])
 
   // Self-heal the Super Admin role's permission set. New modules/actions
-  // occasionally get added to ALL_PERMISSION_IDS (e.g. the `finance:*`
-  // permissions the Sellers ledger relies on) after a project's `erp/roles`
-  // node was already seeded, and the Role & Permission Matrix UI disables
-  // editing the super_admin row on purpose (see RoleManagementSection.tsx)
+  // occasionally get added to ALL_PERMISSION_IDS after a project's
+  // `erp/roles` node was already seeded, and the Role & Permission Matrix UI
+  // disables editing the super_admin row on purpose (see RoleManagementSection.tsx)
   // — so there's no in-app way to backfill a stale super_admin permission
   // set otherwise. Runs once per session for a logged-in super_admin and
   // only writes the keys that are actually missing.
@@ -1663,10 +1530,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('SKU or model code is required.')
     }
 
-    if (!data.warehouses[normalized.warehouseId]) {
-      throw new Error('Select a valid warehouse.')
-    }
-
     if (normalized.supplierId && !data.suppliers[normalized.supplierId]) {
       throw new Error('Selected supplier was not found.')
     }
@@ -1687,15 +1550,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${id}`]: product,
     }
 
-    if (!existingProduct) {
-      adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
-    } else if (existingProduct.warehouseId === product.warehouseId) {
-      adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty - existingProduct.stockQty)
-    } else {
-      // Home warehouse changed — move the full quantity across rather than leaving it stranded.
-      adjustWarehouseStock(data, updates, existingProduct, existingProduct.warehouseId, -existingProduct.stockQty)
-      adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
-    }
     syncPurchaseRequisitionForStock(data, product, product.stockQty, updates)
 
     await update(ref(db, 'erp'), updates)
@@ -1803,11 +1657,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Product not found.')
     }
 
-    const warehouse = data.warehouses[input.warehouseId]
-    if (!warehouse) {
-      throw new Error('Select a valid warehouse.')
-    }
-
     if (!input.reason?.trim()) {
       throw new Error('A reason is required for every stock adjustment.')
     }
@@ -1819,14 +1668,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('adjustment')
     const now = new Date().toISOString()
-    const quantityBefore = data.warehouseStocks[warehouseStockKey(product.id, warehouse.id)]?.quantity ?? 0
+    const quantityBefore = product.stockQty
 
     const adjustment: StockAdjustmentRecord = {
       id,
       productId: product.id,
       productName: product.name,
-      warehouseId: warehouse.id,
-      warehouseName: warehouse.name,
       quantityBefore,
       quantityAfter: input.newQuantity,
       delta: input.newQuantity - quantityBefore,
@@ -1844,11 +1691,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'stock_adjustment_requested',
       'inventory',
-      `Requested stock adjustment for ${product.name} at ${warehouse.name} (${quantityBefore} → ${input.newQuantity}). Reason: ${adjustment.reason}`
+      `Requested stock adjustment for ${product.name} (${quantityBefore} → ${input.newQuantity}). Reason: ${adjustment.reason}`
     )
     await writeNotification(
       'Stock adjustment requested',
-      `${product.name} at ${warehouse.name}: ${quantityBefore} → ${input.newQuantity}. Reason: ${adjustment.reason}`,
+      `${product.name}: ${quantityBefore} → ${input.newQuantity}. Reason: ${adjustment.reason}`,
       'warning',
       ['super_admin', 'manager']
     )
@@ -1888,14 +1735,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
       [`products/${product.id}/updatedAt`]: now,
     }
-    adjustWarehouseStock(data, updates, product, adjustment.warehouseId, adjustment.delta)
     syncPurchaseRequisitionForStock(data, product, nextStock, updates)
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
       'stock_adjustment_approved',
       'inventory',
-      `Approved stock adjustment for ${product.name} at ${adjustment.warehouseName} (${adjustment.quantityBefore} → ${adjustment.quantityAfter}). Reason: ${adjustment.reason}.`
+      `Approved stock adjustment for ${product.name} (${adjustment.quantityBefore} → ${adjustment.quantityAfter}). Reason: ${adjustment.reason}.`
     )
   }
 
@@ -1923,7 +1769,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'stock_adjustment_rejected',
       'inventory',
-      `Rejected stock adjustment for ${adjustment.productName} at ${adjustment.warehouseName}.`
+      `Rejected stock adjustment for ${adjustment.productName}.`
     )
   }
 
@@ -1933,11 +1779,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   async function createStockCount(input: StockCountInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a stock count.')
-    }
-
-    const warehouse = data.warehouses[input.warehouseId]
-    if (!warehouse) {
-      throw new Error('Select a valid warehouse.')
     }
 
     if (!input.items.length) {
@@ -1952,7 +1793,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (item.physicalQty < 0) {
         throw new Error(`Physical quantity for ${product.name} cannot be negative.`)
       }
-      const systemQty = data.warehouseStocks[warehouseStockKey(product.id, warehouse.id)]?.quantity ?? 0
+      const systemQty = product.stockQty
       return {
         productId: product.id,
         productName: product.name,
@@ -1970,8 +1811,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const stockCount: StockCountRecord = {
       id,
       countNumber,
-      warehouseId: warehouse.id,
-      warehouseName: warehouse.name,
       items,
       countedBy: currentUser.id,
       countedByName: currentUser.name,
@@ -1984,51 +1823,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'stock_count_recorded',
       'inventory',
-      `Recorded stock count ${countNumber} at ${warehouse.name} — ${varianceCount} variance line(s).`
+      `Recorded stock count ${countNumber} — ${varianceCount} variance line(s).`
     )
     if (varianceCount > 0) {
       await writeNotification(
         'Stock count variance found',
-        `${countNumber} at ${warehouse.name}: ${varianceCount} product(s) differ from system stock. Review and raise adjustments as needed.`,
+        `${countNumber}: ${varianceCount} product(s) differ from system stock. Review and raise adjustments as needed.`,
         'warning',
         ['super_admin', 'manager']
       )
     }
-
-    return id
-  }
-
-  async function saveWarehouse(input: WarehouseInput, warehouseId?: string) {
-    if (!data) {
-      throw new Error('ERP data not loaded yet.')
-    }
-
-    const normalized = normalizeWarehouseInput(input)
-
-    if (!normalized.name) {
-      throw new Error('Warehouse name is required.')
-    }
-
-    if (!normalized.location) {
-      throw new Error('Warehouse location is required.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existingWarehouse = warehouseId ? data.warehouses[warehouseId] : null
-    const id = existingWarehouse?.id ?? createId('warehouse')
-    const warehouse = {
-      id,
-      ...normalized,
-    }
-
-    await update(ref(db, 'erp/warehouses'), { [id]: warehouse })
-    await writeActivity(
-      existingWarehouse ? 'warehouse_updated' : 'warehouse_created',
-      'warehouse',
-      existingWarehouse
-        ? `Updated ${warehouse.name} warehouse details.`
-        : `Added ${warehouse.name} warehouse.`
-    )
 
     return id
   }
@@ -2173,28 +1977,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('supplier_deleted', 'suppliers', `Deleted supplier ${supplier.name}.`)
   }
 
-  async function deleteWarehouse(warehouseId: string) {
-    if (!data) {
-      return
-    }
-
-    const warehouse = data.warehouses[warehouseId]
-    if (!warehouse) {
-      throw new Error('Warehouse not found.')
-    }
-
-    const assignedProducts = Object.values(data.products).filter((product) => product.warehouseId === warehouseId)
-    if (assignedProducts.length > 0) {
-      throw new Error('Move or delete the products in this warehouse before removing it.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`warehouses/${warehouseId}`]: null,
-    })
-    await writeActivity('warehouse_deleted', 'warehouse', `Deleted ${warehouse.name} warehouse.`)
-  }
-
   async function recordPurchase(input: PurchaseInput) {
     if (!data) {
       return
@@ -2231,7 +2013,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/updatedAt`]: now,
     }
     syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-    adjustWarehouseStock(data, updates, product, product.warehouseId, input.quantity)
 
     await update(ref(db, 'erp'), updates)
 
@@ -2281,11 +2062,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Supplier not found.')
     }
 
-    const warehouse = data.warehouses[input.warehouseId]
-    if (!warehouse) {
-      throw new Error('Select a valid receiving warehouse.')
-    }
-
     if (!input.items.length) {
       throw new Error('Add at least one product to the purchase order.')
     }
@@ -2317,8 +2093,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       requisitionId: input.requisitionId ?? '',
       supplierId: supplier.id,
       supplierName: supplier.name,
-      warehouseId: warehouse.id,
-      warehouseName: warehouse.name,
       items,
       currency: input.currency?.trim().toUpperCase() || 'BDT',
       subtotal,
@@ -2433,7 +2207,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  // Section 12, stage 3-6: Goods Receive → Quality Check → GRN → Warehouse
+  // Section 12, stage 3-6: Goods Receive → Quality Check → GRN → Stock
   // Receive, all in one step — only quality-passed quantities are added to
   // stock, and the accepted value becomes the Supplier Bill / Accounts
   // Payable (stage 7-8) posted to the ledger.
@@ -2540,7 +2314,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      adjustWarehouseStock(data, updates, product, purchaseOrder.warehouseId, item.receivedQuantity)
 
       // Section 18: a batch/expiry-tracked receipt becomes a pickable batch
       // for FEFO suggestions — purely informational until something
@@ -2551,7 +2324,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           id: batchId,
           productId: product.id,
           productName: product.name,
-          warehouseId: purchaseOrder.warehouseId,
           batchNumber: item.batchNumber || `AUTO-${batchId.slice(-6).toUpperCase()}`,
           manufacturingDate: item.manufacturingDate || '',
           expiryDate: item.expiryDate || '',
@@ -2575,8 +2347,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           sourceReference: purchaseOrder.poNumber,
           productId: product.id,
           productName: product.name,
-          warehouseId: purchaseOrder.warehouseId,
-          warehouseName: purchaseOrder.warehouseName,
           quantity: item.rejectedQuantity,
           unitCost: item.unitCost,
           reason: input.qualityCheckNote?.trim() || 'Failed quality check on receipt',
@@ -2685,7 +2455,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/updatedAt`]: now,
     }
     syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-    adjustWarehouseStock(data, updates, product, hold.warehouseId, hold.quantity)
 
     const value = hold.quantity * hold.unitCost
     if (value > 0) {
@@ -2944,8 +2713,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       poNumber: purchaseOrder.poNumber,
       supplierId: purchaseOrder.supplierId,
       supplierName: purchaseOrder.supplierName,
-      warehouseId: purchaseOrder.warehouseId,
-      warehouseName: purchaseOrder.warehouseName,
       items,
       totalValue,
       reason: input.reason?.trim() ?? '',
@@ -2969,7 +2736,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/stockQty`] = nextStock
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
-      adjustWarehouseStock(data, updates, product, purchaseOrder.warehouseId, -item.quantity)
     })
 
     if (totalValue > 0) {
@@ -3011,7 +2777,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   // Section 11: Customer Return → Return Inspection → Good/Bad Stock
-  // Classification → Warehouse Stock Update → Customer Ledger Adjustment →
+  // Classification → Stock Update → Customer Ledger Adjustment →
   // Accounting Adjustment — captured as a single entry, cascading
   // automatically per the ERP's "one entry, auto cascade" principle. The
   // inspector records each line's condition at entry time: "good" lines go
@@ -3109,7 +2875,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      adjustWarehouseStock(data, updates, product, order.warehouseId || product.warehouseId, quantity)
     })
 
     const returnDebitId = createId('ledger')
@@ -3272,225 +3037,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  // Section 17: Transfer Request → Approval → Dispatch → In Transit →
-  // Receive → Stock Update. Both warehouses' stock updates automatically —
-  // the source loses it on dispatch, the destination gains it on receive.
-  async function createStockTransferRequest(input: StockTransferInput) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before requesting a stock transfer.')
-    }
-
-    const product = data.products[input.productId]
-    if (!product) {
-      throw new Error('Product not found.')
-    }
-
-    const fromWarehouse = data.warehouses[input.fromWarehouseId]
-    const toWarehouse = data.warehouses[input.toWarehouseId]
-    if (!fromWarehouse || !toWarehouse) {
-      throw new Error('Select valid source and destination warehouses.')
-    }
-
-    if (fromWarehouse.id === toWarehouse.id) {
-      throw new Error('Source and destination warehouses must be different.')
-    }
-
-    if (input.quantity <= 0) {
-      throw new Error('Transfer quantity must be greater than zero.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const id = createId('transfer')
-    const now = new Date().toISOString()
-    const transferNumber = `STF-${Date.now().toString().slice(-8)}`
-
-    const transfer: StockTransferRecord = {
-      id,
-      transferNumber,
-      productId: product.id,
-      productName: product.name,
-      fromWarehouseId: fromWarehouse.id,
-      fromWarehouseName: fromWarehouse.name,
-      toWarehouseId: toWarehouse.id,
-      toWarehouseName: toWarehouse.name,
-      quantity: input.quantity,
-      status: 'requested',
-      note: input.note?.trim() ?? '',
-      requestedBy: currentUser.id,
-      requestedByName: currentUser.name,
-      approvedBy: '',
-      approvedByName: '',
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/stockTransfers'), { [id]: transfer })
-    await writeActivity(
-      'stock_transfer_requested',
-      'warehouse',
-      `Requested transfer of ${input.quantity} x ${product.name} from ${fromWarehouse.name} to ${toWarehouse.name}.`
-    )
-    await writeNotification(
-      'Stock transfer requested',
-      `${transferNumber}: ${input.quantity} x ${product.name} from ${fromWarehouse.name} to ${toWarehouse.name}.`,
-      'info',
-      ['super_admin', 'manager']
-    )
-
-    return id
-  }
-
-  async function approveStockTransfer(transferId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const transfer = data.stockTransfers[transferId]
-    if (!transfer) {
-      throw new Error('Stock transfer not found.')
-    }
-
-    if (transfer.status !== 'requested') {
-      throw new Error('Only requested transfers can be approved.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`stockTransfers/${transferId}/status`]: 'approved',
-      [`stockTransfers/${transferId}/approvedBy`]: currentUser.id,
-      [`stockTransfers/${transferId}/approvedByName`]: currentUser.name,
-      [`stockTransfers/${transferId}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity('stock_transfer_approved', 'warehouse', `Approved transfer ${transfer.transferNumber}.`)
-  }
-
-  async function rejectStockTransfer(transferId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const transfer = data.stockTransfers[transferId]
-    if (!transfer) {
-      throw new Error('Stock transfer not found.')
-    }
-
-    if (transfer.status !== 'requested' && transfer.status !== 'approved') {
-      throw new Error('Only a requested or approved transfer can be rejected.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`stockTransfers/${transferId}/status`]: 'rejected',
-      [`stockTransfers/${transferId}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity('stock_transfer_rejected', 'warehouse', `Rejected transfer ${transfer.transferNumber}.`)
-  }
-
-  async function dispatchStockTransfer(transferId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const transfer = data.stockTransfers[transferId]
-    if (!transfer) {
-      throw new Error('Stock transfer not found.')
-    }
-
-    if (transfer.status !== 'approved') {
-      throw new Error('Only an approved transfer can be dispatched.')
-    }
-
-    const product = data.products[transfer.productId]
-    if (!product) {
-      throw new Error('Product not found.')
-    }
-
-    const sourceKey = warehouseStockKey(transfer.productId, transfer.fromWarehouseId)
-    const sourceQty = data.warehouseStocks[sourceKey]?.quantity ?? 0
-    if (sourceQty < transfer.quantity) {
-      throw new Error(`Insufficient stock at ${transfer.fromWarehouseName} to dispatch this transfer.`)
-    }
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    const updates: Record<string, unknown> = {
-      [`stockTransfers/${transferId}/status`]: 'in-transit',
-      [`stockTransfers/${transferId}/updatedAt`]: now,
-    }
-    adjustWarehouseStock(data, updates, product, transfer.fromWarehouseId, -transfer.quantity)
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity('stock_transfer_dispatched', 'warehouse', `Dispatched transfer ${transfer.transferNumber} — in transit.`)
-  }
-
-  async function receiveStockTransfer(transferId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const transfer = data.stockTransfers[transferId]
-    if (!transfer) {
-      throw new Error('Stock transfer not found.')
-    }
-
-    if (transfer.status !== 'in-transit') {
-      throw new Error('Only a transfer that is in transit can be received.')
-    }
-
-    const product = data.products[transfer.productId]
-    if (!product) {
-      throw new Error('Product not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    const updates: Record<string, unknown> = {
-      [`stockTransfers/${transferId}/status`]: 'received',
-      [`stockTransfers/${transferId}/updatedAt`]: now,
-    }
-    adjustWarehouseStock(data, updates, product, transfer.toWarehouseId, transfer.quantity)
-
-    await update(ref(db, 'erp'), updates)
-    await writeActivity(
-      'stock_transfer_received',
-      'warehouse',
-      `Received transfer ${transfer.transferNumber} at ${transfer.toWarehouseName}.`
-    )
-    await writeNotification(
-      'Stock transfer completed',
-      `${transfer.transferNumber}: ${transfer.quantity} x ${transfer.productName} arrived at ${transfer.toWarehouseName}.`,
-      'info',
-      ['super_admin', 'manager']
-    )
-  }
-
-  async function cancelStockTransfer(transferId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const transfer = data.stockTransfers[transferId]
-    if (!transfer) {
-      throw new Error('Stock transfer not found.')
-    }
-
-    if (transfer.status !== 'requested' && transfer.status !== 'approved') {
-      throw new Error('A dispatched transfer cannot be cancelled — receive it instead.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`stockTransfers/${transferId}/status`]: 'cancelled',
-      [`stockTransfers/${transferId}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity('stock_transfer_cancelled', 'warehouse', `Cancelled transfer ${transfer.transferNumber}.`)
-  }
-
   // Section 21: Manufacturing / Production. A recipe/BOM is the standing
   // "how many raw materials per batch" definition; a production order is
   // one run of it through Production Plan → Raw Material Requirement →
   // Material Issue → Production → Quality Check → Finished Goods →
-  // Warehouse Receive → Cost Calculation.
+  // Stock Receive → Cost Calculation.
   // Sections 22-23: saving a recipe/BOM NEVER mutates or deletes a previous
   // version — "editing" one writes a brand-new record (version + 1, linked
   // back via previousVersionId) and only flips the old version's isActive
@@ -3676,11 +3227,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Only an approved formula can be used to plan production.')
     }
 
-    const warehouse = data.warehouses[input.warehouseId]
-    if (!warehouse) {
-      throw new Error('Select a valid warehouse.')
-    }
-
     if (input.plannedBatches <= 0) {
       throw new Error('Planned batches must be greater than zero.')
     }
@@ -3707,8 +3253,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       bomId: bom.id,
       finishedProductId: bom.finishedProductId,
       finishedProductName: bom.finishedProductName,
-      warehouseId: warehouse.id,
-      warehouseName: warehouse.name,
       plannedBatches: input.plannedBatches,
       plannedOutputQty: bom.outputQuantity * input.plannedBatches,
       materials,
@@ -3794,7 +3338,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      adjustWarehouseStock(data, updates, product, productionOrder.warehouseId, -material.requiredQty)
       const cost = material.requiredQty * material.unitCost
       if (product.productType === 'Packaging Material') {
         packagingCost += cost
@@ -3926,7 +3469,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         updates[`products/${finishedProduct.id}/purchasePrice`] = unitCost
       }
       syncPurchaseRequisitionForStock(data, finishedProduct, nextStock, updates)
-      adjustWarehouseStock(data, updates, finishedProduct, productionOrder.warehouseId, input.finishedGoodsQty)
     } else if (!passedQc && input.finishedGoodsQty > 0) {
       const holdId = createId('qchold')
       updates[`qcHolds/${holdId}`] = {
@@ -3936,8 +3478,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         sourceReference: productionOrder.productionNumber,
         productId: finishedProduct.id,
         productName: finishedProduct.name,
-        warehouseId: productionOrder.warehouseId,
-        warehouseName: productionOrder.warehouseName,
         quantity: input.finishedGoodsQty,
         unitCost,
         reason: input.qualityCheckNote?.trim() || 'Failed quality check',
@@ -4025,7 +3565,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeNotification(
       passedQc ? 'Production completed' : 'Production failed QC — stock on hold',
       passedQc
-        ? `${productionOrder.productionNumber}: ${input.finishedGoodsQty} units of ${productionOrder.finishedProductName} added to ${productionOrder.warehouseName}.`
+        ? `${productionOrder.productionNumber}: ${input.finishedGoodsQty} units of ${productionOrder.finishedProductName} added to stock.`
         : `${productionOrder.productionNumber}: ${input.finishedGoodsQty} units of ${productionOrder.finishedProductName} failed QC and are on hold — not available for sale.`,
       passedQc ? 'info' : 'warning',
       ['super_admin', 'manager', 'accounts']
@@ -4070,7 +3610,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
         updates[`products/${product.id}/updatedAt`] = now
         syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-        adjustWarehouseStock(data, updates, product, productionOrder.warehouseId, material.issuedQty)
       })
 
       const entries = getActiveLedgerEntries(data.ledgerEntries, productionOrderId)
@@ -4136,9 +3675,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const batchWrites: Record<string, unknown> = {}
     const batchAllocationsByProduct = new Map<string, OrderItemBatchAllocation[]>()
     requestedByProduct.forEach((quantity, productId) => {
-      const product = data.products[productId]
-      const warehouseId = input.warehouseId?.trim() || product.warehouseId
-      const allocations = consumeBatchesFefo(data, batchWrites, productId, warehouseId, quantity)
+      const allocations = consumeBatchesFefo(data, batchWrites, productId, quantity)
       if (allocations.length) {
         batchAllocationsByProduct.set(productId, allocations)
       }
@@ -4202,7 +3739,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         vat,
         paid,
         due,
-        warehouseId: input.warehouseId?.trim() ?? '',
         deliveryDate: input.deliveryDate,
         paymentDueDate: input.paymentDueDate?.trim() || defaultDueDate.toISOString(),
         dueReference: due > 0 ? input.dueReference || 'owner' : '',
@@ -4241,7 +3777,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (requisition) {
         newRequisitions.push(requisition)
       }
-      adjustWarehouseStock(data, updates, product, input.warehouseId?.trim() || product.warehouseId, -quantity)
     })
 
     await update(ref(db, 'erp'), updates)
@@ -4380,7 +3915,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`orders/${orderId}/vat`]: vat,
       [`orders/${orderId}/paid`]: paid,
       [`orders/${orderId}/due`]: due,
-      [`orders/${orderId}/warehouseId`]: input.warehouseId?.trim() ?? '',
       [`orders/${orderId}/deliveryDate`]: input.deliveryDate,
       [`orders/${orderId}/paymentDueDate`]: input.paymentDueDate?.trim() || order.paymentDueDate,
       [`orders/${orderId}/dueReference`]: due > 0 ? input.dueReference || 'owner' : '',
@@ -4417,8 +3951,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`ledgerEntries/${entry.id}`] = entry
     })
 
-    const previousWarehouseId = order.warehouseId || ''
-    const nextWarehouseId = input.warehouseId?.trim() || ''
     affectedProductIds.forEach((productId) => {
       const product = data.products[productId]
       const previousQty = previousByProduct.get(productId) ?? 0
@@ -4428,22 +3960,18 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      adjustWarehouseStock(data, updates, product, previousWarehouseId || product.warehouseId, previousQty)
-      adjustWarehouseStock(data, updates, product, nextWarehouseId || product.warehouseId, -requestedQty)
     })
 
     // Section 18 completion: release whatever batches the original lines
     // drew from, then re-consume fresh FEFO allocations for the edited
-    // quantities/warehouse — same reverse-then-repost shape as the
-    // stock/ledger effects above.
+    // quantities — same reverse-then-repost shape as the stock/ledger
+    // effects above.
     order.items.forEach((item) => {
       releaseBatchAllocations(data, updates, item.batchAllocations)
     })
     const batchAllocationsByProduct = new Map<string, OrderItemBatchAllocation[]>()
     requestedByProduct.forEach((quantity, productId) => {
-      const product = data.products[productId]
-      const warehouseId = nextWarehouseId || product.warehouseId
-      const allocations = consumeBatchesFefo(data, updates, productId, warehouseId, quantity)
+      const allocations = consumeBatchesFefo(data, updates, productId, quantity)
       if (allocations.length) {
         batchAllocationsByProduct.set(productId, allocations)
       }
@@ -4528,7 +4056,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
       syncPurchaseRequisitionForStock(data, product, nextStock, updates)
-      adjustWarehouseStock(data, updates, product, order.warehouseId || product.warehouseId, quantity)
     })
 
     // Section 18 completion: restore every batch this order's lines had
@@ -4613,41 +4140,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'info',
       ['super_admin', 'sales_officer', 'accounts']
     )
-
-    if (status === 'shipped') {
-      const hasCourier = Object.values(data.couriers).some(
-        (courier) => courier.orderId === order.id || courier.billNumber === order.billNumber
-      )
-
-      if (!hasCourier) {
-        const courierId = createId('courier')
-        const now = new Date().toISOString()
-        const courier: CourierRecord = {
-          id: courierId,
-          orderId: order.id,
-          customerId: order.customerId,
-          customerName: order.customerName,
-          billNumber: order.billNumber,
-          courierName: '',
-          productDescription: order.items.map((item) => `${item.productName} x${item.quantity}`).join(', '),
-          quantity: order.items.reduce((sum, item) => sum + item.quantity, 0),
-          codAmount: order.dueReference === 'courier' ? order.due : 0,
-          sentDate: now,
-          status: 'in-transit',
-          createdAt: now,
-          updatedAt: now,
-        }
-
-        await update(ref(db, 'erp/couriers'), { [courierId]: courier })
-        await writeActivity('courier_created', 'courier', `Auto-created courier shipment for order ${order.billNumber}.`)
-        await writeNotification(
-          'Shipment created',
-          `Order ${order.billNumber} was marked shipped — add the courier service to complete the shipment record.`,
-          'info',
-          ['super_admin', 'sales_officer']
-        )
-      }
-    }
   }
 
   // Section 49 — Sales Approval Workflow: an order only sits at
@@ -4690,45 +4182,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       `Order ${order.billNumber} was ${approvalStatus} by ${currentUser.name}.`,
       approvalStatus === 'approved' ? 'info' : 'warning',
       ['super_admin', 'sales_officer', 'accounts']
-    )
-  }
-
-  async function createTask(input: TaskInput) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    const db = getDatabaseOrThrow()
-    const assignee = data.users[input.assigneeId]
-    if (!assignee) {
-      throw new Error('Assignee not found.')
-    }
-
-    const taskId = createId('task')
-    const now = new Date().toISOString()
-
-    await update(ref(db, 'erp/tasks'), {
-      [taskId]: {
-        id: taskId,
-        title: input.title,
-        description: input.description,
-        module: input.module,
-        status: 'pending',
-        priority: input.priority,
-        assigneeId: assignee.id,
-        assigneeName: assignee.name,
-        dueDate: input.dueDate,
-        createdBy: currentUser.id,
-        createdAt: now,
-      },
-    })
-
-    await writeActivity('task_created', 'operations', `Assigned "${input.title}" to ${assignee.name}.`)
-    await writeNotification(
-      'New task assigned',
-      `Task "${input.title}" was assigned to ${assignee.name} by ${currentUser?.name ?? 'Admin'}.`,
-      'info',
-      ['super_admin', assignee.roleId]
     )
   }
 
@@ -4966,12 +4419,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await sendUserPasswordReset(email)
   }
 
-  async function updateTaskStatus(taskId: string, status: TaskRecord['status']) {
-    const db = getDatabaseOrThrow()
-    await update(ref(db, `erp/tasks/${taskId}`), { status })
-    await writeActivity('task_updated', 'operations', `Updated task ${taskId} to ${status}.`)
-  }
-
   async function markNotificationRead(notificationId: string) {
     const db = getDatabaseOrThrow()
     await update(ref(db, `erp/notifications/${notificationId}`), { read: true })
@@ -5181,208 +4628,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('budget_deleted', 'finance', `Deleted ${budget.category} budget.`)
   }
 
-  // ---- Sales Force Management (Section 40) -------------------------------
-  async function saveRoute(input: RouteInput, routeId?: string) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before managing routes.')
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
-      throw new Error('You do not have permission to manage routes.')
-    }
-
-    const routeName = input.routeName.trim()
-    if (!routeName) {
-      throw new Error('Route name is required.')
-    }
-
-    const salesOfficer = data.users[input.salesOfficerId]
-    if (!salesOfficer) {
-      throw new Error('Select a valid sales officer.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existing = routeId ? data.routes[routeId] : null
-    const id = existing?.id ?? createId('route')
-    const now = new Date().toISOString()
-    const route: RouteRecord = {
-      id,
-      routeCode: input.routeCode?.trim() || existing?.routeCode || `RT-${Date.now().toString().slice(-6)}`,
-      routeName,
-      territory: input.territory?.trim() ?? '',
-      salesArea: input.salesArea?.trim() ?? '',
-      salesOfficerId: salesOfficer.id,
-      salesOfficerName: salesOfficer.name,
-      customerIds: input.customerIds ?? [],
-      status: input.status ?? 'active',
-      notes: input.notes?.trim() ?? '',
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/routes'), { [id]: route })
-    await writeActivity(
-      existing ? 'route_updated' : 'route_created',
-      'sales',
-      `${existing ? 'Updated' : 'Created'} route ${route.routeName} for ${route.salesOfficerName}.`
-    )
-    return id
-  }
-
-  async function deleteRoute(routeId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
-      throw new Error('You do not have permission to manage routes.')
-    }
-
-    const route = data.routes[routeId]
-    if (!route) {
-      throw new Error('Route not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp/routes'), { [routeId]: null })
-    await writeActivity('route_deleted', 'sales', `Deleted route ${route.routeName}.`)
-  }
-
-  async function recordCustomerVisit(input: CustomerVisitInput) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before logging a visit.')
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:create')) {
-      throw new Error('You do not have permission to log customer visits.')
-    }
-
-    const salesOfficer = data.users[input.salesOfficerId]
-    if (!salesOfficer) {
-      throw new Error('Select a valid sales officer.')
-    }
-
-    const customer = data.customers[input.customerId]
-    if (!customer) {
-      throw new Error('Customer not found.')
-    }
-
-    const route = input.routeId ? data.routes[input.routeId] : null
-    const order = input.orderId ? data.orders[input.orderId] : null
-    const collection = input.collectionId ? data.collections[input.collectionId] : null
-
-    const db = getDatabaseOrThrow()
-    const id = createId('visit')
-    const now = new Date().toISOString()
-    const visit: CustomerVisitRecord = {
-      id,
-      visitDate: input.visitDate?.trim() || now,
-      salesOfficerId: salesOfficer.id,
-      salesOfficerName: salesOfficer.name,
-      customerId: customer.id,
-      customerName: customer.name,
-      routeId: route?.id ?? '',
-      routeName: route?.routeName ?? '',
-      territory: route?.territory ?? customer.territory ?? '',
-      outcome: input.outcome,
-      orderId: order?.id ?? '',
-      orderAmount: order?.total ?? 0,
-      collectionId: collection?.id ?? '',
-      collectionAmount: collection?.amount ?? 0,
-      remarks: input.remarks?.trim() ?? '',
-      createdAt: now,
-    }
-
-    await update(ref(db, 'erp/customerVisits'), { [id]: visit })
-    await writeActivity(
-      'customer_visit_logged',
-      'sales',
-      `${salesOfficer.name} visited ${customer.name} (${VISIT_OUTCOME_LABEL[input.outcome]}).`
-    )
-    return id
-  }
-
-  async function deleteCustomerVisit(visitId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
-      throw new Error('You do not have permission to remove visit logs.')
-    }
-
-    const visit = data.customerVisits[visitId]
-    if (!visit) {
-      throw new Error('Visit not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp/customerVisits'), { [visitId]: null })
-    await writeActivity('customer_visit_deleted', 'sales', `Removed visit log for ${visit.customerName}.`)
-  }
-
-  // ---- Route Visit Schedule / "Beat Plan" (Section 45) --------------------
-  async function saveRouteVisitSchedule(input: RouteVisitScheduleInput, scheduleId?: string) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before planning a visit schedule.')
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
-      throw new Error('You do not have permission to manage the visit schedule.')
-    }
-
-    const route = data.routes[input.routeId]
-    if (!route) {
-      throw new Error('Select a valid route.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existing = scheduleId ? data.routeVisitSchedules[scheduleId] : null
-    const id = existing?.id ?? createId('sched')
-    const now = new Date().toISOString()
-    const schedule: RouteVisitScheduleRecord = {
-      id,
-      routeId: route.id,
-      routeName: route.routeName,
-      salesOfficerId: route.salesOfficerId,
-      salesOfficerName: route.salesOfficerName,
-      territory: route.territory,
-      dayOfWeek: input.dayOfWeek,
-      customerIds: input.customerIds ?? [],
-      status: input.status ?? 'active',
-      notes: input.notes?.trim() ?? '',
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/routeVisitSchedules'), { [id]: schedule })
-    await writeActivity(
-      existing ? 'visit_schedule_updated' : 'visit_schedule_created',
-      'sales',
-      `${existing ? 'Updated' : 'Planned'} ${schedule.dayOfWeek} visit schedule for ${schedule.routeName}.`
-    )
-    return id
-  }
-
-  async function deleteRouteVisitSchedule(scheduleId: string) {
-    if (!data || !currentUser) {
-      return
-    }
-
-    if (!hasPermissionCheck(data, currentUser, 'orders:edit')) {
-      throw new Error('You do not have permission to manage the visit schedule.')
-    }
-
-    const schedule = data.routeVisitSchedules[scheduleId]
-    if (!schedule) {
-      throw new Error('Visit schedule not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp/routeVisitSchedules'), { [scheduleId]: null })
-    await writeActivity('visit_schedule_deleted', 'sales', `Removed ${schedule.dayOfWeek} visit schedule for ${schedule.routeName}.`)
-  }
-
   // ---- Sales Target (Section 41) ------------------------------------------
   async function saveSalesTarget(input: SalesTargetInput, targetId?: string) {
     if (!data || !currentUser) {
@@ -5532,9 +4777,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('commission_rule_deleted', 'finance', `Deleted commission rule "${rule.name}".`)
   }
 
-  // Marks one period's auto-calculated commission (computed live in the
-  // Sales Force page from commissionRules + orders, never stored until
-  // this point — the same "Actual is never stored" approach as Budget) as
+  // Marks one period's auto-calculated commission (computed live from
+  // commissionRules + orders, never stored until this point — the same
+  // "Actual is never stored" approach as Budget) as
   // actually paid out. Posts Dr Commission / Cr Cash-or-Bank, reusing the
   // existing 'commission' LedgerAccount the Expense Category "Commission"
   // already posts to.
@@ -6185,204 +5430,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  async function saveSeller(input: SellerInput, sellerId?: string) {
-    if (!data) {
-      return
-    }
-
-    const name = input.name.trim()
-    if (!name) {
-      throw new Error('Seller name is required.')
-    }
-
-    const phone = input.phone.trim()
-    if (!phone) {
-      throw new Error('Seller phone number is required.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existingSeller = sellerId ? data.sellers[sellerId] : null
-    const id = existingSeller?.id ?? createId('seller')
-    const now = new Date().toISOString()
-    const seller = {
-      id,
-      name,
-      phone,
-      location: input.location?.trim() ?? '',
-      notes: input.notes?.trim() ?? '',
-      createdAt: existingSeller?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/sellers'), { [id]: seller })
-    await writeActivity(
-      existingSeller ? 'seller_updated' : 'seller_created',
-      'sellers',
-      existingSeller ? `Updated ${seller.name} seller details.` : `Added seller ${seller.name}.`
-    )
-  }
-
-  async function deleteSeller(sellerId: string) {
-    if (!data) {
-      return
-    }
-
-    const seller = data.sellers[sellerId]
-    if (!seller) {
-      throw new Error('Seller not found.')
-    }
-
-    const hasTransactions = Object.values(data.sellerTransactions).some(
-      (transaction) => transaction.sellerId === sellerId
-    )
-    if (hasTransactions) {
-      throw new Error('Sellers with ledger history cannot be deleted.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`sellers/${sellerId}`]: null })
-    await writeActivity('seller_deleted', 'sellers', `Deleted seller ${seller.name}.`)
-  }
-
-  async function recordSellerTransaction(input: SellerTransactionInput) {
-    if (!data) {
-      return
-    }
-
-    const seller = data.sellers[input.sellerId]
-    if (!seller) {
-      throw new Error('Seller not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const transactionId = createId('seller_txn')
-    const now = new Date().toISOString()
-
-    await update(ref(db, 'erp/sellerTransactions'), {
-      [transactionId]: {
-        id: transactionId,
-        sellerId: seller.id,
-        sellerName: seller.name,
-        date: input.date?.trim() || now,
-        productName: input.productName?.trim() ?? '',
-        quantity: Math.max(input.quantity ?? 0, 0),
-        takenValue: Math.max(input.takenValue ?? 0, 0),
-        cashGiven: Math.max(input.cashGiven ?? 0, 0),
-        givenValue: Math.max(input.givenValue ?? 0, 0),
-        cashReceived: Math.max(input.cashReceived ?? 0, 0),
-        goodsBroughtDescription: input.goodsBroughtDescription?.trim() ?? '',
-        iReceiveAmount: Math.max(input.iReceiveAmount ?? 0, 0),
-        theyReceiveAmount: Math.max(input.theyReceiveAmount ?? 0, 0),
-        createdAt: now,
-      },
-    })
-
-    await writeActivity('seller_transaction_recorded', 'sellers', `Recorded a ledger entry for ${seller.name}.`)
-  }
-
-  async function deleteSellerTransaction(transactionId: string) {
-    if (!data) {
-      return
-    }
-
-    const transaction = data.sellerTransactions[transactionId]
-    if (!transaction) {
-      throw new Error('Transaction not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`sellerTransactions/${transactionId}`]: null })
-    await writeActivity(
-      'seller_transaction_deleted',
-      'sellers',
-      `Removed a ledger entry for ${transaction.sellerName}.`
-    )
-  }
-
-  async function saveCourier(input: CourierInput, courierId?: string) {
-    if (!data) {
-      return
-    }
-
-    const customerName = input.customerName.trim()
-    if (!customerName) {
-      throw new Error('Customer name is required.')
-    }
-
-    const courierName = input.courierName.trim()
-    if (!courierName) {
-      throw new Error('Courier name is required.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existingCourier = courierId ? data.couriers[courierId] : null
-    const id = existingCourier?.id ?? createId('courier')
-    const now = new Date().toISOString()
-    const courier = {
-      id,
-      orderId: input.orderId ?? existingCourier?.orderId ?? '',
-      customerId: input.customerId ?? existingCourier?.customerId ?? '',
-      customerName,
-      billNumber: input.billNumber?.trim() || existingCourier?.billNumber || `SHP-${Date.now().toString().slice(-8)}`,
-      courierName,
-      productDescription: input.productDescription.trim(),
-      quantity: Math.max(input.quantity ?? 0, 0),
-      codAmount: Math.max(input.codAmount ?? 0, 0),
-      sentDate: input.sentDate?.trim() || existingCourier?.sentDate || now,
-      status: existingCourier?.status ?? 'in-transit',
-      createdAt: existingCourier?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/couriers'), { [id]: courier })
-    await writeActivity(
-      existingCourier ? 'courier_updated' : 'courier_created',
-      'courier',
-      existingCourier
-        ? `Updated courier shipment for ${courier.customerName}.`
-        : `Sent ${courier.productDescription} to ${courier.customerName} via ${courier.courierName}.`
-    )
-  }
-
-  async function updateCourierStatus(courierId: string, status: CourierRecord['status']) {
-    if (!data) {
-      return
-    }
-
-    const courier = data.couriers[courierId]
-    if (!courier) {
-      return
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, `erp/couriers/${courierId}`), { status, updatedAt: new Date().toISOString() })
-    await writeActivity('courier_status_changed', 'courier', `Marked ${courier.customerName}'s shipment as ${status}.`)
-
-    if (status === 'delivered' || status === 'cod-collected') {
-      await writeNotification(
-        'Courier update',
-        `${courier.customerName}'s shipment (${courier.billNumber}) is now ${status.replace('-', ' ')}.`,
-        'info',
-        ['super_admin', 'sales_officer', 'accounts']
-      )
-    }
-  }
-
-  async function deleteCourier(courierId: string) {
-    if (!data) {
-      return
-    }
-
-    const courier = data.couriers[courierId]
-    if (!courier) {
-      throw new Error('Courier record not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`couriers/${courierId}`]: null })
-    await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
-  }
-
   // ---- Rate Card / Costing Sheet -----------------------------------------
   // See the RateCardRecord comment in types.ts for what each derived total
   // means; this is the one place those formulas are computed so the saved
@@ -6392,6 +5439,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const manufRateTotal = items.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
     const depotRateTotal = items.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
     const dealerRateTotal = items.reduce((sum, item) => sum + item.qty * item.dealerRate, 0)
+    const tpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.tpRate ?? 0), 0)
+    const mrpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.mrpRate ?? 0), 0)
     const pouchCartonAmount = manufRateTotal - rawRateTotal
     const usableMoney = depotRateTotal - manufRateTotal
     const usableUDepot = dealerRateTotal - manufRateTotal
@@ -6401,6 +5450,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       manufRateTotal,
       depotRateTotal,
       dealerRateTotal,
+      tpRateTotal,
+      mrpRateTotal,
       pouchCartonAmount,
       usableMoney,
       usableMoneyPercent: dealerRateTotal ? (usableMoney / dealerRateTotal) * 100 : 0,
@@ -6421,16 +5472,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!input.recipientName.trim()) {
       throw new Error('Recipient name is required.')
     }
+    // Firebase's update()/set() reject `undefined` anywhere in the payload
+    // (unlike a plain JS object), so the optional productId/perCtnBgs are
+    // included only when they actually have a value rather than spread from
+    // the input as-is.
     const items = input.items
       .filter((item) => item.productName.trim())
       .map((item) => ({
-        ...item,
+        ...(item.productId ? { productId: item.productId } : {}),
         productName: item.productName.trim(),
         qty: Number(item.qty) || 0,
         rawRate: Number(item.rawRate) || 0,
         manufRate: Number(item.manufRate) || 0,
         depotRate: Number(item.depotRate) || 0,
         dealerRate: Number(item.dealerRate) || 0,
+        tpRate: Number(item.tpRate) || 0,
+        mrpRate: Number(item.mrpRate) || 0,
+        ...(item.perCtnBgs?.trim() ? { perCtnBgs: item.perCtnBgs.trim() } : {}),
       }))
     if (items.length === 0) {
       throw new Error('Add at least one product line.')
@@ -6440,15 +5498,30 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = existing?.id ?? createId('ratecard')
     const now = new Date().toISOString()
+    const totals = computeRateCardTotals(items)
+    const previousDue = Number(input.previousDue) || 0
+    const damage = Number(input.damage) || 0
+    const routeDiscount = Number(input.routeDiscount) || 0
+    const targetIncentive = Number(input.targetIncentive) || 0
     const rateCard: RateCardRecord = {
       id,
       invoiceNo,
-      voucherType: input.voucherType,
       recipientName: input.recipientName.trim(),
       date: input.date,
+      deliveryDate: input.deliveryDate?.trim() ?? '',
+      dealerCustomerId: input.dealerCustomerId ?? '',
+      depotName: input.depotName?.trim() ?? '',
+      depotAddress: input.depotAddress?.trim() ?? '',
+      depotMobile: input.depotMobile?.trim() ?? '',
+      depotHelpline: input.depotHelpline?.trim() ?? '',
+      previousDue,
+      damage,
+      routeDiscount,
+      targetIncentive,
       items,
       remarks: input.remarks?.trim() ?? '',
-      ...computeRateCardTotals(items),
+      ...totals,
+      depotReceivable: totals.dealerRateTotal + previousDue - damage - routeDiscount - targetIncentive,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -6457,7 +5530,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       existing ? 'ratecard_updated' : 'ratecard_created',
       'sales',
-      `${existing ? 'Updated' : 'Created'} ${input.voucherType} rate card ${invoiceNo} for ${rateCard.recipientName}.`
+      `${existing ? 'Updated' : 'Created'} rate card ${invoiceNo} for ${rateCard.recipientName}.`
     )
 
     return id
@@ -6476,417 +5549,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), { [`rateCards/${rateCardId}`]: null })
     await writeActivity('ratecard_deleted', 'sales', `Deleted rate card ${rateCard.invoiceNo}.`)
-  }
-
-  // ---- Data Migration (Section 81) ---------------------------------------
-  // Bulk counterparts of saveProduct/saveCustomer/saveSupplier/etc. for the
-  // Data Migration screen's Excel/CSV upload. A migration sheet can be
-  // hundreds of rows, so each of these stages every row into ONE combined
-  // multi-path `update()` (instead of one write — and one notification —
-  // per row like the single-record save functions) and posts a single
-  // summary activity-log entry. A bad row is collected as an error and
-  // skipped rather than aborting the whole sheet.
-  async function importProducts(rows: ProductInput[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing products.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'products:edit')) {
-      throw new Error('You do not have permission to import products.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const bySku = new Map(Object.values(data.products).map((product) => [product.sku.toUpperCase(), product]))
-    let imported = 0
-
-    rows.forEach((input, index) => {
-      try {
-        const normalized = normalizeProductInput(input)
-        if (!normalized.name) throw new Error('Product name is required.')
-        if (!normalized.sku) throw new Error('SKU is required.')
-        if (!data.warehouses[normalized.warehouseId]) throw new Error('Unknown warehouse.')
-
-        const existing = bySku.get(normalized.sku)
-        const id = existing?.id ?? createId('product')
-        const product: ProductRecord = {
-          id,
-          ...normalized,
-          status: getProductStatus(normalized.stockQty, normalized.minStock),
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        }
-        updates[`products/${id}`] = product
-
-        if (!existing) {
-          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
-        } else if (existing.warehouseId === product.warehouseId) {
-          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty - existing.stockQty)
-        } else {
-          adjustWarehouseStock(data, updates, existing, existing.warehouseId, -existing.stockQty)
-          adjustWarehouseStock(data, updates, product, product.warehouseId, product.stockQty)
-        }
-        syncPurchaseRequisitionForStock(data, product, product.stockQty, updates)
-
-        bySku.set(normalized.sku, product)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('products_imported', 'inventory', `Imported ${imported} product(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  async function importCustomers(rows: CustomerInput[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing customers.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'customers:edit')) {
-      throw new Error('You do not have permission to import customers.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const byPhone = new Map(Object.values(data.customers).map((customer) => [normalizePhoneLookup(customer.phone), customer]))
-    let imported = 0
-
-    rows.forEach((input, index) => {
-      try {
-        const existing = byPhone.get(normalizePhoneLookup(input.phone))
-        const normalized = normalizeCustomerInput({
-          ...input,
-          due: input.due ?? existing?.due,
-          isPremium: input.isPremium ?? existing?.isPremium,
-          isWholesale: input.isWholesale ?? existing?.isWholesale,
-          leadSource: input.leadSource ?? existing?.leadSource,
-          reminderCustomer: input.reminderCustomer ?? existing?.reminderCustomer,
-          customerCode: input.customerCode ?? existing?.customerCode,
-          ownerName: input.ownerName ?? existing?.ownerName,
-          district: input.district ?? existing?.district,
-          territory: input.territory ?? existing?.territory,
-          salesArea: input.salesArea ?? existing?.salesArea,
-          salesOfficerId: input.salesOfficerId ?? existing?.salesOfficerId,
-          customerType: input.customerType ?? existing?.customerType,
-          creditLimit: input.creditLimit ?? existing?.creditLimit,
-          creditDays: input.creditDays ?? existing?.creditDays,
-          openingBalance: input.openingBalance ?? existing?.openingBalance,
-          paymentTerms: input.paymentTerms ?? existing?.paymentTerms,
-          priceCategory: input.priceCategory ?? existing?.priceCategory,
-          discountCategory: input.discountCategory ?? existing?.discountCategory,
-          bankInformation: input.bankInformation ?? existing?.bankInformation,
-          status: input.status ?? existing?.status,
-        })
-        if (!normalized.name) throw new Error('Customer name is required.')
-        if (!normalized.phone) throw new Error('Phone number is required.')
-
-        const id = existing?.id ?? createId('customer')
-        const customer: CustomerRecord = {
-          id,
-          ...normalized,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        }
-        updates[`customers/${id}`] = customer
-        byPhone.set(normalizePhoneLookup(customer.phone), customer)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('customers_imported', 'customers', `Imported ${imported} customer(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  async function importSuppliers(rows: SupplierInput[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing suppliers.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'suppliers:edit')) {
-      throw new Error('You do not have permission to import suppliers.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const byPhone = new Map(Object.values(data.suppliers).map((supplier) => [normalizePhoneLookup(supplier.phone), supplier]))
-    let imported = 0
-
-    rows.forEach((input, index) => {
-      try {
-        const normalized = normalizeSupplierInput(input)
-        if (!normalized.name) throw new Error('Supplier name is required.')
-        if (!normalized.phone) throw new Error('Phone number is required.')
-
-        const existing = byPhone.get(normalizePhoneLookup(normalized.phone))
-        const id = existing?.id ?? createId('supplier')
-        const supplier: SupplierRecord = {
-          id,
-          ...normalized,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        }
-        updates[`suppliers/${id}`] = supplier
-        byPhone.set(normalizePhoneLookup(supplier.phone), supplier)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('suppliers_imported', 'suppliers', `Imported ${imported} supplier(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  // Sets stockQty (and the matching warehouseStocks row) directly to the
-  // sheet's quantity for an already-migrated product — matched by SKU,
-  // since that's the one identifier a legacy Excel/khata sheet reliably has.
-  async function importOpeningStock(rows: OpeningStockRow[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing opening stock.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'products:edit')) {
-      throw new Error('You do not have permission to import opening stock.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const bySku = new Map(Object.values(data.products).map((product) => [product.sku.toUpperCase(), product]))
-    let imported = 0
-
-    rows.forEach((row, index) => {
-      try {
-        const sku = row.sku.trim().toUpperCase()
-        if (!sku) throw new Error('SKU is required.')
-        const product = bySku.get(sku)
-        if (!product) throw new Error(`No product found for SKU "${row.sku}".`)
-        if (!Number.isFinite(row.quantity) || row.quantity < 0) throw new Error('Opening quantity must be a non-negative number.')
-
-        const warehouseId = row.warehouseId || product.warehouseId
-        if (!data.warehouses[warehouseId]) throw new Error('Unknown warehouse.')
-
-        const nextProduct: ProductRecord = {
-          ...product,
-          stockQty: row.quantity,
-          status: getProductStatus(row.quantity, product.minStock),
-          updatedAt: now,
-        }
-        updates[`products/${product.id}`] = nextProduct
-
-        if (warehouseId === product.warehouseId) {
-          adjustWarehouseStock(data, updates, product, warehouseId, row.quantity - product.stockQty)
-        } else {
-          adjustWarehouseStock(data, updates, product, product.warehouseId, -product.stockQty)
-          adjustWarehouseStock(data, updates, nextProduct, warehouseId, row.quantity)
-        }
-        syncPurchaseRequisitionForStock(data, nextProduct, row.quantity, updates)
-
-        bySku.set(sku, nextProduct)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('opening_stock_imported', 'inventory', `Imported opening stock for ${imported} product(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  // Opening Receivable/Payable both set the matching master record's
-  // `openingBalance` — already the field the Accounting page's
-  // Receivable/Payable running balance starts from (see the accounting
-  // page's receivable/payable ledger builders), so nothing else needs to
-  // change for these to show up correctly.
-  async function importOpeningReceivable(rows: OpeningBalanceRow[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing opening receivables.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'customers:edit')) {
-      throw new Error('You do not have permission to import opening receivables.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const customers = Object.values(data.customers)
-    let imported = 0
-
-    rows.forEach((row, index) => {
-      try {
-        const key = row.match.trim()
-        if (!key) throw new Error('Customer code or phone is required.')
-        if (!Number.isFinite(row.amount) || row.amount < 0) throw new Error('Amount must be a non-negative number.')
-
-        const customer = customers.find(
-          (candidate) =>
-            (candidate.customerCode && candidate.customerCode.toLowerCase() === key.toLowerCase()) ||
-            normalizePhoneLookup(candidate.phone) === normalizePhoneLookup(key)
-        )
-        if (!customer) throw new Error(`No customer found for "${row.match}".`)
-
-        updates[`customers/${customer.id}/openingBalance`] = row.amount
-        updates[`customers/${customer.id}/updatedAt`] = now
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('opening_receivable_imported', 'customers', `Imported opening receivable for ${imported} customer(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  async function importOpeningPayable(rows: OpeningBalanceRow[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing opening payables.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'suppliers:edit')) {
-      throw new Error('You do not have permission to import opening payables.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updates: Record<string, unknown> = {}
-    const errors: ImportRowError[] = []
-    const now = new Date().toISOString()
-    const suppliers = Object.values(data.suppliers)
-    let imported = 0
-
-    rows.forEach((row, index) => {
-      try {
-        const key = row.match.trim()
-        if (!key) throw new Error('Supplier code or phone is required.')
-        if (!Number.isFinite(row.amount) || row.amount < 0) throw new Error('Amount must be a non-negative number.')
-
-        const supplier = suppliers.find(
-          (candidate) =>
-            (candidate.supplierCode && candidate.supplierCode.toLowerCase() === key.toLowerCase()) ||
-            normalizePhoneLookup(candidate.phone) === normalizePhoneLookup(key)
-        )
-        if (!supplier) throw new Error(`No supplier found for "${row.match}".`)
-
-        updates[`suppliers/${supplier.id}/openingBalance`] = row.amount
-        updates[`suppliers/${supplier.id}/updatedAt`] = now
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    })
-
-    if (imported > 0) {
-      await update(ref(db, 'erp'), updates)
-      await writeActivity('opening_payable_imported', 'suppliers', `Imported opening payable for ${imported} supplier(s) via Data Migration.`)
-    }
-
-    return { imported, errors }
-  }
-
-  // Opening Cash is a single figure — the Cash account's openingBalance,
-  // same field the Accounting page's Cash-in-Hand row and Trial Balance
-  // already read (see STANDARD_CHART_OF_ACCOUNTS' code '1001').
-  async function importOpeningCash(amount: number) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before setting opening cash.')
-    }
-    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
-      throw new Error('You do not have permission to set opening cash.')
-    }
-    if (!Number.isFinite(amount) || amount < 0) {
-      throw new Error('Amount must be a non-negative number.')
-    }
-
-    const cashAccount = Object.values(data.chartOfAccounts).find((account) => account.ledgerAccount === 'cash')
-    if (!cashAccount) {
-      throw new Error('Load the standard chart of accounts first (Accounting Module → Chart of Accounts).')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`chartOfAccounts/${cashAccount.id}/openingBalance`]: amount,
-      [`chartOfAccounts/${cashAccount.id}/updatedAt`]: new Date().toISOString(),
-    })
-    await writeActivity('opening_cash_imported', 'finance', `Set opening cash balance via Data Migration.`)
-  }
-
-  // Bank accounts are usually only a handful of rows, so this simply loops
-  // saveBankAccount (matched/updated by account number) rather than
-  // duplicating its chart-of-accounts bookkeeping here.
-  async function importOpeningBank(rows: BankAccountInput[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing opening bank balances.')
-    }
-
-    const errors: ImportRowError[] = []
-    let imported = 0
-
-    for (let index = 0; index < rows.length; index += 1) {
-      const input = rows[index]
-      try {
-        const existing = Object.values(data.bankAccounts).find(
-          (account) => account.accountNumber === input.accountNumber.trim()
-        )
-        await saveBankAccount(input, existing?.id)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    }
-
-    return { imported, errors }
-  }
-
-  // Employees are provisioned as regular logins (Section 63 Users), so this
-  // loops createUser (which already creates the Firebase Auth account
-  // through a secondary app instance — see createManagedUser — so it never
-  // disturbs the admin's own signed-in session) rather than writing user
-  // records directly and leaving them unable to log in.
-  async function importEmployees(rows: UserInput[]): Promise<ImportResult> {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before importing employees.')
-    }
-
-    const errors: ImportRowError[] = []
-    let imported = 0
-
-    for (let index = 0; index < rows.length; index += 1) {
-      const input = rows[index]
-      try {
-        await createUser(input)
-        imported += 1
-      } catch (reason) {
-        errors.push({ row: index + 1, message: reason instanceof Error ? reason.message : 'Import failed.' })
-      }
-    }
-
-    return { imported, errors }
   }
 
   const value = useMemo<ERPContextValue>(
@@ -6916,8 +5578,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteCustomer,
       saveSupplier,
       deleteSupplier,
-      saveWarehouse,
-      deleteWarehouse,
       recordPurchase,
       dismissPurchaseRequisition,
       createPurchaseOrder,
@@ -6928,12 +5588,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createPurchaseReturn,
       createSalesReturn,
       recordCollection,
-      createStockTransferRequest,
-      approveStockTransfer,
-      rejectStockTransfer,
-      dispatchStockTransfer,
-      receiveStockTransfer,
-      cancelStockTransfer,
       releaseQcHold,
       scrapQcHold,
       saveBillOfMaterial,
@@ -6949,8 +5603,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       cancelOrder,
       updateOrderStatus,
       updateOrderApproval,
-      createTask,
-      updateTaskStatus,
       markNotificationRead,
       markAllNotificationsRead,
       saveExpense,
@@ -6959,12 +5611,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteExpense,
       saveBudget,
       deleteBudget,
-      saveRoute,
-      deleteRoute,
-      recordCustomerVisit,
-      deleteCustomerVisit,
-      saveRouteVisitSchedule,
-      deleteRouteVisitSchedule,
       saveSalesTarget,
       deleteSalesTarget,
       saveCommissionRule,
@@ -6978,25 +5624,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveBankAccount,
       deleteBankAccount,
       recordBankTransaction,
-      saveSeller,
-      deleteSeller,
-      recordSellerTransaction,
-      deleteSellerTransaction,
-      saveCourier,
-      updateCourierStatus,
-      deleteCourier,
       saveRateCard,
       deleteRateCard,
       saveSettings,
-      importProducts,
-      importCustomers,
-      importSuppliers,
-      importOpeningStock,
-      importOpeningReceivable,
-      importOpeningPayable,
-      importOpeningCash,
-      importOpeningBank,
-      importEmployees,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
   )

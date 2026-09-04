@@ -70,7 +70,6 @@ const emptyOrder = {
   deliveryDate: '',
   paymentDueDate: defaultPaymentDueDate(),
   dueReference: 'owner' as OrderRecord['dueReference'],
-  warehouseId: '',
   remarks: '',
 }
 
@@ -113,7 +112,6 @@ export function SalesScreen() {
   )
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   // Section 58 — Sales Dashboard.
   const salesDashboard = useMemo(() => buildSalesDashboard(data), [data])
   const salesPeople = useMemo(() => {
@@ -246,7 +244,6 @@ export function SalesScreen() {
       paymentDueDate: orderForm.paymentDueDate,
       dueReference: orderForm.dueReference,
       priceMode: (selectedCustomer?.isWholesale ? 'wholesale' : 'retail') as OrderRecord['priceMode'],
-      warehouseId: orderForm.warehouseId,
       remarks: orderForm.remarks,
     }
 
@@ -293,7 +290,6 @@ export function SalesScreen() {
       deliveryDate: order.deliveryDate.slice(0, 10),
       paymentDueDate: order.paymentDueDate.slice(0, 10),
       dueReference: order.dueReference,
-      warehouseId: order.warehouseId ?? '',
       remarks: order.remarks ?? '',
     })
     setNewSaleOpen(true)
@@ -1104,23 +1100,9 @@ export function SalesScreen() {
                   </div>
                 ))}
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Delivery date<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input type="date" value={orderForm.deliveryDate} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryDate: event.target.value }))} required />
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Warehouse <span className="font-normal text-muted-foreground">(optional)</span></p>
-                  <Select value={orderForm.warehouseId || '__none__'} onValueChange={(value) => setOrderForm((current) => ({ ...current, warehouseId: value === '__none__' ? '' : value }))}>
-                    <SelectTrigger><SelectValue placeholder="Fulfilling warehouse" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">Not specified</SelectItem>
-                      {warehouses.map((warehouse) => (
-                        <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Delivery date<span className="ml-0.5 text-rose-500">*</span></p>
+                <Input type="date" value={orderForm.deliveryDate} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryDate: event.target.value }))} required />
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Remarks <span className="font-normal text-muted-foreground">(optional)</span></p>

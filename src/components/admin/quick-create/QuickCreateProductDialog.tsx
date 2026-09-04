@@ -17,7 +17,6 @@ import { useERP } from '@/lib/erp/provider'
 import { toArray } from '@/lib/erp/utils'
 
 import { QuickCreateSupplierDialog } from './QuickCreateSupplierDialog'
-import { QuickCreateWarehouseDialog } from './QuickCreateWarehouseDialog'
 
 const SUPPLIER_NONE = '__none__'
 
@@ -35,12 +34,10 @@ export function QuickCreateProductDialog({
   onCreated,
 }: QuickCreateProductDialogProps) {
   const { data, saveProduct } = useERP()
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
 
   const [name, setName] = useState(initialName)
   const [sku, setSku] = useState('')
-  const [warehouseId, setWarehouseId] = useState('')
   const [supplierId, setSupplierId] = useState(SUPPLIER_NONE)
   const [purchasePrice, setPurchasePrice] = useState('0')
   const [sellingPrice, setSellingPrice] = useState('')
@@ -49,7 +46,6 @@ export function QuickCreateProductDialog({
   const [feedback, setFeedback] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const [quickCreateWarehouseOpen, setQuickCreateWarehouseOpen] = useState(false)
   const [quickCreateSupplierOpen, setQuickCreateSupplierOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
 
@@ -57,7 +53,6 @@ export function QuickCreateProductDialog({
     if (open) {
       setName(initialName)
       setSku('')
-      setWarehouseId('')
       setSupplierId(SUPPLIER_NONE)
       setPurchasePrice('0')
       setSellingPrice('')
@@ -66,11 +61,6 @@ export function QuickCreateProductDialog({
       setFeedback(null)
     }
   }, [open, initialName])
-
-  const warehouseOptions: ComboboxOption[] = useMemo(
-    () => warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: warehouse.location })),
-    [warehouses]
-  )
 
   const supplierOptions: ComboboxOption[] = useMemo(
     () => [
@@ -83,12 +73,6 @@ export function QuickCreateProductDialog({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFeedback(null)
-
-    if (!warehouseId) {
-      setFeedback('Select a warehouse for this product.')
-      return
-    }
-
     setSaving(true)
 
     try {
@@ -96,7 +80,6 @@ export function QuickCreateProductDialog({
         name,
         sku,
         category: '',
-        warehouseId,
         supplierId: supplierId === SUPPLIER_NONE ? undefined : supplierId,
         purchasePrice: Number(purchasePrice || 0),
         sellingPrice: Number(sellingPrice || 0),
@@ -137,39 +120,20 @@ export function QuickCreateProductDialog({
                 <Input value={sku} onChange={(event) => setSku(event.target.value)} placeholder="TLT240SB" required />
               </div>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">
-                  Warehouse<span className="ml-0.5 text-rose-500">*</span>
-                </p>
-                <Combobox
-                  options={warehouseOptions}
-                  value={warehouseId}
-                  onChange={setWarehouseId}
-                  placeholder="Select warehouse"
-                  searchPlaceholder="Search warehouses..."
-                  onCreateNew={(typedText) => {
-                    setPendingSearchText(typedText)
-                    setQuickCreateWarehouseOpen(true)
-                  }}
-                  createNewLabel="Create warehouse"
-                />
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Supplier</p>
-                <Combobox
-                  options={supplierOptions}
-                  value={supplierId}
-                  onChange={setSupplierId}
-                  placeholder="Select supplier"
-                  searchPlaceholder="Search suppliers..."
-                  onCreateNew={(typedText) => {
-                    setPendingSearchText(typedText)
-                    setQuickCreateSupplierOpen(true)
-                  }}
-                  createNewLabel="Create supplier"
-                />
-              </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Supplier</p>
+              <Combobox
+                options={supplierOptions}
+                value={supplierId}
+                onChange={setSupplierId}
+                placeholder="Select supplier"
+                searchPlaceholder="Search suppliers..."
+                onCreateNew={(typedText) => {
+                  setPendingSearchText(typedText)
+                  setQuickCreateSupplierOpen(true)
+                }}
+                createNewLabel="Create supplier"
+              />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -206,12 +170,6 @@ export function QuickCreateProductDialog({
         </DialogContent>
       </Dialog>
 
-      <QuickCreateWarehouseDialog
-        open={quickCreateWarehouseOpen}
-        onOpenChange={setQuickCreateWarehouseOpen}
-        initialName={pendingSearchText}
-        onCreated={(newWarehouseId) => setWarehouseId(newWarehouseId)}
-      />
       <QuickCreateSupplierDialog
         open={quickCreateSupplierOpen}
         onOpenChange={setQuickCreateSupplierOpen}

@@ -47,12 +47,6 @@ export type LoginHistoryRecord = {
   createdAt: string
 }
 
-export type WarehouseRecord = {
-  id: string
-  name: string
-  location: string
-}
-
 export type SupplierRecord = {
   id: string
   supplierCode?: string
@@ -144,7 +138,6 @@ export type ProductRecord = {
   conversionRatio?: number
   packSize?: string
   weight?: number
-  warehouseId: string
   supplierId: string
   purchasePrice: number
   sellingPrice: number
@@ -211,7 +204,6 @@ export type OrderRecord = {
   vat?: number
   paid: number
   due: number
-  warehouseId?: string
   deliveryDate: string
   paymentDueDate: string
   dueReference: 'owner' | 'courier' | 'bank' | 'bkash' | 'nagad' | 'dbbl' | ''
@@ -485,8 +477,6 @@ export type PurchaseOrderRecord = {
   requisitionId?: string
   supplierId: string
   supplierName: string
-  warehouseId: string
-  warehouseName: string
   items: PurchaseOrderItem[]
   currency: string
   subtotal: number
@@ -512,7 +502,6 @@ export type PurchaseOrderRecord = {
 export type PurchaseOrderInput = {
   requisitionId?: string
   supplierId: string
-  warehouseId: string
   items: Array<{ productId: string; quantity: number; unitCost: number }>
   currency?: string
   expectedDate?: string
@@ -552,8 +541,6 @@ export type PurchaseReturnRecord = {
   poNumber: string
   supplierId: string
   supplierName: string
-  warehouseId: string
-  warehouseName: string
   items: PurchaseReturnItem[]
   totalValue: number
   reason: string
@@ -568,50 +555,6 @@ export type PurchaseReturnInput = {
   reason?: string
 }
 
-// ---- Per-warehouse stock (Sections 15-17) -------------------------------
-// `ProductRecord.stockQty` stays the company-wide total (everything that
-// already reads it keeps working); this is the real-time breakdown of
-// where that total physically sits, one row per product+warehouse.
-export type WarehouseStockRecord = {
-  id: string
-  productId: string
-  productName: string
-  warehouseId: string
-  quantity: number
-  updatedAt: string
-}
-
-// ---- Stock Transfer (Section 17) ----------------------------------------
-export type StockTransferStatus = 'requested' | 'approved' | 'in-transit' | 'received' | 'rejected' | 'cancelled'
-
-export type StockTransferRecord = {
-  id: string
-  transferNumber: string
-  productId: string
-  productName: string
-  fromWarehouseId: string
-  fromWarehouseName: string
-  toWarehouseId: string
-  toWarehouseName: string
-  quantity: number
-  status: StockTransferStatus
-  note: string
-  requestedBy: string
-  requestedByName: string
-  approvedBy: string
-  approvedByName: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type StockTransferInput = {
-  productId: string
-  fromWarehouseId: string
-  toWarehouseId: string
-  quantity: number
-  note?: string
-}
-
 // ---- Batches / FIFO-FEFO (Section 18) -----------------------------------
 // Created at GRN time (see receivePurchaseOrder) whenever a received line
 // carries a batch number or expiry date. A sale now genuinely consumes the
@@ -623,7 +566,6 @@ export type BatchRecord = {
   id: string
   productId: string
   productName: string
-  warehouseId: string
   batchNumber: string
   manufacturingDate: string
   expiryDate: string
@@ -642,8 +584,6 @@ export type StockAdjustmentRecord = {
   id: string
   productId: string
   productName: string
-  warehouseId: string
-  warehouseName: string
   quantityBefore: number
   quantityAfter: number
   delta: number
@@ -659,7 +599,6 @@ export type StockAdjustmentRecord = {
 
 export type StockAdjustmentInput = {
   productId: string
-  warehouseId: string
   newQuantity: number
   reason: string
 }
@@ -676,8 +615,6 @@ export type StockCountItem = {
 export type StockCountRecord = {
   id: string
   countNumber: string
-  warehouseId: string
-  warehouseName: string
   items: StockCountItem[]
   countedBy: string
   countedByName: string
@@ -685,7 +622,6 @@ export type StockCountRecord = {
 }
 
 export type StockCountInput = {
-  warehouseId: string
   items: Array<{ productId: string; physicalQty: number }>
 }
 
@@ -754,8 +690,6 @@ export type ProductionOrderRecord = {
   bomId: string
   finishedProductId: string
   finishedProductName: string
-  warehouseId: string
-  warehouseName: string
   plannedBatches: number
   plannedOutputQty: number
   materials: ProductionMaterialLine[]
@@ -788,26 +722,37 @@ export type ProductionOrderRecord = {
 
 export type ProductionOrderInput = {
   bomId: string
-  warehouseId: string
   plannedBatches: number
 }
 
 // ---- Rate Card / Costing Sheet --------------------------------------------
-// Company → Depot → Dealer price cascade for a batch of products, mirroring
-// the client's paper invoice: each line carries four per-unit rates (Raw
-// Material, Manufacturing, Depot Sales, Dealer Sales), and the header totals
-// + margin figures below are derived from those lines — see
-// computeRateCardTotals in provider.tsx for the exact formulas:
+// One order/shipment moving Company → Depot → Dealer, entered ONCE and
+// printable as any of three vouchers from the same record (see
+// buildRateCardHtml / buildDepotInvoiceHtml / buildDealerInvoiceHtml in the
+// Rate Card screen) — so every field below is always filled in, not just
+// the subset one particular voucher happens to print:
+//   Company voucher — every rate column + the margin box (raw/manuf/depot/
+//     dealer rate, Usable Money, Usable u Depot, Pouch Carton amount)
+//   Depot voucher    — Depot P P (= depotRate) / Depot S P (= dealerRate)
+//     and Depot Net Profit (dealerRateTotal − depotRateTotal, derived, not
+//     stored)
+//   Dealer voucher   — DP (= dealerRate) / TP (= tpRate) and the running
+//     account (previousDue, damage, routeDiscount, targetIncentive →
+//     depotReceivable)
+//   mrpRate — the end-consumer price (Maximum Retail Price), one step past
+//     TP; not printed on any of the three depot-chain vouchers above (none
+//     of the client's paper invoices show it — they stop at TP) but kept on
+//     the line item/totals so it's on record for whoever prices the shelf.
+// See computeRateCardTotals in provider.tsx for the totals below:
 //   pouchCartonAmount = manufRateTotal − rawRateTotal
 //   usableMoney        = depotRateTotal − manufRateTotal   (margin up to Depot)
 //   usableUDepot        = dealerRateTotal − manufRateTotal  (margin skipping Depot)
 //   both percentages are the figure above ÷ dealerRateTotal
-// `voucherType` decides which rate columns the printed voucher shows —
-// see RATE_CARD_VOUCHER_COLUMNS in the Rate Card screen: 'company' (internal)
-// sees every column and the margin box, 'depot' sees only Manuf/Depot rate,
-// 'dealer' only Depot/Dealer rate — margin figures never print for either.
-export type RateCardVoucherType = 'company' | 'depot' | 'dealer'
-
+//   depotReceivable    = dealerRateTotal + previousDue − damage −
+//                         routeDiscount − targetIncentive
+// previousDue defaults from the linked dealer's existing CustomerRecord.due
+// when dealerCustomerId is set, but is a plain stored number here so past
+// vouchers don't change if that balance moves later.
 export type RateCardLineItem = {
   productId?: string
   productName: string
@@ -816,35 +761,71 @@ export type RateCardLineItem = {
   manufRate: number
   depotRate: number
   dealerRate: number
+  // Trade Price — what the dealer resells this product at (Dealer voucher's
+  // "TP" column); 0/unused on a line that never reaches a dealer.
+  tpRate?: number
+  // Maximum Retail Price — what the end consumer pays; one step past TP.
+  mrpRate?: number
   perCtnBgs?: string
 }
 
 export type RateCardRecord = {
   id: string
   invoiceNo: string
-  voucherType: RateCardVoucherType
+  // The dealer this shipment is ultimately for — shown as "Dealer Name" on
+  // all three vouchers.
   recipientName: string
   date: string
+  deliveryDate?: string
+  // Links recipientName back to a Customers (CRM) record (customerType
+  // 'dealer') so name/proprietor/address/phone and the opening previousDue
+  // can be auto-filled instead of retyped.
+  dealerCustomerId?: string
+  // The "To: Depot" box on a Depot voucher / "From: Depot" box on a Dealer
+  // voucher — free text since depots aren't (yet) their own master-data
+  // entity.
+  depotName?: string
+  depotAddress?: string
+  depotMobile?: string
+  depotHelpline?: string
+  // Dealer voucher running-account adjustments; see depotReceivable formula
+  // above. Each defaults to 0.
+  previousDue?: number
+  damage?: number
+  routeDiscount?: number
+  targetIncentive?: number
   items: RateCardLineItem[]
   remarks?: string
   rawRateTotal: number
   manufRateTotal: number
   depotRateTotal: number
   dealerRateTotal: number
+  tpRateTotal: number
+  mrpRateTotal: number
   pouchCartonAmount: number
   usableMoney: number
   usableMoneyPercent: number
   usableUDepot: number
   usableUDepotPercent: number
+  depotReceivable: number
   createdAt: string
   updatedAt: string
 }
 
 export type RateCardInput = {
   invoiceNo: string
-  voucherType: RateCardVoucherType
   recipientName: string
   date: string
+  deliveryDate?: string
+  dealerCustomerId?: string
+  depotName?: string
+  depotAddress?: string
+  depotMobile?: string
+  depotHelpline?: string
+  previousDue?: number
+  damage?: number
+  routeDiscount?: number
+  targetIncentive?: number
   items: RateCardLineItem[]
   remarks?: string
 }
@@ -886,9 +867,9 @@ export type QualityCheckInput = {
 }
 
 // Stock that exists physically but failed QC — excluded from sellable
-// stock/warehouseStocks until explicitly released (back to stock) or
-// scrapped (written off for good). This is what "Fail হলে ... Sales-এ
-// যাবে না" (won't go to Sales) actually enforces.
+// stock until explicitly released (back to stock) or scrapped (written off
+// for good). This is what "Fail হলে ... Sales-এ যাবে না" (won't go to
+// Sales) actually enforces.
 export type QcHoldStatus = 'held' | 'released' | 'scrapped'
 
 export type QcHoldRecord = {
@@ -898,8 +879,6 @@ export type QcHoldRecord = {
   sourceReference: string
   productId: string
   productName: string
-  warehouseId: string
-  warehouseName: string
   quantity: number
   unitCost: number
   reason: string
@@ -996,23 +975,6 @@ export type PurchaseRecord = {
   currency: string
   total: number
   status: 'pending' | 'received'
-  createdAt: string
-}
-
-export type TaskStatus = 'pending' | 'in-progress' | 'done'
-export type TaskPriority = 'low' | 'medium' | 'high'
-
-export type TaskRecord = {
-  id: string
-  title: string
-  description: string
-  module: 'inventory' | 'sales' | 'support' | 'warehouse'
-  status: TaskStatus
-  priority: TaskPriority
-  assigneeId: string
-  assigneeName: string
-  dueDate: string
-  createdBy: string
   createdAt: string
 }
 
@@ -1121,111 +1083,13 @@ export type BudgetInput = {
   note?: string
 }
 
-// ---- Sales Force Management (Section 40) -------------------------------
-// A "Sales Officer" has no separate master — it is a UserRecord whose role
-// carries 'orders:create' (the same identity already stamped on every
-// OrderRecord as salesPersonId/salesPersonName). Route just groups a
-// territory's customers under one officer for a visit plan.
-export type RouteRecord = {
-  id: string
-  routeCode?: string
-  routeName: string
-  territory?: string
-  salesArea?: string
-  salesOfficerId: string
-  salesOfficerName: string
-  customerIds: string[]
-  status: 'active' | 'inactive'
-  notes: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type RouteInput = {
-  routeCode?: string
-  routeName: string
-  territory?: string
-  salesArea?: string
-  salesOfficerId: string
-  customerIds?: string[]
-  status?: 'active' | 'inactive'
-  notes?: string
-}
-
-// A visit optionally links back to the Order/Collection it produced so the
-// Sales Officer dashboard can roll visits up into real order/collection
-// figures instead of just a call count.
-export type VisitOutcome = 'order-placed' | 'collection-made' | 'order-and-collection' | 'no-order' | 'store-closed'
-
-export type CustomerVisitRecord = {
-  id: string
-  visitDate: string
-  salesOfficerId: string
-  salesOfficerName: string
-  customerId: string
-  customerName: string
-  routeId?: string
-  routeName?: string
-  territory?: string
-  outcome: VisitOutcome
-  orderId?: string
-  orderAmount?: number
-  collectionId?: string
-  collectionAmount?: number
-  remarks: string
-  createdAt: string
-}
-
-export type CustomerVisitInput = {
-  visitDate?: string
-  salesOfficerId: string
-  customerId: string
-  routeId?: string
-  outcome: VisitOutcome
-  orderId?: string
-  collectionId?: string
-  remarks?: string
-}
-
-// ---- Route Visit Schedule / "Beat Plan" (Section 45) --------------------
-// The planned counterpart to CustomerVisitRecord above: which customers on
-// a route a Sales Officer is due to call on a given weekday, decided ahead
-// of time. Logging an actual CustomerVisitRecord against that same
-// route/customer is how the plan gets checked off — this record itself
-// never marks "done".
-export const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
-export type Weekday = (typeof WEEKDAYS)[number]
-
-export type RouteVisitScheduleRecord = {
-  id: string
-  routeId: string
-  routeName: string
-  salesOfficerId: string
-  salesOfficerName: string
-  territory?: string
-  dayOfWeek: Weekday
-  customerIds: string[]
-  status: 'active' | 'inactive'
-  notes: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type RouteVisitScheduleInput = {
-  routeId: string
-  dayOfWeek: Weekday
-  customerIds?: string[]
-  status?: 'active' | 'inactive'
-  notes?: string
-}
-
 // ---- Sales Target (Section 41) ------------------------------------------
 // Achievement is deliberately never stored — like Budget's Actual, it is
 // the live sum of net sales for the matching orders in that period, so it
-// can never drift from the books (see entitySalesAmount in the Sales
-// Force page). 'territory'/'sales-area' targets key off the matching free-
-// text field on CustomerRecord (there is no separate Territory master);
-// 'distributor' targets key off one specific distributor/dealer customer.
+// can never drift from the books (see achievedAmountFor in dashboards.ts).
+// 'territory'/'sales-area' targets key off the matching free-text field on
+// CustomerRecord (there is no separate Territory master); 'distributor'
+// targets key off one specific distributor/dealer customer.
 export type SalesTargetEntityType = 'sales-officer' | 'territory' | 'sales-area' | 'distributor'
 
 export type SalesTargetRecord = {
@@ -1321,56 +1185,10 @@ export type CommissionPayoutInput = {
   paymentMethod?: 'cash' | 'bank'
 }
 
-export type SellerRecord = {
-  id: string
-  name: string
-  phone: string
-  location: string
-  notes: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type SellerTransactionRecord = {
-  id: string
-  sellerId: string
-  sellerName: string
-  date: string
-  productName: string
-  quantity: number
-  takenValue: number
-  cashGiven: number
-  givenValue: number
-  cashReceived: number
-  goodsBroughtDescription: string
-  iReceiveAmount: number
-  theyReceiveAmount: number
-  createdAt: string
-}
-
-export type CourierStatus = 'in-transit' | 'delivered' | 'returned' | 'cod-collected'
-
-export type CourierRecord = {
-  id: string
-  orderId?: string
-  customerId?: string
-  customerName: string
-  billNumber: string
-  courierName: string
-  productDescription: string
-  quantity: number
-  codAmount: number
-  sentDate: string
-  status: CourierStatus
-  createdAt: string
-  updatedAt: string
-}
-
 export type ERPData = {
   permissions: Record<string, PermissionDefinition>
   roles: Record<string, RoleRecord>
   users: Record<string, UserRecord>
-  warehouses: Record<string, WarehouseRecord>
   suppliers: Record<string, SupplierRecord>
   customers: Record<string, CustomerRecord>
   products: Record<string, ProductRecord>
@@ -1385,8 +1203,6 @@ export type ERPData = {
   purchaseReturns: Record<string, PurchaseReturnRecord>
   salesReturns: Record<string, SalesReturnRecord>
   collections: Record<string, CollectionRecord>
-  warehouseStocks: Record<string, WarehouseStockRecord>
-  stockTransfers: Record<string, StockTransferRecord>
   batches: Record<string, BatchRecord>
   stockAdjustments: Record<string, StockAdjustmentRecord>
   stockCounts: Record<string, StockCountRecord>
@@ -1396,21 +1212,14 @@ export type ERPData = {
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   purchases: Record<string, PurchaseRecord>
-  tasks: Record<string, TaskRecord>
   notifications: Record<string, NotificationRecord>
   activities: Record<string, ActivityRecord>
   loginHistory: Record<string, LoginHistoryRecord>
   expenses: Record<string, ExpenseRecord>
   budgets: Record<string, BudgetRecord>
-  routes: Record<string, RouteRecord>
-  customerVisits: Record<string, CustomerVisitRecord>
-  routeVisitSchedules: Record<string, RouteVisitScheduleRecord>
   salesTargets: Record<string, SalesTargetRecord>
   commissionRules: Record<string, CommissionRuleRecord>
   commissionPayouts: Record<string, CommissionPayoutRecord>
-  sellers: Record<string, SellerRecord>
-  sellerTransactions: Record<string, SellerTransactionRecord>
-  couriers: Record<string, CourierRecord>
   investors: Record<string, InvestorRecord>
   settings: SettingsRecord
   meta: {
@@ -1448,7 +1257,6 @@ export type ProductInput = {
   conversionRatio?: number
   packSize?: string
   weight?: number
-  warehouseId: string
   supplierId?: string
   purchasePrice: number
   sellingPrice: number
@@ -1466,11 +1274,6 @@ export type ProductInput = {
   description?: string
   imageUrl?: string
   imagePublicId?: string
-}
-
-export type WarehouseInput = {
-  name: string
-  location: string
 }
 
 export type CustomerInput = {
@@ -1551,7 +1354,6 @@ export type OrderInput = {
   promotionalDiscount?: number
   vat?: number
   paid: number
-  warehouseId?: string
   deliveryDate: string
   billNumber?: string
   orderDate?: string
@@ -1578,48 +1380,6 @@ export type InvestorInput = {
   note?: string
 }
 
-export type SellerInput = {
-  name: string
-  phone: string
-  location?: string
-  notes?: string
-}
-
-export type SellerTransactionInput = {
-  sellerId: string
-  date?: string
-  productName?: string
-  quantity?: number
-  takenValue?: number
-  cashGiven?: number
-  givenValue?: number
-  cashReceived?: number
-  goodsBroughtDescription?: string
-  iReceiveAmount?: number
-  theyReceiveAmount?: number
-}
-
-export type CourierInput = {
-  orderId?: string
-  customerId?: string
-  customerName: string
-  billNumber?: string
-  courierName: string
-  productDescription: string
-  quantity: number
-  codAmount: number
-  sentDate?: string
-}
-
-export type TaskInput = {
-  title: string
-  description: string
-  module: TaskRecord['module']
-  priority: TaskPriority
-  assigneeId: string
-  dueDate: string
-}
-
 export type SettingsInput = {
   companyName: string
   currency: string
@@ -1628,14 +1388,6 @@ export type SettingsInput = {
   refundPolicy: RefundPolicy
   restockOnReturn: boolean
 }
-
-// ---- Data Migration (Section 81) ----------------------------------------
-export type ImportRowError = { row: number; message: string }
-export type ImportResult = { imported: number; errors: ImportRowError[] }
-export type OpeningStockRow = { sku: string; quantity: number; warehouseId?: string }
-// `match` is a customer/supplier code or phone number — whichever the sheet
-// gives; importOpeningReceivable/importOpeningPayable try both.
-export type OpeningBalanceRow = { match: string; amount: number }
 
 export type UserInput = {
   name: string

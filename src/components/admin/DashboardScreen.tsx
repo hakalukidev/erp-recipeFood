@@ -186,9 +186,6 @@ export function DashboardScreen() {
           <Button asChild variant="outline" className="rounded-xl">
             <Link href="/admin/sales">Open sales</Link>
           </Button>
-          <Button asChild className="rounded-xl">
-            <Link href="/admin/reports">Open reports</Link>
-          </Button>
         </div>
 
         {error ? (

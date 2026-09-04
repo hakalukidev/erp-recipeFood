@@ -120,7 +120,7 @@ export function SalesReturnSection() {
           <div>
             <CardTitle>Sales returns</CardTitle>
             <CardDescription>
-              Return Inspection → Good/Bad Classification → Warehouse Update → Customer Ledger → Accounting — all in one entry.
+              Return Inspection → Good/Bad Classification → Stock Update → Customer Ledger → Accounting — all in one entry.
             </CardDescription>
           </div>
         </div>

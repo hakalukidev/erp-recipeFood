@@ -22,7 +22,7 @@ import { formatCurrency, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 // order.total includes VAT (not revenue) — mirrors getOrderNetSales in the
-// Finance/Accounting, Sales Force, and Dealer Management pages.
+// Finance/Accounting and Dealer Management pages.
 function getOrderNetSales(order: OrderRecord) {
   return order.total - (order.vat ?? 0)
 }

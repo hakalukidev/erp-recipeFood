@@ -36,7 +36,6 @@ const emptyBomForm = {
 
 const emptyPlanForm = {
   bomId: '',
-  warehouseId: '',
   plannedBatches: '1',
 }
 
@@ -73,7 +72,6 @@ export default function ManufacturingPage() {
   } = useERP()
 
   const products = useMemo(() => toArray(data?.products), [data?.products])
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const boms = useMemo(
     () =>
       toArray(data?.billOfMaterials).sort((left, right) => {
@@ -228,7 +226,6 @@ export default function ManufacturingPage() {
     try {
       const id = await createProductionOrder({
         bomId: planForm.bomId,
-        warehouseId: planForm.warehouseId,
         plannedBatches: Number(planForm.plannedBatches),
       })
       setFeedback(`Production plan created (${id}).`)
@@ -449,7 +446,6 @@ export default function ManufacturingPage() {
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
                     <TableHead>Production</TableHead>
                     <TableHead>Product</TableHead>
-                    <TableHead>Warehouse</TableHead>
                     <TableHead>Planned / Actual</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Cost</TableHead>
@@ -464,7 +460,6 @@ export default function ManufacturingPage() {
                         <p className="text-xs text-muted-foreground">{formatDate(order.createdAt)}</p>
                       </TableCell>
                       <TableCell>{order.finishedProductName}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{order.warehouseName}</TableCell>
                       <TableCell>
                         {order.plannedOutputQty}
                         {order.status === 'completed' ? ` / ${order.finishedGoodsQty}` : ''}
@@ -698,22 +693,9 @@ export default function ManufacturingPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Warehouse<span className="ml-0.5 text-rose-500">*</span></p>
-                <Select value={planForm.warehouseId} onValueChange={(value) => setPlanForm((current) => ({ ...current, warehouseId: value }))} required>
-                  <SelectTrigger><SelectValue placeholder="Select a warehouse" /></SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map((warehouse) => (
-                      <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Planned batches<span className="ml-0.5 text-rose-500">*</span></p>
-                <Input type="number" min="1" value={planForm.plannedBatches} onChange={(event) => setPlanForm((current) => ({ ...current, plannedBatches: event.target.value }))} required />
-              </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Planned batches<span className="ml-0.5 text-rose-500">*</span></p>
+              <Input type="number" min="1" value={planForm.plannedBatches} onChange={(event) => setPlanForm((current) => ({ ...current, plannedBatches: event.target.value }))} required />
             </div>
             {planBom ? (
               <div className="space-y-2 rounded-xl border border-border/70 bg-muted/30 p-4">
@@ -738,7 +720,7 @@ export default function ManufacturingPage() {
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Complete production — {completeTarget?.productionNumber}</DialogTitle>
-            <DialogDescription>Production + Quality Check + Finished Goods + Warehouse Receive + Cost Calculation, in one step.</DialogDescription>
+            <DialogDescription>Production + Quality Check + Finished Goods + Stock Receive + Cost Calculation, in one step.</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleCompleteProduction}>
             <div className="grid gap-4 sm:grid-cols-2">

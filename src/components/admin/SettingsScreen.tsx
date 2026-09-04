@@ -1,8 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import Link from 'next/link'
-import { ArrowRight } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import { AdminShell } from './AdminShell'
 import { Button } from '@/components/ui/button'
@@ -12,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { useERP } from '@/lib/erp/provider'
 import type { RefundPolicy } from '@/lib/erp/types'
-import { toArray } from '@/lib/erp/utils'
 
 type SettingsFormState = {
   companyName: string
@@ -54,7 +51,6 @@ function formFromSettings(settings: SettingsFormState | null): SettingsFormState
 
 export function SettingsScreen() {
   const { data, saveSettings, hasPermission } = useERP()
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const canEdit = hasPermission('users:edit')
 
   const [form, setForm] = useState<SettingsFormState>(() => formFromSettings(null))
@@ -169,18 +165,6 @@ export function SettingsScreen() {
                 </Select>
                 <p className="text-xs text-muted-foreground">Used to format every price, invoice, and report across the ERP.</p>
               </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Warehouses</p>
-                <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-muted-foreground">
-                  {warehouses.length} warehouse{warehouses.length === 1 ? '' : 's'} configured
-                </div>
-                <Button asChild variant="outline" size="sm" className="rounded-lg">
-                  <Link href="/admin/stock/overview">
-                    Manage warehouses
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </Link>
-                </Button>
-              </div>
             </CardContent>
           </Card>
 
@@ -222,7 +206,7 @@ export function SettingsScreen() {
                 <div>
                   <p className="text-sm font-medium text-foreground">Restock returned items automatically</p>
                   <p className="text-xs text-muted-foreground">
-                    On, returned stock goes back to its warehouse. Off, returns are held aside for manual inspection before restocking.
+                    On, returned stock goes back into stock. Off, returns are held aside for manual inspection before restocking.
                   </p>
                 </div>
                 <Switch

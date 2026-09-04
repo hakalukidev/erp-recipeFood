@@ -28,7 +28,6 @@ type NewPoItem = { productId: string; quantity: string; unitCost: string }
 const emptyPoForm = {
   requisitionId: '',
   supplierId: '',
-  warehouseId: '',
   currency: 'BDT',
   expectedDate: '',
   items: [{ productId: '', quantity: '1', unitCost: '' }] as NewPoItem[],
@@ -81,7 +80,6 @@ export function PurchaseManagementSection() {
 
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const currency = data?.settings.currency
 
   const requisitions = useMemo(
@@ -96,13 +94,12 @@ export function PurchaseManagementSection() {
     () => toArray(data?.purchaseOrders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.purchaseOrders]
   )
-  const poExportHeaders = ['PO Number', 'Supplier', 'Warehouse', 'Status', 'Subtotal', 'Paid', 'Due', 'GRN Number']
+  const poExportHeaders = ['PO Number', 'Supplier', 'Status', 'Subtotal', 'Paid', 'Due', 'GRN Number']
   const poExportRows = useMemo(
     () =>
       purchaseOrders.map((po) => [
         po.poNumber,
         po.supplierName,
-        po.warehouseName,
         po.status,
         po.subtotal,
         po.paid,
@@ -217,7 +214,6 @@ export function PurchaseManagementSection() {
       const poId = await createPurchaseOrder({
         requisitionId: poForm.requisitionId || undefined,
         supplierId: poForm.supplierId,
-        warehouseId: poForm.warehouseId,
         currency: poForm.currency,
         expectedDate: poForm.expectedDate,
         items: poForm.items.map((item) => ({
@@ -431,7 +427,6 @@ export function PurchaseManagementSection() {
                     <TableCell className="min-w-40">
                       <p className="font-semibold">{po.poNumber}</p>
                       <p className="text-xs text-muted-foreground">{formatDate(po.createdAt)}</p>
-                      <p className="text-xs text-muted-foreground">{po.warehouseName}</p>
                       {po.grnNumber ? <p className="text-xs text-muted-foreground">GRN: {po.grnNumber}</p> : null}
                     </TableCell>
                     <TableCell>{po.supplierName}</TableCell>
@@ -615,29 +610,16 @@ export function PurchaseManagementSection() {
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleCreatePo}>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Supplier<span className="ml-0.5 text-rose-500">*</span></p>
-                <Select value={poForm.supplierId} onValueChange={(value) => setPoForm((current) => ({ ...current, supplierId: value }))} required>
-                  <SelectTrigger><SelectValue placeholder="Select a supplier" /></SelectTrigger>
-                  <SelectContent>
-                    {suppliers.map((supplier) => (
-                      <SelectItem key={supplier.id} value={supplier.id}>{supplier.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Receiving warehouse<span className="ml-0.5 text-rose-500">*</span></p>
-                <Select value={poForm.warehouseId} onValueChange={(value) => setPoForm((current) => ({ ...current, warehouseId: value }))} required>
-                  <SelectTrigger><SelectValue placeholder="Select a warehouse" /></SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map((warehouse) => (
-                      <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Supplier<span className="ml-0.5 text-rose-500">*</span></p>
+              <Select value={poForm.supplierId} onValueChange={(value) => setPoForm((current) => ({ ...current, supplierId: value }))} required>
+                <SelectTrigger><SelectValue placeholder="Select a supplier" /></SelectTrigger>
+                <SelectContent>
+                  {suppliers.map((supplier) => (
+                    <SelectItem key={supplier.id} value={supplier.id}>{supplier.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -744,7 +726,7 @@ export function PurchaseManagementSection() {
           <DialogHeader>
             <DialogTitle>Receive {receiveTarget?.poNumber}</DialogTitle>
             <DialogDescription>
-              Goods Receive + Quality Check + GRN, in one step. Only quantities that pass QC are added to warehouse stock and billed.
+              Goods Receive + Quality Check + GRN, in one step. Only quantities that pass QC are added to stock and billed.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleReceivePo}>

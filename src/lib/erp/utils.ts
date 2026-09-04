@@ -82,7 +82,6 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
   const orders = sortByCreatedAtDesc(toArray(data?.orders))
   const purchases = sortByCreatedAtDesc(toArray(data?.purchases))
   const products = toArray(data?.products)
-  const tasks = toArray(data?.tasks)
   const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
   const notifications = rawNotifications.filter((item) => {
     if (!roleId) return true
@@ -166,7 +165,6 @@ export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
       pendingPayment: orders.filter((order) => order.due > 0).length,
       todaysOrders: todayOrders.length,
       lowStockCount: lowStock.length,
-      activeWarrantyClaims: tasks.filter((task) => task.module === 'support' && task.status !== 'done').length,
     },
     topProducts,
     orderStatusCounts,

@@ -15,9 +15,7 @@ import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { QuickCreateSupplierDialog } from './quick-create/QuickCreateSupplierDialog'
-import { QuickCreateWarehouseDialog } from './quick-create/QuickCreateWarehouseDialog'
 import { StockControlSection } from './StockControlSection'
-import { StockTransferSection } from './StockTransferSection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -89,7 +87,6 @@ type ProductFormState = {
   conversionRatio: string
   packSize: string
   weight: string
-  warehouseId: string
   supplierId: string
   purchasePrice: string
   sellingPrice: string
@@ -116,19 +113,14 @@ type PurchaseFormState = {
   currency: string
 }
 
-type WarehouseFormState = {
-  name: string
-  location: string
-}
-
-type InventoryView = 'products' | 'warehouses' | 'low-stock' | 'purchases'
+type InventoryView = 'products' | 'low-stock' | 'purchases'
 
 type ProductImageUploadResult = {
   imageUrl: string
   imagePublicId: string
 }
 
-function createEmptyProductForm(warehouseId = ''): ProductFormState {
+function createEmptyProductForm(): ProductFormState {
   return {
     name: '',
     banglaName: '',
@@ -146,7 +138,6 @@ function createEmptyProductForm(warehouseId = ''): ProductFormState {
     conversionRatio: '1',
     packSize: '',
     weight: '',
-    warehouseId,
     supplierId: SUPPLIER_NONE,
     purchasePrice: '',
     sellingPrice: '',
@@ -176,13 +167,6 @@ function createEmptyPurchaseForm(currency = 'BDT'): PurchaseFormState {
   }
 }
 
-function createEmptyWarehouseForm(): WarehouseFormState {
-  return {
-    name: '',
-    location: '',
-  }
-}
-
 function parseAmount(value: string) {
   const normalized = value.replaceAll(',', '').trim()
   return normalized ? Number(normalized) : 0
@@ -205,7 +189,6 @@ function productToForm(product: {
   conversionRatio?: number
   packSize?: string
   weight?: number
-  warehouseId: string
   supplierId: string
   purchasePrice: number
   sellingPrice: number
@@ -240,7 +223,6 @@ function productToForm(product: {
     conversionRatio: String(product.conversionRatio ?? 1),
     packSize: product.packSize ?? '',
     weight: product.weight ? String(product.weight) : '',
-    warehouseId: product.warehouseId,
     supplierId: product.supplierId || SUPPLIER_NONE,
     purchasePrice: String(product.purchasePrice),
     sellingPrice: String(product.sellingPrice),
@@ -257,13 +239,6 @@ function productToForm(product: {
     maxStock: String(product.maxStock),
     imageUrl: product.imageUrl || '',
     imagePublicId: product.imagePublicId || '',
-  }
-}
-
-function warehouseToForm(warehouse: { name: string; location: string }): WarehouseFormState {
-  return {
-    name: warehouse.name,
-    location: warehouse.location,
   }
 }
 
@@ -336,8 +311,6 @@ export function StockOverviewScreen() {
     hasPermission,
     saveProduct,
     deleteProduct,
-    saveWarehouse,
-    deleteWarehouse,
     recordPurchase,
     loading,
   } = useERP()
@@ -351,7 +324,6 @@ export function StockOverviewScreen() {
     [data?.purchases]
   )
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const categoryOptions = useMemo(
     () =>
       Array.from(
@@ -361,36 +333,24 @@ export function StockOverviewScreen() {
   )
 
   const [search, setSearch] = useState('')
-  const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState('all')
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState('all')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [productForm, setProductForm] = useState<ProductFormState>(() => createEmptyProductForm())
   const [purchaseForm, setPurchaseForm] = useState<PurchaseFormState>(() => createEmptyPurchaseForm())
-  const [warehouseForm, setWarehouseForm] = useState<WarehouseFormState>(() => createEmptyWarehouseForm())
   const [addProductOpen, setAddProductOpen] = useState(false)
   const [receivePurchaseOpen, setReceivePurchaseOpen] = useState(false)
-  const [warehouseOpen, setWarehouseOpen] = useState(false)
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
-  const [editingWarehouseId, setEditingWarehouseId] = useState<string | null>(null)
   const [isSavingProduct, setIsSavingProduct] = useState(false)
   const [isReceivingPurchase, setIsReceivingPurchase] = useState(false)
-  const [isSavingWarehouse, setIsSavingWarehouse] = useState(false)
-  const [quickCreateWarehouseOpen, setQuickCreateWarehouseOpen] = useState(false)
   const [quickCreateSupplierOpen, setQuickCreateSupplierOpen] = useState(false)
   const [quickCreatePurchaseSupplierOpen, setQuickCreatePurchaseSupplierOpen] = useState(false)
   const [quickCreatePurchaseProductOpen, setQuickCreatePurchaseProductOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
   const [starterCatalogOpen, setStarterCatalogOpen] = useState(false)
-  const [starterWarehouseId, setStarterWarehouseId] = useState('')
   const [starterSelectedSkus, setStarterSelectedSkus] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(RECIPE_STARTER_CATALOG.map((entry) => [entry.sku, true]))
   )
   const [isCreatingStarterCatalog, setIsCreatingStarterCatalog] = useState(false)
-
-  const warehouseOptions: ComboboxOption[] = useMemo(
-    () => warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: warehouse.location })),
-    [warehouses]
-  )
 
   const supplierOptions: ComboboxOption[] = useMemo(
     () => [
@@ -405,7 +365,6 @@ export function StockOverviewScreen() {
     [products]
   )
   const [busyProductId, setBusyProductId] = useState<string | null>(null)
-  const [busyWarehouseId, setBusyWarehouseId] = useState<string | null>(null)
   const [activeInventoryView, setActiveInventoryView] = useState<InventoryView>('products')
   const [productImageFile, setProductImageFile] = useState<File | null>(null)
   const [productImagePreview, setProductImagePreview] = useState<string | null>(null)
@@ -420,10 +379,6 @@ export function StockOverviewScreen() {
   const filteredProducts = useMemo(() => {
     let result = products
 
-    if (selectedWarehouseFilter !== 'all') {
-      result = result.filter((product) => product.warehouseId === selectedWarehouseFilter)
-    }
-
     if (selectedSupplierFilter !== 'all') {
       result = result.filter((product) => {
         const prodSupplierId = product.supplierId || SUPPLIER_NONE
@@ -434,28 +389,26 @@ export function StockOverviewScreen() {
     const query = deferredSearch.trim().toLowerCase()
     if (query) {
       result = result.filter((product) => {
-        const warehouseName = data?.warehouses[product.warehouseId]?.name ?? ''
         const supplierName = data?.suppliers[product.supplierId]?.name ?? ''
-        return [product.name, product.sku, product.category, warehouseName, supplierName].join(' ').toLowerCase().includes(query)
+        return [product.name, product.sku, product.category, supplierName].join(' ').toLowerCase().includes(query)
       })
     }
 
     return result
-  }, [data?.suppliers, data?.warehouses, deferredSearch, products, selectedWarehouseFilter, selectedSupplierFilter])
+  }, [data?.suppliers, deferredSearch, products, selectedSupplierFilter])
 
-  const productExportHeaders = ['Product', 'SKU', 'Warehouse', 'Stock', 'Cost', 'Sell Price', 'Supplier']
+  const productExportHeaders = ['Product', 'SKU', 'Stock', 'Cost', 'Sell Price', 'Supplier']
   const productExportRows = useMemo(
     () =>
       filteredProducts.map((product) => [
         product.name,
         product.sku,
-        data?.warehouses[product.warehouseId]?.name ?? '',
         product.stockQty,
         product.purchasePrice,
         product.sellingPrice,
         data?.suppliers[product.supplierId]?.name ?? '',
       ]),
-    [data?.suppliers, data?.warehouses, filteredProducts]
+    [data?.suppliers, filteredProducts]
   )
 
   const lowStockProducts = useMemo(() => products.filter((product) => product.stockQty <= product.minStock), [products])
@@ -466,24 +419,9 @@ export function StockOverviewScreen() {
   const selectedPurchaseProduct = useMemo(() => products.find((product) => product.id === purchaseForm.productId) ?? null, [products, purchaseForm.productId])
   const purchaseTotal = parseAmount(purchaseForm.unitCost) * parseAmount(purchaseForm.quantity)
 
-  const warehouseSummaries = useMemo(() => {
-    return warehouses.map((warehouse) => {
-      const warehouseProducts = products.filter((product) => product.warehouseId === warehouse.id)
-      const warehouseUnits = warehouseProducts.reduce((sum, product) => sum + product.stockQty, 0)
-      const warehouseLowStock = warehouseProducts.filter((product) => product.stockQty <= product.minStock).length
-
-      return {
-        ...warehouse,
-        productCount: warehouseProducts.length,
-        unitCount: warehouseUnits,
-        lowStockCount: warehouseLowStock,
-      }
-    })
-  }, [products, warehouses])
-
   function resetProductEditor() {
     setEditingProductId(null)
-    setProductForm(createEmptyProductForm(warehouses[0]?.id ?? ''))
+    setProductForm(createEmptyProductForm())
     setProductImageFile(null)
     setProductImagePreview(null)
     setPendingImageDeleteId(null)
@@ -491,11 +429,6 @@ export function StockOverviewScreen() {
 
   function resetPurchaseEditor() {
     setPurchaseForm(createEmptyPurchaseForm(currency))
-  }
-
-  function resetWarehouseEditor() {
-    setEditingWarehouseId(null)
-    setWarehouseForm(createEmptyWarehouseForm())
   }
 
   function openCreateProductDialog() {
@@ -507,18 +440,12 @@ export function StockOverviewScreen() {
   const existingSkuSet = useMemo(() => new Set(products.map((product) => product.sku.toUpperCase())), [products])
 
   function openStarterCatalogDialog() {
-    setStarterWarehouseId(warehouses[0]?.id ?? '')
     setStarterSelectedSkus(Object.fromEntries(RECIPE_STARTER_CATALOG.map((entry) => [entry.sku, true])))
     setFeedback(null)
     setStarterCatalogOpen(true)
   }
 
   async function handleCreateStarterCatalog() {
-    if (!starterWarehouseId) {
-      setFeedback('Select a warehouse for the starter catalog first.')
-      return
-    }
-
     const itemsToCreate = RECIPE_STARTER_CATALOG.filter(
       (entry) => starterSelectedSkus[entry.sku] && !existingSkuSet.has(entry.sku.toUpperCase())
     )
@@ -546,7 +473,6 @@ export function StockOverviewScreen() {
           salesUnit: entry.unit,
           conversionRatio: 1,
           packSize: entry.packSize,
-          warehouseId: starterWarehouseId,
           purchasePrice: 0,
           sellingPrice: 0,
           wholesalePrice: 0,
@@ -587,24 +513,6 @@ export function StockOverviewScreen() {
     resetPurchaseEditor()
     setFeedback(null)
     setReceivePurchaseOpen(true)
-  }
-
-  function openCreateWarehouseDialog() {
-    resetWarehouseEditor()
-    setFeedback(null)
-    setWarehouseOpen(true)
-  }
-
-  function openEditWarehouseDialog(warehouseId: string) {
-    const warehouse = data?.warehouses[warehouseId]
-    if (!warehouse) {
-      return
-    }
-
-    setEditingWarehouseId(warehouseId)
-    setWarehouseForm(warehouseToForm(warehouse))
-    setFeedback(null)
-    setWarehouseOpen(true)
   }
 
   function handleProductImageChange(event: ChangeEvent<HTMLInputElement>) {
@@ -673,7 +581,6 @@ export function StockOverviewScreen() {
           conversionRatio: parseAmount(productForm.conversionRatio) || 1,
           packSize: productForm.packSize,
           weight: parseAmount(productForm.weight),
-          warehouseId: productForm.warehouseId,
           supplierId: productForm.supplierId === SUPPLIER_NONE ? '' : productForm.supplierId,
           purchasePrice: parseAmount(productForm.purchasePrice),
           sellingPrice: parseAmount(productForm.sellingPrice),
@@ -767,81 +674,30 @@ export function StockOverviewScreen() {
     }
   }
 
-  async function handleSaveWarehouse(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setFeedback(null)
-    setIsSavingWarehouse(true)
-
-    try {
-      await saveWarehouse(
-        {
-          name: warehouseForm.name,
-          location: warehouseForm.location,
-        },
-        editingWarehouseId ?? undefined
-      )
-
-      setFeedback(editingWarehouseId ? 'Warehouse updated successfully.' : 'Warehouse added successfully.')
-      setWarehouseOpen(false)
-      resetWarehouseEditor()
-    } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to save warehouse.')
-    } finally {
-      setIsSavingWarehouse(false)
-    }
-  }
-
-  async function handleDeleteWarehouse(warehouseId: string) {
-    const warehouse = data?.warehouses[warehouseId]
-    if (!warehouse) {
-      return
-    }
-
-    if (!window.confirm(`Delete ${warehouse.name}?`)) {
-      return
-    }
-
-    setFeedback(null)
-    setBusyWarehouseId(warehouseId)
-
-    try {
-      await deleteWarehouse(warehouseId)
-      setFeedback(`${warehouse.name} was deleted.`)
-    } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete warehouse.')
-    } finally {
-      setBusyWarehouseId(null)
-    }
-  }
-
   return (
     <AdminShell active="Inventory / Stock">
       <div className="space-y-6">
         <Card className="border-border/70 shadow-sm">
           <CardContent className="flex flex-col gap-6 p-6">
             <div className="flex flex-wrap gap-3 xl:justify-end">
-                <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory || warehouses.length === 0}>
+                <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory}>
                   Add product
                 </Button>
                 <Button variant="secondary" className="rounded-xl" onClick={openReceivePurchaseDialog} disabled={!canCreateInventory || products.length === 0}>
                   Receive purchase
                 </Button>
-                <Button variant="outline" className="rounded-xl" onClick={openCreateWarehouseDialog} disabled={!canCreateInventory}>
-                  Add warehouse
-                </Button>
-                <Button variant="outline" className="rounded-xl" onClick={openStarterCatalogDialog} disabled={!canCreateInventory || warehouses.length === 0}>
+                <Button variant="outline" className="rounded-xl" onClick={openStarterCatalogDialog} disabled={!canCreateInventory}>
                   <Sparkles className="mr-2 h-4 w-4" />
                   Load starter catalog
                 </Button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
               {[
                 { label: 'Products', value: String(products.length) },
                 { label: 'Units in stock', value: String(totalUnits) },
                 { label: 'Inventory value', value: formatCurrency(totalInventoryValue, currency) },
                 { label: 'Low stock', value: String(lowStockProducts.length) },
-                { label: 'Warehouses', value: String(warehouses.length) },
                 { label: 'Suppliers', value: String(suppliers.length) },
               ].map((stat) => (
                 <div key={stat.label} className="min-w-0 overflow-hidden rounded-2xl border border-border/70 bg-card px-4 py-4">
@@ -863,7 +719,7 @@ export function StockOverviewScreen() {
         <Card className="border-border/70 shadow-sm">
           <CardHeader>
             <CardTitle>Inventory dashboard</CardTitle>
-            <CardDescription>Stock value, expiry exposure, and a warehouse / product / batch breakdown.</CardDescription>
+            <CardDescription>Stock value, expiry exposure, and a product / batch breakdown.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
@@ -887,26 +743,7 @@ export function StockOverviewScreen() {
               })}
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-3">
-              <div>
-                <p className="mb-2 text-sm font-medium text-foreground">Warehouse-wise stock</p>
-                <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Warehouse</th><th className="p-2.5 text-right">Qty</th><th className="p-2.5 text-right">Value</th></tr></thead>
-                    <tbody>
-                      {inventoryDashboard.warehouseWiseStock.map((row) => (
-                        <tr key={row.warehouseId} className="border-t border-border/70">
-                          <td className="p-2.5">{row.warehouseName}</td>
-                          <td className="p-2.5 text-right">{row.quantity}</td>
-                          <td className="p-2.5 text-right">{formatCurrency(row.value, currency)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!inventoryDashboard.warehouseWiseStock.length ? <p className="p-6 text-center text-sm text-muted-foreground">No stock recorded yet.</p> : null}
-                </div>
-              </div>
-
+            <div className="grid gap-6 xl:grid-cols-2">
               <div>
                 <p className="mb-2 text-sm font-medium text-foreground">Product-wise stock</p>
                 <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
@@ -953,21 +790,18 @@ export function StockOverviewScreen() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <CardTitle>
-                  {activeInventoryView === 'products' ? 'Inventory list' : activeInventoryView === 'warehouses' ? 'Warehouse control' : activeInventoryView === 'low-stock' ? 'Low stock focus' : 'Recent purchases'}
+                  {activeInventoryView === 'products' ? 'Inventory list' : activeInventoryView === 'low-stock' ? 'Low stock focus' : 'Recent purchases'}
                 </CardTitle>
                 <CardDescription>
                   {activeInventoryView === 'products'
-                    ? 'Search by product, model, category, warehouse, or supplier. Edit and delete actions are available in each row.'
-                    : activeInventoryView === 'warehouses'
-                      ? 'Add, edit, and clean up warehouse locations from one place.'
-                      : activeInventoryView === 'low-stock'
-                        ? 'Products that need replenishment soon.'
-                        : 'Latest stock receipts recorded in the system.'}
+                    ? 'Search by product, model, category, or supplier. Edit and delete actions are available in each row.'
+                    : activeInventoryView === 'low-stock'
+                      ? 'Products that need replenishment soon.'
+                      : 'Latest stock receipts recorded in the system.'}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant={activeInventoryView === 'products' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('products')}>Products</Button>
-                <Button variant={activeInventoryView === 'warehouses' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('warehouses')}>Warehouse control</Button>
                 <Button variant={activeInventoryView === 'low-stock' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('low-stock')}>Low stock focus</Button>
                 <Button variant={activeInventoryView === 'purchases' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('purchases')}>Recent purchases</Button>
               </div>
@@ -980,21 +814,6 @@ export function StockOverviewScreen() {
                   <div className="relative w-full sm:max-w-xs">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" placeholder="Search inventory..." />
-                  </div>
-                  <div className="w-full sm:w-48">
-                    <Select value={selectedWarehouseFilter} onValueChange={setSelectedWarehouseFilter}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="All Warehouses" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Warehouses</SelectItem>
-                        {warehouses.map((warehouse) => (
-                          <SelectItem key={warehouse.id} value={warehouse.id}>
-                            {warehouse.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                   </div>
                   <div className="w-full sm:w-48">
                     <Select value={selectedSupplierFilter} onValueChange={setSelectedSupplierFilter}>
@@ -1015,7 +834,6 @@ export function StockOverviewScreen() {
                 </div>
               ) : <div />}
 
-              {activeInventoryView === 'warehouses' && canCreateInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={openCreateWarehouseDialog}>Add warehouse</Button> : null}
               {activeInventoryView === 'products' ? (
                 <ExportMenu filenameBase="products" title="Products" headers={productExportHeaders} rows={productExportRows} />
               ) : null}
@@ -1029,7 +847,6 @@ export function StockOverviewScreen() {
                       <TableRow className="bg-muted/40 hover:bg-muted/40">
                         <TableHead>Product</TableHead>
                         <TableHead>Model / SKU</TableHead>
-                        <TableHead>Warehouse</TableHead>
                         <TableHead>Stock</TableHead>
                         <TableHead>Cost</TableHead>
                         <TableHead>Sell price</TableHead>
@@ -1037,19 +854,9 @@ export function StockOverviewScreen() {
                         <TableHead>Updated</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ) : activeInventoryView === 'warehouses' ? (
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Warehouse</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead>Products</TableHead>
-                        <TableHead>Units</TableHead>
-                        <TableHead>Low stock</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
                     ) : activeInventoryView === 'low-stock' ? (
                       <TableRow className="bg-muted/40 hover:bg-muted/40">
                         <TableHead>Product</TableHead>
-                        <TableHead>Warehouse</TableHead>
                         <TableHead>Available</TableHead>
                         <TableHead>Minimum</TableHead>
                         <TableHead>Status</TableHead>
@@ -1068,7 +875,6 @@ export function StockOverviewScreen() {
                   </TableHeader>
                   <TableBody>
                     {activeInventoryView === 'products' ? filteredProducts.map((product) => {
-                      const warehouse = data?.warehouses[product.warehouseId]
                       const supplier = data?.suppliers[product.supplierId]
                       const status = getProductStatus(product.stockQty, product.minStock)
 
@@ -1076,7 +882,6 @@ export function StockOverviewScreen() {
                         <TableRow key={product.id}>
                           <TableCell><div className="flex items-center gap-3">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-14 w-14 rounded-xl border border-border/70 object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/30 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">No image</div>}<div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.category || 'General equipment'}{product.subCategory ? ` · ${product.subCategory}` : ''}</p><div className="mt-1 flex flex-wrap gap-1">{product.batchApplicable ? <Badge variant="outline" className="border-sky-200 bg-sky-500/10 text-[10px] text-sky-700">Batch</Badge> : null}{product.expiryApplicable ? <Badge variant="outline" className="border-violet-200 bg-violet-500/10 text-[10px] text-violet-700">Expiry</Badge> : null}{product.isActive === false ? <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge> : null}</div></div></div></TableCell>
                           <TableCell className="font-medium"><p>{product.sku}</p>{product.serialNumber ? <p className="text-xs font-normal text-muted-foreground">SN: {product.serialNumber}</p> : null}{product.warrantyMonths ? <p className="text-xs font-normal text-muted-foreground">{product.warrantyMonths}mo warranty</p> : null}</TableCell>
-                          <TableCell><div><p className="font-medium">{warehouse?.name ?? 'Unknown warehouse'}</p><p className="text-xs text-muted-foreground">{warehouse?.location ?? 'Location unavailable'}</p></div></TableCell>
                           <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} {product.unit || 'units'}</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
                           <TableCell>{formatCurrency(product.purchasePrice, currency)}</TableCell>
                           <TableCell>{formatCurrency(product.sellingPrice, currency)}</TableCell>
@@ -1085,23 +890,12 @@ export function StockOverviewScreen() {
                           <TableCell>{canEditInventory || canDeleteInventory ? <div className="flex justify-end gap-2">{canEditInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button> : null}{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
                         </TableRow>
                       )
-                    }) : activeInventoryView === 'warehouses' ? warehouseSummaries.map((warehouse) => (
-                      <TableRow key={warehouse.id}>
-                        <TableCell className="font-semibold">{warehouse.name}</TableCell>
-                        <TableCell>{warehouse.location}</TableCell>
-                        <TableCell>{warehouse.productCount}</TableCell>
-                        <TableCell>{warehouse.unitCount}</TableCell>
-                        <TableCell>{warehouse.lowStockCount}</TableCell>
-                        <TableCell>{canEditInventory || canDeleteInventory ? <div className="flex justify-end gap-2">{canEditInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditWarehouseDialog(warehouse.id)}>Edit</Button> : null}{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteWarehouse(warehouse.id)} disabled={busyWarehouseId === warehouse.id}>Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
-                      </TableRow>
-                    )) : activeInventoryView === 'low-stock' ? lowStockProducts.map((product) => {
-                      const warehouse = data?.warehouses[product.warehouseId]
+                    }) : activeInventoryView === 'low-stock' ? lowStockProducts.map((product) => {
                       const status = getProductStatus(product.stockQty, product.minStock)
 
                       return (
                         <TableRow key={product.id}>
                           <TableCell><div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.sku}</p></div></TableCell>
-                          <TableCell>{warehouse?.name ?? 'Unknown warehouse'}</TableCell>
                           <TableCell>{product.stockQty}</TableCell>
                           <TableCell>{product.minStock}</TableCell>
                           <TableCell><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></TableCell>
@@ -1119,9 +913,8 @@ export function StockOverviewScreen() {
                       </TableRow>
                     ))}
 
-                    {activeInventoryView === 'products' && !filteredProducts.length ? <TableRow><TableCell colSpan={9} className="py-12 text-center text-sm text-muted-foreground">No products matched your search.</TableCell></TableRow> : null}
-                    {activeInventoryView === 'warehouses' && !warehouseSummaries.length ? <TableRow><TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">No warehouses yet. Add one before creating products.</TableCell></TableRow> : null}
-                    {activeInventoryView === 'low-stock' && !lowStockProducts.length ? <TableRow><TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">No low-stock products right now.</TableCell></TableRow> : null}
+                    {activeInventoryView === 'products' && !filteredProducts.length ? <TableRow><TableCell colSpan={8} className="py-12 text-center text-sm text-muted-foreground">No products matched your search.</TableCell></TableRow> : null}
+                    {activeInventoryView === 'low-stock' && !lowStockProducts.length ? <TableRow><TableCell colSpan={5} className="py-12 text-center text-sm text-muted-foreground">No low-stock products right now.</TableCell></TableRow> : null}
                     {activeInventoryView === 'purchases' && !purchases.length ? <TableRow><TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">No purchase receipts yet.</TableCell></TableRow> : null}
                   </TableBody>
                 </Table>
@@ -1192,9 +985,8 @@ export function StockOverviewScreen() {
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Warehouse &amp; Supplier</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Supplier</p>
                   <div className="grid gap-5 sm:grid-cols-2">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse</p><Combobox options={warehouseOptions} value={productForm.warehouseId} onChange={(value) => setProductForm((current) => ({ ...current, warehouseId: value }))} placeholder="Select warehouse" searchPlaceholder="Search warehouses..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateWarehouseOpen(true) }} createNewLabel="Create warehouse" /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={productForm.supplierId} onChange={(value) => setProductForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
                   </div>
                 </div>
@@ -1236,29 +1028,13 @@ export function StockOverviewScreen() {
             {canCreateInventory ? (
               <form className="space-y-5" onSubmit={handleReceivePurchase}>
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product</p><Combobox options={purchaseProductOptions} value={purchaseForm.productId} onChange={(value) => { const product = data?.products[value]; setPurchaseForm((current) => ({ ...current, productId: value, supplierId: product?.supplierId || SUPPLIER_NONE, unitCost: product ? String(product.purchasePrice) : current.unitCost })) }} placeholder="Select product" searchPlaceholder="Search products..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseProductOpen(true) }} createNewLabel="Create product" /></div>
-                {selectedPurchaseProduct ? <div className="rounded-2xl border border-border/70 bg-muted/30 p-4"><div className="grid gap-3 sm:grid-cols-3"><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current stock</p><p className="mt-1 text-lg font-semibold">{selectedPurchaseProduct.stockQty} units</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Warehouse</p><p className="mt-1 text-lg font-semibold">{data?.warehouses[selectedPurchaseProduct.warehouseId]?.name ?? 'Unknown'}</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Last cost</p><p className="mt-1 text-lg font-semibold">{formatCurrency(selectedPurchaseProduct.purchasePrice, currency)}</p></div></div></div> : null}
+                {selectedPurchaseProduct ? <div className="rounded-2xl border border-border/70 bg-muted/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current stock</p><p className="mt-1 text-lg font-semibold">{selectedPurchaseProduct.stockQty} units</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Last cost</p><p className="mt-1 text-lg font-semibold">{formatCurrency(selectedPurchaseProduct.purchasePrice, currency)}</p></div></div></div> : null}
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={purchaseForm.supplierId} onChange={(value) => setPurchaseForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
                 <div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2"><p className="text-sm font-medium text-foreground">Quantity received</p><Input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm((current) => ({ ...current, quantity: event.target.value }))} required /></div><div className="space-y-2"><p className="text-sm font-medium text-foreground">Unit cost</p><Input inputMode="numeric" placeholder="330000" value={purchaseForm.unitCost} onChange={(event) => setPurchaseForm((current) => ({ ...current, unitCost: event.target.value }))} required /></div></div>
                 <div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2"><p className="text-sm font-medium text-foreground">Currency</p><Select value={purchaseForm.currency} onValueChange={(value) => setPurchaseForm((current) => ({ ...current, currency: value }))}><SelectTrigger><SelectValue placeholder="Select currency" /></SelectTrigger><SelectContent>{currencyOptions.map((currencyOption) => (<SelectItem key={currencyOption} value={currencyOption}>{currencyOption}</SelectItem>))}</SelectContent></Select></div><div className="space-y-2 rounded-2xl border border-border/70 p-4"><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Purchase total</p><p className="mt-1 text-2xl font-semibold">{formatCurrency(purchaseTotal, purchaseForm.currency)}</p><p className="mt-1 text-sm text-muted-foreground">Stock after receive: {(selectedPurchaseProduct?.stockQty ?? 0) + parseAmount(purchaseForm.quantity)} units</p></div></div>
                 <DialogFooter><Button type="button" variant="outline" onClick={() => setReceivePurchaseOpen(false)}>Cancel</Button><Button type="submit" variant="secondary" disabled={isReceivingPurchase}>{isReceivingPurchase ? 'Posting...' : 'Receive stock'}</Button></DialogFooter>
               </form>
             ) : <p className="text-sm text-muted-foreground">Your current role cannot record inbound purchases.</p>}
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={warehouseOpen} onOpenChange={setWarehouseOpen}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>{editingWarehouseId ? 'Edit warehouse' : 'Add warehouse'}</DialogTitle>
-              <DialogDescription>Keep storage names and locations clean so product assignment stays clear for the team.</DialogDescription>
-            </DialogHeader>
-            {(editingWarehouseId ? canEditInventory : canCreateInventory) ? (
-              <form className="space-y-5" onSubmit={handleSaveWarehouse}>
-                <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse name</p><Input placeholder="Dhaka Main Warehouse" value={warehouseForm.name} onChange={(event) => setWarehouseForm((current) => ({ ...current, name: event.target.value }))} required /></div>
-                <div className="space-y-2"><p className="text-sm font-medium text-foreground">Location</p><Input placeholder="Mirpur, Dhaka" value={warehouseForm.location} onChange={(event) => setWarehouseForm((current) => ({ ...current, location: event.target.value }))} required /></div>
-                <DialogFooter><Button type="button" variant="outline" onClick={() => setWarehouseOpen(false)}>Cancel</Button><Button type="submit" disabled={isSavingWarehouse}>{isSavingWarehouse ? 'Saving...' : editingWarehouseId ? 'Update warehouse' : 'Save warehouse'}</Button></DialogFooter>
-              </form>
-            ) : <p className="text-sm text-muted-foreground">Your current role cannot manage warehouse records.</p>}
           </DialogContent>
         </Dialog>
 
@@ -1271,16 +1047,6 @@ export function StockOverviewScreen() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-5">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Warehouse for these products</p>
-                <Combobox
-                  options={warehouseOptions}
-                  value={starterWarehouseId}
-                  onChange={setStarterWarehouseId}
-                  placeholder="Select warehouse"
-                  searchPlaceholder="Search warehouses..."
-                />
-              </div>
               <div className="space-y-4">
                 {RECIPE_STARTER_CATEGORIES.map((category) => (
                   <div key={category} className="space-y-2 rounded-2xl border border-border/70 p-3">
@@ -1316,7 +1082,7 @@ export function StockOverviewScreen() {
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setStarterCatalogOpen(false)}>Cancel</Button>
-              <Button type="button" onClick={() => void handleCreateStarterCatalog()} disabled={isCreatingStarterCatalog || !starterWarehouseId}>
+              <Button type="button" onClick={() => void handleCreateStarterCatalog()} disabled={isCreatingStarterCatalog}>
                 {isCreatingStarterCatalog ? 'Creating...' : 'Create selected products'}
               </Button>
             </DialogFooter>
@@ -1325,16 +1091,9 @@ export function StockOverviewScreen() {
 
         {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading inventory...</CardContent></Card> : null}
 
-        <StockTransferSection />
         <StockControlSection />
       </div>
 
-      <QuickCreateWarehouseDialog
-        open={quickCreateWarehouseOpen}
-        onOpenChange={setQuickCreateWarehouseOpen}
-        initialName={pendingSearchText}
-        onCreated={(warehouseId) => setProductForm((current) => ({ ...current, warehouseId }))}
-      />
       <QuickCreateSupplierDialog
         open={quickCreateSupplierOpen}
         onOpenChange={setQuickCreateSupplierOpen}

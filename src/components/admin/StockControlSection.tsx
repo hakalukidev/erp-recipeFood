@@ -22,8 +22,7 @@ import type { StockAdjustmentRecord } from '@/lib/erp/types'
 import { formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-const emptyAdjustmentForm = { productId: '', warehouseId: '', newQuantity: '0', reason: '' }
-const emptyCountWarehouse = ''
+const emptyAdjustmentForm = { productId: '', newQuantity: '0', reason: '' }
 
 const adjustmentTone: Record<StockAdjustmentRecord['status'], string> = {
   pending: 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300',
@@ -49,7 +48,6 @@ export function StockControlSection() {
   } = useERP()
 
   const products = useMemo(() => toArray(data?.products), [data?.products])
-  const warehouses = useMemo(() => toArray(data?.warehouses), [data?.warehouses])
   const adjustments = useMemo(
     () => toArray(data?.stockAdjustments).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.stockAdjustments]
@@ -70,18 +68,12 @@ export function StockControlSection() {
     [data?.qcHolds]
   )
 
-  const warehouseName = useMemo(() => {
-    const map = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse.name]))
-    return (warehouseId: string) => map.get(warehouseId) ?? warehouseId
-  }, [warehouses])
-
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const [adjustmentDialogOpen, setAdjustmentDialogOpen] = useState(false)
   const [adjustmentForm, setAdjustmentForm] = useState(emptyAdjustmentForm)
 
   const [countDialogOpen, setCountDialogOpen] = useState(false)
-  const [countWarehouseId, setCountWarehouseId] = useState(emptyCountWarehouse)
   const [countPhysicalQty, setCountPhysicalQty] = useState<Record<string, string>>({})
 
   function openAdjustmentDialog(prefill?: Partial<typeof emptyAdjustmentForm>) {
@@ -96,7 +88,6 @@ export function StockControlSection() {
     try {
       await createStockAdjustmentRequest({
         productId: adjustmentForm.productId,
-        warehouseId: adjustmentForm.warehouseId,
         newQuantity: Number(adjustmentForm.newQuantity),
         reason: adjustmentForm.reason,
       })
@@ -150,14 +141,12 @@ export function StockControlSection() {
 
   function openCountDialog() {
     setFeedback(null)
-    setCountWarehouseId('')
     setCountPhysicalQty({})
     setCountDialogOpen(true)
   }
 
-  function systemQtyFor(productId: string, warehouseId: string) {
-    const key = `${productId}__${warehouseId}`
-    return data?.warehouseStocks[key]?.quantity ?? 0
+  function systemQtyFor(productId: string) {
+    return data?.products[productId]?.stockQty ?? 0
   }
 
   async function handleSubmitCount(event: FormEvent<HTMLFormElement>) {
@@ -168,13 +157,13 @@ export function StockControlSection() {
       .filter((product) => countPhysicalQty[product.id] !== undefined && countPhysicalQty[product.id] !== '')
       .map((product) => ({ productId: product.id, physicalQty: Number(countPhysicalQty[product.id]) }))
 
-    if (!countWarehouseId || items.length === 0) {
-      setFeedback('Select a warehouse and enter a physical count for at least one product.')
+    if (items.length === 0) {
+      setFeedback('Enter a physical count for at least one product.')
       return
     }
 
     try {
-      const id = await createStockCount({ warehouseId: countWarehouseId, items })
+      const id = await createStockCount({ items })
       setFeedback(`Stock count recorded (${id}). Review the variance report below.`)
       setCountDialogOpen(false)
     } catch (reason) {
@@ -212,7 +201,6 @@ export function StockControlSection() {
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
                   <TableHead>Product</TableHead>
-                  <TableHead>Warehouse</TableHead>
                   <TableHead>Before → After</TableHead>
                   <TableHead>Reason</TableHead>
                   <TableHead>Status</TableHead>
@@ -223,7 +211,6 @@ export function StockControlSection() {
                 {adjustments.map((adjustment) => (
                   <TableRow key={adjustment.id}>
                     <TableCell className="font-medium">{adjustment.productName}</TableCell>
-                    <TableCell>{adjustment.warehouseName}</TableCell>
                     <TableCell className={cn(adjustment.delta < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400')}>
                       {adjustment.quantityBefore} → {adjustment.quantityAfter}
                     </TableCell>
@@ -249,7 +236,7 @@ export function StockControlSection() {
                 ))}
                 {adjustments.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
                       No stock adjustments requested yet.
                     </TableCell>
                   </TableRow>
@@ -280,7 +267,7 @@ export function StockControlSection() {
           {stockCounts.map((count) => (
             <div key={count.id} className="space-y-2 rounded-2xl border border-border/70 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-semibold">{count.countNumber} — {count.warehouseName}</p>
+                <p className="font-semibold">{count.countNumber}</p>
                 <p className="text-xs text-muted-foreground">{formatDate(count.createdAt)} · {count.countedByName}</p>
               </div>
               <div className="overflow-x-auto rounded-xl border border-border/70">
@@ -313,7 +300,6 @@ export function StockControlSection() {
                                 onClick={() =>
                                   openAdjustmentDialog({
                                     productId: item.productId,
-                                    warehouseId: count.warehouseId,
                                     newQuantity: String(item.physicalQty),
                                     reason: `Stock count variance (${count.countNumber})`,
                                   })
@@ -354,7 +340,6 @@ export function StockControlSection() {
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
                   <TableHead>Product</TableHead>
                   <TableHead>Source</TableHead>
-                  <TableHead>Warehouse</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Reason</TableHead>
                   <TableHead>Status</TableHead>
@@ -366,7 +351,6 @@ export function StockControlSection() {
                   <TableRow key={hold.id}>
                     <TableCell className="font-medium">{hold.productName}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{hold.sourceType} · {hold.sourceReference}</TableCell>
-                    <TableCell>{hold.warehouseName}</TableCell>
                     <TableCell>{hold.quantity}</TableCell>
                     <TableCell className="max-w-56 truncate text-sm text-muted-foreground" title={hold.reason}>{hold.reason}</TableCell>
                     <TableCell>
@@ -396,7 +380,7 @@ export function StockControlSection() {
                 ))}
                 {qcHolds.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="h-20 text-center text-muted-foreground">
                       No QC holds — nothing has failed a quality check.
                     </TableCell>
                   </TableRow>
@@ -415,7 +399,7 @@ export function StockControlSection() {
             </div>
             <div>
               <CardTitle>Batches — FEFO picking suggestion</CardTitle>
-              <CardDescription>Soonest-to-expire batch first. Pick from the top of this list during warehouse picking.</CardDescription>
+              <CardDescription>Soonest-to-expire batch first. Pick from the top of this list during picking.</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -426,7 +410,6 @@ export function StockControlSection() {
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
                   <TableHead>Product</TableHead>
                   <TableHead>Batch</TableHead>
-                  <TableHead>Warehouse</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Expiry</TableHead>
                 </TableRow>
@@ -438,7 +421,6 @@ export function StockControlSection() {
                     <TableRow key={batch.id}>
                       <TableCell className="font-medium">{batch.productName}</TableCell>
                       <TableCell>{batch.batchNumber}</TableCell>
-                      <TableCell>{warehouseName(batch.warehouseId)}</TableCell>
                       <TableCell>{batch.quantity}</TableCell>
                       <TableCell>
                         {batch.expiryDate ? (
@@ -461,7 +443,7 @@ export function StockControlSection() {
                 })}
                 {batches.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
                       No batches recorded yet — these fill in when a GRN specifies a batch number or expiry date.
                     </TableCell>
                   </TableRow>
@@ -490,29 +472,16 @@ export function StockControlSection() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Warehouse<span className="ml-0.5 text-rose-500">*</span></p>
-                <Select value={adjustmentForm.warehouseId} onValueChange={(value) => setAdjustmentForm((current) => ({ ...current, warehouseId: value }))} required>
-                  <SelectTrigger><SelectValue placeholder="Select a warehouse" /></SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map((warehouse) => (
-                      <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Correct quantity<span className="ml-0.5 text-rose-500">*</span></p>
-                <Input type="number" min="0" value={adjustmentForm.newQuantity} onChange={(event) => setAdjustmentForm((current) => ({ ...current, newQuantity: event.target.value }))} required />
-                {adjustmentForm.productId && adjustmentForm.warehouseId ? (
-                  <p className="text-xs text-muted-foreground">Current: {systemQtyFor(adjustmentForm.productId, adjustmentForm.warehouseId)}</p>
-                ) : null}
-              </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Correct quantity<span className="ml-0.5 text-rose-500">*</span></p>
+              <Input type="number" min="0" value={adjustmentForm.newQuantity} onChange={(event) => setAdjustmentForm((current) => ({ ...current, newQuantity: event.target.value }))} required />
+              {adjustmentForm.productId ? (
+                <p className="text-xs text-muted-foreground">Current: {systemQtyFor(adjustmentForm.productId)}</p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">Reason<span className="ml-0.5 text-rose-500">*</span></p>
-              <Textarea value={adjustmentForm.reason} onChange={(event) => setAdjustmentForm((current) => ({ ...current, reason: event.target.value }))} placeholder="e.g. Damaged in warehouse, count variance, data entry error" rows={2} required />
+              <Textarea value={adjustmentForm.reason} onChange={(event) => setAdjustmentForm((current) => ({ ...current, reason: event.target.value }))} placeholder="e.g. Damaged stock, count variance, data entry error" rows={2} required />
             </div>
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setAdjustmentDialogOpen(false)}>Cancel</Button>
@@ -529,35 +498,22 @@ export function StockControlSection() {
             <DialogDescription>Enter the physical count for whichever products you counted — the rest are left out of this count.</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmitCount}>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">Warehouse<span className="ml-0.5 text-rose-500">*</span></p>
-              <Select value={countWarehouseId} onValueChange={setCountWarehouseId} required>
-                <SelectTrigger><SelectValue placeholder="Select a warehouse" /></SelectTrigger>
-                <SelectContent>
-                  {warehouses.map((warehouse) => (
-                    <SelectItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-border/70 p-3">
+              {products.map((product) => (
+                <div key={product.id} className="grid grid-cols-[1fr_90px_90px] items-center gap-3">
+                  <p className="text-sm">{product.name}</p>
+                  <p className="text-xs text-muted-foreground">Sys: {systemQtyFor(product.id)}</p>
+                  <Input
+                    type="number"
+                    min="0"
+                    className="h-8"
+                    placeholder="Physical"
+                    value={countPhysicalQty[product.id] ?? ''}
+                    onChange={(event) => setCountPhysicalQty((current) => ({ ...current, [product.id]: event.target.value }))}
+                  />
+                </div>
+              ))}
             </div>
-            {countWarehouseId ? (
-              <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-border/70 p-3">
-                {products.map((product) => (
-                  <div key={product.id} className="grid grid-cols-[1fr_90px_90px] items-center gap-3">
-                    <p className="text-sm">{product.name}</p>
-                    <p className="text-xs text-muted-foreground">Sys: {systemQtyFor(product.id, countWarehouseId)}</p>
-                    <Input
-                      type="number"
-                      min="0"
-                      className="h-8"
-                      placeholder="Physical"
-                      value={countPhysicalQty[product.id] ?? ''}
-                      onChange={(event) => setCountPhysicalQty((current) => ({ ...current, [product.id]: event.target.value }))}
-                    />
-                  </div>
-                ))}
-              </div>
-            ) : null}
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setCountDialogOpen(false)}>Cancel</Button>
               <Button type="submit" className="rounded-xl">Save count</Button>

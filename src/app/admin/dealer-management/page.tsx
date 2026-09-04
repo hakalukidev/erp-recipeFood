@@ -32,8 +32,8 @@ import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 // order.total includes VAT (not revenue) — mirrors getOrderNetSales in the
-// Finance/Accounting and Sales Force pages so Sales/Achievement here match
-// the same net-sales figure the rest of the books use.
+// Finance/Accounting pages so Sales/Achievement here match the same
+// net-sales figure the rest of the books use.
 function getOrderNetSales(order: OrderRecord) {
   return order.total - (order.vat ?? 0)
 }
