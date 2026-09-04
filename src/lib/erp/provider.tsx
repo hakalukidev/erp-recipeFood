@@ -36,8 +36,8 @@ import type {
   CommissionPayoutRecord,
   CommissionRuleInput,
   CommissionRuleRecord,
-  CustomerInput,
-  CustomerRecord,
+  DealerInput,
+  DealerRecord,
   ERPData,
   ExpenseApprovalStatus,
   ExpenseInput,
@@ -112,8 +112,8 @@ type ERPContextValue = {
   hasPermission: (permission: string) => boolean
   saveRole: (input: RoleInput, roleId?: string) => Promise<string>
   deleteRole: (roleId: string) => Promise<void>
-  saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
-  deleteCustomer: (customerId: string) => Promise<void>
+  saveDealer: (input: DealerInput, dealerId?: string) => Promise<string>
+  deleteDealer: (dealerId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
   deleteProduct: (productId: string) => Promise<void>
   createStockAdjustmentRequest: (input: StockAdjustmentInput) => Promise<string>
@@ -186,7 +186,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'permissions',
   'roles',
   'users',
-  'customers',
+  'dealers',
   'products',
   'orders',
   'ledgerEntries',
@@ -324,26 +324,21 @@ function normalizeRoleMap(roles: Record<string, RoleRecord>): Record<string, Rol
   )
 }
 
-function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
+function normalizeDealerRecord(dealer: DealerRecord): DealerRecord {
   const now = new Date().toISOString()
 
   return {
-    ...customer,
-    company: customer.company || 'Retail',
-    phone: customer.phone || '',
-    location: customer.location || '',
-    due: Number(customer.due ?? 0),
-    supportStatus: customer.supportStatus ?? 'none',
-    supportNote: customer.supportNote || '',
-    isWholesale: customer.isWholesale ?? false,
-    createdAt: customer.createdAt || now,
-    updatedAt: customer.updatedAt || customer.createdAt || now,
+    ...dealer,
+    phone: dealer.phone || '',
+    address: dealer.address || '',
+    createdAt: dealer.createdAt || now,
+    updatedAt: dealer.updatedAt || dealer.createdAt || now,
   }
 }
 
-function normalizeCustomerMap(customers?: Record<string, CustomerRecord> | null) {
+function normalizeDealerMap(dealers?: Record<string, DealerRecord> | null) {
   return Object.fromEntries(
-    Object.entries(customers ?? {}).map(([id, customer]) => [id, normalizeCustomerRecord(customer)])
+    Object.entries(dealers ?? {}).map(([id, dealer]) => [id, normalizeDealerRecord(dealer)])
   )
 }
 
@@ -416,21 +411,21 @@ function getOrderCogs(items: OrderItem[]) {
 }
 
 // Auto-cascade from Section 10 (Sales Invoice): every invoice posts a
-// balanced Dr/Cr entry set — Dr Customer / Cr Sales (+ Cr VAT payable),
+// balanced Dr/Cr entry set — Dr Dealer / Cr Sales (+ Cr VAT payable),
 // Dr COGS / Cr Inventory for the finished-goods stock decrease, and
-// Dr Cash / Cr Customer for whatever was collected on the spot.
+// Dr Cash / Cr Dealer for whatever was collected on the spot.
 function buildInvoiceLedgerEntries(params: {
   orderId: string
   billNumber: string
   date: string
-  customerId: string
+  dealerId: string
   netSales: number
   vat: number
   cogs: number
   total: number
   paid: number
 }): Record<string, LedgerEntryRecord> {
-  const { orderId, billNumber, date, customerId, netSales, vat, cogs, total, paid } = params
+  const { orderId, billNumber, date, dealerId, netSales, vat, cogs, total, paid } = params
   const entries: Record<string, LedgerEntryRecord> = {}
 
   function post(account: LedgerEntryRecord['account'], accountRef: string | undefined, debit: number, credit: number, description: string) {
@@ -444,14 +439,14 @@ function buildInvoiceLedgerEntries(params: {
     entries[id] = { id, date, orderId, billNumber, account, accountRef: accountRef ?? '', description, debit, credit, createdAt: date }
   }
 
-  post('customer', customerId, total, 0, `Invoice ${billNumber}`)
+  post('dealer', dealerId, total, 0, `Invoice ${billNumber}`)
   post('sales', undefined, 0, netSales, `Invoice ${billNumber}`)
   post('vat_payable', undefined, 0, vat, `VAT on ${billNumber}`)
   post('cogs', undefined, cogs, 0, `COGS for ${billNumber}`)
   post('inventory', undefined, 0, cogs, `Finished goods issued for ${billNumber}`)
   post('cash', undefined, paid, 0, `Collection against ${billNumber}`)
   if (paid > 0) {
-    post('customer', customerId, 0, paid, `Collection against ${billNumber}`)
+    post('dealer', dealerId, 0, paid, `Collection against ${billNumber}`)
   }
 
   return entries
@@ -691,7 +686,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     permissions: DEFAULT_ERP_DATA.permissions,
     roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
     users: source.users ?? {},
-    customers: normalizeCustomerMap(source.customers),
+    dealers: normalizeDealerMap(source.dealers),
     products: normalizeProductMap(source.products),
     orders: normalizeOrderMap(source.orders),
     ledgerEntries: source.ledgerEntries ?? {},
@@ -816,37 +811,11 @@ function normalizeProductInput(input: ProductInput) {
   }
 }
 
-function normalizeCustomerInput(input: CustomerInput) {
+function normalizeDealerInput(input: DealerInput) {
   return {
-    customerCode: input.customerCode?.trim() ?? '',
     name: input.name.trim(),
-    company: input.company?.trim() || 'Retail',
-    ownerName: input.ownerName?.trim() ?? '',
+    address: input.address?.trim() ?? '',
     phone: input.phone.trim(),
-    location: input.location?.trim() ?? '',
-    district: input.district?.trim() ?? '',
-    territory: input.territory?.trim() ?? '',
-    salesArea: input.salesArea?.trim() ?? '',
-    salesOfficerId: input.salesOfficerId?.trim() ?? '',
-    customerType: input.customerType ?? 'retailer',
-    creditLimit: Math.max(input.creditLimit ?? 0, 0),
-    creditDays: Math.max(input.creditDays ?? 0, 0),
-    openingBalance: Math.max(input.openingBalance ?? 0, 0),
-    paymentTerms: input.paymentTerms?.trim() ?? '',
-    priceCategory: input.priceCategory?.trim() ?? '',
-    discountCategory: input.discountCategory?.trim() ?? '',
-    bankInformation: input.bankInformation?.trim() ?? '',
-    status: input.status ?? 'active',
-    due: Math.max(input.due ?? 0, 0),
-    supportStatus: input.supportStatus ?? 'none',
-    supportNote: input.supportNote?.trim() ?? '',
-    isPremium: input.isPremium ?? false,
-    isWholesale: input.isWholesale ?? false,
-    leadSource: input.leadSource ?? 'local-marketing',
-    reminderCustomer: input.reminderCustomer ?? false,
-    previousBillNumber: input.previousBillNumber?.trim() ?? '',
-    previousPurchaseDetails: input.previousPurchaseDetails?.trim() ?? '',
-    previousPurchaseAmount: Math.max(input.previousPurchaseAmount ?? 0, 0),
   }
 }
 
@@ -945,7 +914,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (loadedKeys.size >= ERP_TOP_LEVEL_KEYS.length) {
         setLoading(false)
         // A single write (e.g. createOrder) touches several top-level keys
-        // (orders/customers/ledgerEntries/products/...) whose listeners each
+        // (orders/dealers/ledgerEntries/products/...) whose listeners each
         // fire independently — debounce so a burst of commits coalesces into
         // one snapshot write instead of one per key.
         if (persistTimer) clearTimeout(persistTimer)
@@ -1117,7 +1086,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         await update(ref(db, `erp/orders/${order.id}`), { overdueNotified: true })
         await writeNotification(
           'Payment overdue',
-          `${order.customerName}'s payment of ${order.due} for ${order.billNumber} is past the due date.`,
+          `${order.dealerName}'s payment of ${order.due} for ${order.billNumber} is past the due date.`,
           'critical',
           ['super_admin', 'accounts']
         )
@@ -1616,83 +1585,62 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  async function saveCustomer(input: CustomerInput, customerId?: string) {
+  async function saveDealer(input: DealerInput, dealerId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
 
-    const existingCustomer = customerId ? data.customers[customerId] : null
-    const normalized = normalizeCustomerInput({
-      ...input,
-      isPremium: input.isPremium ?? existingCustomer?.isPremium ?? false,
-      isWholesale: input.isWholesale ?? existingCustomer?.isWholesale ?? false,
-      leadSource: input.leadSource ?? existingCustomer?.leadSource ?? 'local-marketing',
-      reminderCustomer: input.reminderCustomer ?? existingCustomer?.reminderCustomer ?? false,
-      customerCode: input.customerCode ?? existingCustomer?.customerCode,
-      ownerName: input.ownerName ?? existingCustomer?.ownerName,
-      district: input.district ?? existingCustomer?.district,
-      territory: input.territory ?? existingCustomer?.territory,
-      salesArea: input.salesArea ?? existingCustomer?.salesArea,
-      salesOfficerId: input.salesOfficerId ?? existingCustomer?.salesOfficerId,
-      customerType: input.customerType ?? existingCustomer?.customerType ?? 'retailer',
-      creditLimit: input.creditLimit ?? existingCustomer?.creditLimit,
-      creditDays: input.creditDays ?? existingCustomer?.creditDays,
-      openingBalance: input.openingBalance ?? existingCustomer?.openingBalance ?? 0,
-      paymentTerms: input.paymentTerms ?? existingCustomer?.paymentTerms,
-      priceCategory: input.priceCategory ?? existingCustomer?.priceCategory,
-      discountCategory: input.discountCategory ?? existingCustomer?.discountCategory,
-      bankInformation: input.bankInformation ?? existingCustomer?.bankInformation,
-      status: input.status ?? existingCustomer?.status ?? 'active',
-    })
+    const existingDealer = dealerId ? data.dealers[dealerId] : null
+    const normalized = normalizeDealerInput(input)
 
     if (!normalized.name) {
-      throw new Error('Customer name is required.')
+      throw new Error('Dealer name is required.')
     }
 
     if (!normalized.phone) {
-      throw new Error('Customer phone number is required.')
+      throw new Error('Dealer phone number is required.')
     }
 
     const db = getDatabaseOrThrow()
-    const id = existingCustomer?.id ?? createId('customer')
+    const id = existingDealer?.id ?? createId('dealer')
     const now = new Date().toISOString()
-    const customer = {
+    const dealer = {
       id,
       ...normalized,
-      createdAt: existingCustomer?.createdAt ?? now,
+      createdAt: existingDealer?.createdAt ?? now,
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/customers'), { [id]: customer })
+    await update(ref(db, 'erp/dealers'), { [id]: dealer })
     await writeActivity(
-      existingCustomer ? 'customer_updated' : 'customer_created',
-      'customers',
-      existingCustomer ? `Updated ${customer.name} CRM details.` : `Added customer ${customer.name}.`
+      existingDealer ? 'dealer_updated' : 'dealer_created',
+      'dealers',
+      existingDealer ? `Updated ${dealer.name} dealer details.` : `Added dealer ${dealer.name}.`
     )
 
     return id
   }
 
-  async function deleteCustomer(customerId: string) {
+  async function deleteDealer(dealerId: string) {
     if (!data) {
       return
     }
 
-    const customer = data.customers[customerId]
-    if (!customer) {
-      throw new Error('Customer not found.')
+    const dealer = data.dealers[dealerId]
+    if (!dealer) {
+      throw new Error('Dealer not found.')
     }
 
-    const hasOrders = Object.values(data.orders).some((order) => order.customerId === customerId)
+    const hasOrders = Object.values(data.orders).some((order) => order.dealerId === dealerId)
     if (hasOrders) {
-      throw new Error('Customers with purchase history cannot be deleted.')
+      throw new Error('Dealers with purchase history cannot be deleted.')
     }
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
-      [`customers/${customerId}`]: null,
+      [`dealers/${dealerId}`]: null,
     })
-    await writeActivity('customer_deleted', 'customers', `Deleted customer ${customer.name}.`)
+    await writeActivity('dealer_deleted', 'dealers', `Deleted dealer ${dealer.name}.`)
   }
 
   // Resolves a QC Hold either back into sellable stock (release — the
@@ -1798,8 +1746,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  // Section 11: Customer Return → Return Inspection → Good/Bad Stock
-  // Classification → Stock Update → Customer Ledger Adjustment →
+  // Section 11: Dealer Return → Return Inspection → Good/Bad Stock
+  // Classification → Stock Update → Dealer Ledger Adjustment →
   // Accounting Adjustment — captured as a single entry, cascading
   // automatically per the ERP's "one entry, auto cascade" principle. The
   // inspector records each line's condition at entry time: "good" lines go
@@ -1866,8 +1814,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       returnNumber,
       orderId: order.id,
       billNumber: order.billNumber,
-      customerId: order.customerId,
-      customerName: order.customerName,
+      dealerId: order.dealerId,
+      dealerName: order.dealerName,
       items,
       totalRefund,
       restockedQty,
@@ -1878,9 +1826,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createdAt: now,
     }
 
+    // A dealer's outstanding balance is always derived live from order.due
+    // (see computeDealerDue in utils.ts) rather than stored on the dealer
+    // itself, so the refund has to come off this order's own due here.
+    const nextOrderDue = Math.max(order.due - totalRefund, 0)
     const updates: Record<string, unknown> = {
       [`salesReturns/${id}`]: salesReturn,
-      [`customers/${order.customerId}/due`]: Math.max((data.customers[order.customerId]?.due ?? 0) - totalRefund, 0),
+      [`orders/${order.id}/due`]: nextOrderDue,
+      [`orders/${order.id}/paymentStatus`]: nextOrderDue === 0 ? 'paid' : order.paid > 0 ? 'partial' : 'unpaid',
     }
 
     const restockByProduct = new Map<string, number>()
@@ -1911,14 +1864,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       credit: 0,
       createdAt: now,
     } satisfies LedgerEntryRecord
-    const customerCreditId = createId('ledger')
-    updates[`ledgerEntries/${customerCreditId}`] = {
-      id: customerCreditId,
+    const dealerCreditId = createId('ledger')
+    updates[`ledgerEntries/${dealerCreditId}`] = {
+      id: dealerCreditId,
       date: now,
       orderId: order.id,
       billNumber: returnNumber,
-      account: 'customer',
-      accountRef: order.customerId,
+      account: 'dealer',
+      accountRef: order.dealerId,
       description: `Sales return ${returnNumber} for ${order.billNumber}`,
       debit: 0,
       credit: totalRefund,
@@ -1970,9 +1923,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // money collected against one specific outstanding invoice — distinct
   // from the `paid` amount entered at invoice creation (createOrder), which
   // stays cash-only. This is the flow with a Cash/Bank/MFS choice, and it
-  // generates the receipt the UI prints. Customer Ledger updates
-  // automatically via the same 'customer' ledger account (accountRef =
-  // customerId) every other customer posting already uses.
+  // generates the receipt the UI prints. Dealer Ledger updates
+  // automatically via the same 'dealer' ledger account (accountRef =
+  // dealerId) every other dealer posting already uses.
   async function recordCollection(input: CollectionInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a collection.')
@@ -2004,8 +1957,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       receiptNumber,
       orderId: order.id,
       billNumber: order.billNumber,
-      customerId: order.customerId,
-      customerName: order.customerName,
+      dealerId: order.dealerId,
+      dealerName: order.dealerName,
       amount: input.amount,
       method: input.method,
       collectionDate,
@@ -2019,7 +1972,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`orders/${order.id}/paid`]: nextPaid,
       [`orders/${order.id}/due`]: nextDue,
       [`orders/${order.id}/paymentStatus`]: nextDue === 0 ? 'paid' : nextPaid > 0 ? 'partial' : 'unpaid',
-      [`customers/${order.customerId}/due`]: Math.max((data.customers[order.customerId]?.due ?? 0) - input.amount, 0),
     }
 
     const debitId = createId('ledger')
@@ -2041,8 +1993,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: collectionDate,
       orderId: order.id,
       billNumber: receiptNumber,
-      account: 'customer',
-      accountRef: order.customerId,
+      account: 'dealer',
+      accountRef: order.dealerId,
       description: `Collection against ${order.billNumber}`,
       debit: 0,
       credit: input.amount,
@@ -2053,7 +2005,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'collection_recorded',
       'finance',
-      `Collected ${input.amount} against ${order.billNumber} (${order.customerName}) via ${input.method}.`
+      `Collected ${input.amount} against ${order.billNumber} (${order.dealerName}) via ${input.method}.`
     )
     return id
   }
@@ -2064,9 +2016,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const db = getDatabaseOrThrow()
-    const customer = data.customers[input.customerId]
-    if (!customer) {
-      throw new Error('Customer not found.')
+    const dealer = data.dealers[input.dealerId]
+    if (!dealer) {
+      throw new Error('Dealer not found.')
     }
 
     if (!input.items.length) {
@@ -2133,17 +2085,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const orderDate = input.orderDate?.trim() || now
     const defaultDueDate = new Date(orderDate)
     defaultDueDate.setDate(defaultDueDate.getDate() + 15)
-    const priceMode = input.priceMode ?? (customer.isWholesale ? 'wholesale' : 'retail')
+    const priceMode = input.priceMode ?? 'retail'
     const cogs = getOrderCogs(orderItems)
 
     // Section 49 — Sales Approval Workflow: approval is only required for
     // the special cases the spec lists. A plain order (none of these) skips
     // straight to "approved" instead of sitting in every approver's queue.
     const approvalReasons: string[] = []
-    const projectedCustomerDue = (customer.due ?? 0) + due
-    if ((customer.creditLimit ?? 0) > 0 && projectedCustomerDue > (customer.creditLimit ?? 0)) {
-      approvalReasons.push('Credit limit exceeded')
-    }
     if (discount > 0) {
       approvalReasons.push('Special discount applied')
     }
@@ -2159,8 +2107,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`orders/${orderId}`]: {
         id: orderId,
         billNumber,
-        customerId: customer.id,
-        customerName: customer.name,
+        dealerId: dealer.id,
+        dealerName: dealer.name,
         salesPersonId: currentUser.id,
         salesPersonName: currentUser.name,
         status: 'pending',
@@ -2183,7 +2131,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         createdAt: orderDate,
         items: orderItemsWithBatches,
       },
-      [`customers/${customer.id}/due`]: (data.customers[customer.id]?.due ?? 0) + due,
       ...batchWrites,
     }
 
@@ -2191,7 +2138,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       orderId,
       billNumber,
       date: orderDate,
-      customerId: customer.id,
+      dealerId: dealer.id,
       netSales,
       vat,
       cogs,
@@ -2212,10 +2159,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
 
-    await writeActivity('order_created', 'sales', `Created order for ${customer.name} with ${orderItems.length} product line(s).`)
+    await writeActivity('order_created', 'sales', `Created order for ${dealer.name} with ${orderItems.length} product line(s).`)
     await writeNotification(
       'New sales order',
-      `Order ${orderId} created for ${customer.name} by ${currentUser?.name ?? 'Admin'}. Awaiting fulfillment.`,
+      `Order ${orderId} created for ${dealer.name} by ${currentUser?.name ?? 'Admin'}. Awaiting fulfillment.`,
       'info',
       ['super_admin', 'sales_officer', 'accounts']
     )
@@ -2249,9 +2196,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Only pending orders can be edited. Cancel and reissue instead.')
     }
 
-    const customer = data.customers[input.customerId]
-    if (!customer) {
-      throw new Error('Customer not found.')
+    const dealer = data.dealers[input.dealerId]
+    if (!dealer) {
+      throw new Error('Dealer not found.')
     }
 
     if (!input.items.length) {
@@ -2300,18 +2247,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const paid = Math.min(Math.max(input.paid, 0), total)
     const due = total - paid
     const now = new Date().toISOString()
-    const priceMode = input.priceMode ?? (customer.isWholesale ? 'wholesale' : 'retail')
+    const priceMode = input.priceMode ?? 'retail'
     const billNumber = input.billNumber?.trim() || order.billNumber
     const cogs = getOrderCogs(orderItems)
 
     // Section 49: re-check the special-case triggers, since editing can be
-    // what pushes an order over the credit limit / into a special discount
-    // / below the minimum price in the first place.
+    // what pushes an order into a special discount / below the minimum
+    // price in the first place.
     const approvalReasons: string[] = []
-    const projectedCustomerDue = (customer.due ?? 0) - order.due + due
-    if ((customer.creditLimit ?? 0) > 0 && projectedCustomerDue > (customer.creditLimit ?? 0)) {
-      approvalReasons.push('Credit limit exceeded')
-    }
     if (discount > 0) {
       approvalReasons.push('Special discount applied')
     }
@@ -2325,8 +2268,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const updates: Record<string, unknown> = {
       [`orders/${orderId}/billNumber`]: billNumber,
-      [`orders/${orderId}/customerId`]: customer.id,
-      [`orders/${orderId}/customerName`]: customer.name,
+      [`orders/${orderId}/dealerId`]: dealer.id,
+      [`orders/${orderId}/dealerName`]: dealer.name,
       [`orders/${orderId}/approvalStatus`]: approvalReasons.length > 0 ? 'pending' : 'approved',
       [`orders/${orderId}/approvalReasons`]: approvalReasons,
       [`orders/${orderId}/paymentStatus`]: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
@@ -2345,13 +2288,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`orders/${orderId}/items`]: orderItems,
     }
 
-    if (customer.id === order.customerId) {
-      updates[`customers/${customer.id}/due`] = (data.customers[customer.id]?.due ?? 0) - order.due + due
-    } else {
-      updates[`customers/${order.customerId}/due`] = (data.customers[order.customerId]?.due ?? 0) - order.due
-      updates[`customers/${customer.id}/due`] = (data.customers[customer.id]?.due ?? 0) + due
-    }
-
     // The invoice figures changed — reverse every prior ledger entry for
     // this order and repost fresh ones, rather than trying to patch them.
     const previousEntries = getActiveLedgerEntries(data.ledgerEntries, orderId)
@@ -2363,7 +2299,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         orderId,
         billNumber,
         date: now,
-        customerId: customer.id,
+        dealerId: dealer.id,
         netSales,
         vat,
         cogs,
@@ -2411,10 +2347,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     // Section 64 (Approval System): Old Value -> New Value -> User ->
     // Date/Time -> Reason, all captured in one Audit Trail entry.
-    await writeActivity('order_updated', 'sales', `Edited order ${order.billNumber} for ${customer.name}.`, {
+    await writeActivity('order_updated', 'sales', `Edited order ${order.billNumber} for ${dealer.name}.`, {
       oldValue: {
         billNumber: order.billNumber,
-        customerName: order.customerName,
+        dealerName: order.dealerName,
         total: order.total,
         paid: order.paid,
         due: order.due,
@@ -2422,7 +2358,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       },
       newValue: {
         billNumber,
-        customerName: customer.name,
+        dealerName: dealer.name,
         total,
         paid,
         due,
@@ -2457,7 +2393,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const updates: Record<string, unknown> = {
       [`orders/${orderId}/status`]: 'cancelled',
       [`orders/${orderId}/due`]: 0,
-      [`customers/${order.customerId}/due`]: Math.max((data.customers[order.customerId]?.due ?? 0) - order.due, 0),
     }
 
     const activeEntries = getActiveLedgerEntries(data.ledgerEntries, orderId)
@@ -2487,7 +2422,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
 
-    await writeActivity('order_cancelled', 'sales', `Cancelled order ${order.billNumber} for ${order.customerName}.`, {
+    await writeActivity('order_cancelled', 'sales', `Cancelled order ${order.billNumber} for ${order.dealerName}.`, {
       oldValue: { status: order.status, total: order.total, due: order.due },
       newValue: { status: 'cancelled', total: order.total, due: 0 },
       reason,
@@ -2518,10 +2453,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`orders/${orderId}/paid`] = order.total
       updates[`orders/${orderId}/due`] = 0
       updates[`orders/${orderId}/paymentStatus`] = 'paid'
-      updates[`customers/${order.customerId}/due`] = Math.max(
-        (data.customers[order.customerId]?.due ?? 0) - order.due,
-        0
-      )
 
       // Collection cascade: the outstanding balance was just collected in full.
       const now = new Date().toISOString()
@@ -2538,14 +2469,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         credit: 0,
         createdAt: now,
       } satisfies LedgerEntryRecord
-      const collectionCustomerId = createId('ledger')
-      updates[`ledgerEntries/${collectionCustomerId}`] = {
-        id: collectionCustomerId,
+      const collectionDealerId = createId('ledger')
+      updates[`ledgerEntries/${collectionDealerId}`] = {
+        id: collectionDealerId,
         date: now,
         orderId: order.id,
         billNumber: order.billNumber,
-        account: 'customer',
-        accountRef: order.customerId,
+        account: 'dealer',
+        accountRef: order.dealerId,
         description: `Collection against ${order.billNumber}`,
         debit: 0,
         credit: order.due,
@@ -2565,8 +2496,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
   // Section 49 — Sales Approval Workflow: an order only sits at
   // approvalStatus "pending" (see createOrder/updateOrder's approvalReasons
-  // computation) when it tripped one of the special cases — Credit Limit
-  // Exceeded, Special Discount, or Below Minimum Price — otherwise it skips
+  // computation) when it tripped one of the special cases — Special
+  // Discount or Below Minimum Price — otherwise it skips
   // straight to "approved". The spec's chain (Sales Officer → Sales Manager
   // → Finance/Credit Control → Management) collapses to this single
   // orders:approve gate, the same simplification already used here since
@@ -3930,7 +3861,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recipientName: input.recipientName.trim(),
       date: input.date,
       deliveryDate: input.deliveryDate?.trim() ?? '',
-      dealerCustomerId: input.dealerCustomerId ?? '',
+      dealerId: input.dealerId ?? '',
       depotName: input.depotName?.trim() ?? '',
       depotAddress: input.depotAddress?.trim() ?? '',
       depotMobile: input.depotMobile?.trim() ?? '',
@@ -3995,8 +3926,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       approveStockAdjustment,
       rejectStockAdjustment,
       createStockCount,
-      saveCustomer,
-      deleteCustomer,
+      saveDealer,
+      deleteDealer,
       createSalesReturn,
       recordCollection,
       releaseQcHold,

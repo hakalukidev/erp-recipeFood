@@ -15,7 +15,6 @@ import {
   Lock,
   LogOut,
   Menu,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -82,16 +81,9 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Dealer Management',
-        description: 'Dealer-wise sales, collection, outstanding, target, return, discount, commission, credit limit, and stock',
+        description: 'Dealer-wise sales, collection, outstanding, target, return, discount, commission, and stock',
         href: '/admin/dealer-management',
         icon: Building2,
-        permission: 'orders:view',
-      },
-      {
-        label: 'Distribution Management',
-        description: 'Company → Distributor → Dealer → Retailer → Consumer sales, level by level',
-        href: '/admin/distribution',
-        icon: Network,
         permission: 'orders:view',
       },
       {
@@ -102,11 +94,11 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'products:view',
       },
       {
-        label: 'Customers (CRM)',
-        description: 'Customer history, support, and credit tracking',
-        href: '/admin/customers',
+        label: 'Dealer List',
+        description: 'Dealer directory — name, address, and phone number',
+        href: '/admin/dealers',
         icon: Users,
-        permission: 'customers:view',
+        permission: 'dealers:view',
       },
       {
         label: 'Rate Card / Costing',
@@ -400,7 +392,7 @@ function NotificationBell() {
 
 // ---- Global Search (Section 83) ------------------------------------------
 // One search box, searched across the identifiers a day-to-day user is
-// actually likely to type into it — bill/invoice number, customer, product,
+// actually likely to type into it — bill/invoice number, dealer, product,
 // batch, PO/GRN number, bank payment, and collection receipt — each result
 // jumping to the workspace page that record lives on (there's no single
 // "record detail" route yet, so this gets the user to the right list rather
@@ -424,20 +416,17 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     const limit = 6
 
     const orders = toArray(data.orders).filter(
-      (order) => order.billNumber.toLowerCase().includes(term) || order.customerName.toLowerCase().includes(term)
+      (order) => order.billNumber.toLowerCase().includes(term) || order.dealerName.toLowerCase().includes(term)
     )
     orders.slice(0, limit).forEach((order) =>
-      results.push({ id: order.id, category: 'Invoice', title: order.billNumber, subtitle: order.customerName, href: '/admin/sales' })
+      results.push({ id: order.id, category: 'Invoice', title: order.billNumber, subtitle: order.dealerName, href: '/admin/sales' })
     )
 
-    const customers = toArray(data.customers).filter(
-      (customer) =>
-        customer.name.toLowerCase().includes(term) ||
-        customer.phone.toLowerCase().includes(term) ||
-        (customer.company ?? '').toLowerCase().includes(term)
+    const dealers = toArray(data.dealers).filter(
+      (dealer) => dealer.name.toLowerCase().includes(term) || dealer.phone.toLowerCase().includes(term)
     )
-    customers.slice(0, limit).forEach((customer) =>
-      results.push({ id: customer.id, category: 'Customer', title: customer.name, subtitle: customer.phone, href: '/admin/customers' })
+    dealers.slice(0, limit).forEach((dealer) =>
+      results.push({ id: dealer.id, category: 'Dealer', title: dealer.name, subtitle: dealer.phone, href: '/admin/dealers' })
     )
 
     const products = toArray(data.products).filter(
@@ -471,10 +460,10 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     )
 
     const receipts = toArray(data.collections).filter(
-      (collection) => collection.receiptNumber.toLowerCase().includes(term) || collection.customerName.toLowerCase().includes(term)
+      (collection) => collection.receiptNumber.toLowerCase().includes(term) || collection.dealerName.toLowerCase().includes(term)
     )
     receipts.slice(0, limit).forEach((collection) =>
-      results.push({ id: collection.id, category: 'Receipt', title: collection.receiptNumber, subtitle: collection.customerName, href: '/admin/sales' })
+      results.push({ id: collection.id, category: 'Receipt', title: collection.receiptNumber, subtitle: collection.dealerName, href: '/admin/sales' })
     )
 
     return results
@@ -524,7 +513,7 @@ function GlobalSearch() {
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Search invoice, customer, product, batch, PO, GRN…"
+        placeholder="Search invoice, dealer, product, batch, PO, GRN…"
         className="rounded-full pl-9 pr-8"
       />
       {query ? (

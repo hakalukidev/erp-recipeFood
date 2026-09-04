@@ -77,7 +77,7 @@ type RateCardForm = {
   recipientName: string
   date: string
   deliveryDate: string
-  dealerCustomerId: string
+  dealerId: string
   depotName: string
   depotAddress: string
   depotMobile: string
@@ -96,7 +96,7 @@ function emptyRateCardForm(): RateCardForm {
     recipientName: '',
     date: new Date().toISOString().slice(0, 10),
     deliveryDate: new Date().toISOString().slice(0, 10),
-    dealerCustomerId: '',
+    dealerId: '',
     depotName: '',
     depotAddress: '',
     depotMobile: '',
@@ -508,7 +508,7 @@ export default function RateCardPage() {
   const { data, saveRateCard, deleteRateCard } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
   const products = useMemo(() => toArray(data?.products), [data?.products])
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const productOptions: ComboboxOption[] = useMemo(
     () =>
       products.map((product) => ({
@@ -520,14 +520,12 @@ export default function RateCardPage() {
   )
   const dealerOptions: ComboboxOption[] = useMemo(
     () =>
-      customers
-        .filter((customer) => customer.customerType === 'dealer')
-        .map((customer) => ({
-          value: customer.id,
-          label: customer.company || customer.name,
-          sublabel: [customer.ownerName, customer.phone].filter(Boolean).join(' · '),
-        })),
-    [customers]
+      dealers.map((dealer) => ({
+        value: dealer.id,
+        label: dealer.name,
+        sublabel: dealer.phone,
+      })),
+    [dealers]
   )
 
   const [query, setQuery] = useState('')
@@ -574,7 +572,7 @@ export default function RateCardPage() {
       recipientName: card.recipientName,
       date: card.date,
       deliveryDate: card.deliveryDate || card.date,
-      dealerCustomerId: card.dealerCustomerId ?? '',
+      dealerId: card.dealerId ?? '',
       depotName: card.depotName ?? '',
       depotAddress: card.depotAddress ?? '',
       depotMobile: card.depotMobile ?? '',
@@ -649,7 +647,7 @@ export default function RateCardPage() {
           recipientName: form.recipientName.trim(),
           date: form.date,
           deliveryDate: form.deliveryDate || undefined,
-          dealerCustomerId: form.dealerCustomerId || undefined,
+          dealerId: form.dealerId || undefined,
           depotName: form.depotName.trim() || undefined,
           depotAddress: form.depotAddress.trim() || undefined,
           depotMobile: form.depotMobile.trim() || undefined,
@@ -836,19 +834,18 @@ export default function RateCardPage() {
                 <label className="text-xs font-medium text-muted-foreground">Dealer</label>
                 <Combobox
                   options={dealerOptions}
-                  value={form.dealerCustomerId}
+                  value={form.dealerId}
                   onChange={(value) => {
-                    const selected = customers.find((customer) => customer.id === value)
+                    const selected = dealers.find((dealer) => dealer.id === value)
                     setForm((current) => ({
                       ...current,
-                      dealerCustomerId: value,
-                      recipientName: selected?.company || selected?.name || current.recipientName,
-                      previousDue: selected ? String(selected.due ?? 0) : current.previousDue,
+                      dealerId: value,
+                      recipientName: selected?.name || current.recipientName,
                     }))
                   }}
                   placeholder="Select a dealer"
                   searchPlaceholder="Search dealers..."
-                  emptyText="No dealer customers found — add one in Customers (CRM) first."
+                  emptyText="No dealers found — add one in Dealer List first."
                 />
               </div>
               <div className="space-y-1">

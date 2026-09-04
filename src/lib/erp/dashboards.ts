@@ -17,7 +17,7 @@ import type {
   ProductRecord,
   SalesTargetRecord,
 } from '@/lib/erp/types'
-import { computeCustomerTotals, isSameCalendarDay, toArray } from '@/lib/erp/utils'
+import { computeDealerTotals, isSameCalendarDay, toArray } from '@/lib/erp/utils'
 
 export const DEBIT_NORMAL: Record<AccountType, boolean> = {
   asset: true,
@@ -122,7 +122,7 @@ export function buildAccountingPosition(data: ERPData | null, asOf: (date: strin
     0
   )
   const totalReceivable = balanceAsOf(
-    accounts.find((account) => account.ledgerAccount === 'customer'),
+    accounts.find((account) => account.ledgerAccount === 'dealer'),
     entries,
     accounts,
     asOf
@@ -308,10 +308,10 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     .filter((entry) => entry.approvalStatus !== 'rejected' && inMonth(entry.date))
     .reduce((sum, entry) => sum + entry.amount, 0)
 
-  const customerTotals = computeCustomerTotals(data)
-  const topCustomers = toArray(data?.customers)
-    .map((customer) => ({ id: customer.id, name: customer.name, totalSpend: customerTotals[customer.id] ?? 0, due: customer.due }))
-    .filter((customer) => customer.totalSpend > 0)
+  const dealerTotals = computeDealerTotals(data)
+  const topDealers = toArray(data?.dealers)
+    .map((dealer) => ({ id: dealer.id, name: dealer.name, totalSpend: dealerTotals[dealer.id] ?? 0 }))
+    .filter((dealer) => dealer.totalSpend > 0)
     .sort((a, b) => b.totalSpend - a.totalSpend)
     .slice(0, 5)
 
@@ -338,7 +338,7 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
     bank: bankBalance,
     receivable: totalReceivable,
     payable: totalPayable,
-    topCustomers,
+    topDealers,
     salesTarget,
     achievementPercent,
     nearExpiryBatches,
@@ -348,35 +348,22 @@ export function buildManagingDirectorExtras(data: ERPData | null) {
 // ---- Section 58: Sales Dashboard -----------------------------------------
 // Exported so "Target vs Achievement" figures can be computed the same way
 // this dashboard does, for any period — not just the current month.
-export function achievedAmountFor(target: SalesTargetRecord, orders: OrderRecordLite[], customerById: Map<string, CustomerLite>) {
+export function achievedAmountFor(target: SalesTargetRecord, orders: OrderRecordLite[]) {
   if (target.entityType === 'sales-officer') {
     return orders.filter((order) => order.salesPersonId === target.entityId).reduce((sum, order) => sum + order.total, 0)
   }
-  if (target.entityType === 'distributor') {
-    return orders.filter((order) => order.customerId === target.entityId).reduce((sum, order) => sum + order.total, 0)
-  }
-  // 'territory' / 'sales-area' targets key off the matching free-text field
-  // on CustomerRecord — see the SalesTargetEntityType comment in types.ts.
-  return orders
-    .filter((order) => {
-      const customer = customerById.get(order.customerId)
-      if (!customer) return false
-      return target.entityType === 'territory' ? customer.territory === target.entityId : customer.salesArea === target.entityId
-    })
-    .reduce((sum, order) => sum + order.total, 0)
+  // 'dealer' targets key off one specific dealer id.
+  return orders.filter((order) => order.dealerId === target.entityId).reduce((sum, order) => sum + order.total, 0)
 }
 
-// Narrow shapes so this file doesn't need to import the full OrderRecord/
-// CustomerRecord types just for the two fields each helper above touches.
-type OrderRecordLite = { customerId: string; salesPersonId: string; total: number }
-type CustomerLite = { territory?: string; salesArea?: string }
+// Narrow shape so this file doesn't need to import the full OrderRecord type
+// just for the fields the helper above touches.
+type OrderRecordLite = { dealerId: string; salesPersonId: string; total: number }
 
 export function buildSalesDashboard(data: ERPData | null) {
   const now = new Date()
   const orders = toArray(data?.orders).filter((order) => order.status !== 'cancelled')
-  const customers = toArray(data?.customers)
   const products = toArray(data?.products)
-  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
   const productById = new Map(products.map((product) => [product.id, product]))
 
   const dailySales = orders.filter((order) => isSameCalendarDay(order.createdAt)).reduce((sum, order) => sum + order.total, 0)
@@ -409,12 +396,8 @@ export function buildSalesDashboard(data: ERPData | null) {
     return Array.from(rows.values()).sort((a, b) => b.total - a.total)
   }
 
-  const territoryWiseSales = aggregateOrders((order) => customerById.get(order.customerId)?.territory)
   const salesOfficerWiseSales = aggregateOrders((order) => order.salesPersonName)
-  const dealerWiseSales = aggregateOrders((order) => {
-    const customer = customerById.get(order.customerId)
-    return customer?.customerType === 'dealer' ? customer.name : undefined
-  }).filter((row) => row.key !== 'Unassigned')
+  const dealerWiseSales = aggregateOrders((order) => order.dealerName)
 
   type ProductTotal = { productId: string; productName: string; quantity: number; revenue: number }
   type CategoryTotal = { category: string; quantity: number; revenue: number }
@@ -446,7 +429,7 @@ export function buildSalesDashboard(data: ERPData | null) {
   const targetVsAchievement = toArray(data?.salesTargets)
     .filter((target) => target.period === periodKey)
     .map((target) => {
-      const achievedAmount = achievedAmountFor(target, monthOrders, customerById)
+      const achievedAmount = achievedAmountFor(target, monthOrders)
       return {
         id: target.id,
         entityType: target.entityType,
@@ -463,7 +446,6 @@ export function buildSalesDashboard(data: ERPData | null) {
     monthlySales,
     previousMonthSales,
     salesGrowthPercent,
-    territoryWiseSales,
     salesOfficerWiseSales,
     dealerWiseSales,
     productWiseSales,
@@ -516,7 +498,6 @@ export function buildBusinessAlerts(data: ERPData | null): BusinessAlerts {
   const normal: BusinessAlertItem[] = []
 
   const products = toArray(data?.products)
-  const customers = toArray(data?.customers)
   const orders = toArray(data?.orders)
   const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
   const budgets = toArray(data?.budgets)
@@ -530,15 +511,6 @@ export function buildBusinessAlerts(data: ERPData | null): BusinessAlerts {
       id: 'expired-stock',
       title: 'Expired Stock',
       message: `${inventory.expiredBatches.length} batch(es), ${qty} unit(s) expired and still on hand.`,
-    })
-  }
-
-  const overLimitCustomers = customers.filter((customer) => (customer.creditLimit ?? 0) > 0 && customer.due > (customer.creditLimit ?? 0))
-  if (overLimitCustomers.length) {
-    critical.push({
-      id: 'credit-limit-exceeded',
-      title: 'Credit Limit Exceeded',
-      message: `${overLimitCustomers.length} customer(s) owe more than their approved credit limit.`,
     })
   }
 
@@ -573,16 +545,15 @@ export function buildBusinessAlerts(data: ERPData | null): BusinessAlerts {
   }
   const overdueOrders = orders.filter((order) => order.due > 0 && new Date(order.paymentDueDate).getTime() < Date.now())
   if (overdueOrders.length) {
-    warning.push({ id: 'overdue-customer', title: 'Overdue Customer', message: `${overdueOrders.length} invoice(s) past their due date with an outstanding balance.` })
+    warning.push({ id: 'overdue-dealer', title: 'Overdue Dealer', message: `${overdueOrders.length} invoice(s) past their due date with an outstanding balance.` })
   }
   // ---- Normal -------------------------------------------------------------
   const now = new Date()
   const periodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const activeOrders = orders.filter((order) => order.status !== 'cancelled')
   const monthOrders = activeOrders.filter((order) => atOrAfter(monthStart(now))(order.createdAt))
-  const customerById = new Map(customers.map((customer) => [customer.id, customer]))
   const achievedTargets = toArray(data?.salesTargets).filter(
-    (target) => target.period === periodKey && target.targetAmount > 0 && achievedAmountFor(target, monthOrders, customerById) >= target.targetAmount
+    (target) => target.period === periodKey && target.targetAmount > 0 && achievedAmountFor(target, monthOrders) >= target.targetAmount
   )
   if (achievedTargets.length) {
     normal.push({ id: 'target-achieved', title: 'Target Achieved', message: `${achievedTargets.length} sales target(s) achieved this month.` })

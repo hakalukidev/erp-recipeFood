@@ -131,7 +131,7 @@ export function DashboardScreen() {
           productName: item.productName,
           quantity: item.quantity,
           amount: item.quantity * item.unitPrice,
-          customerName: order.customerName,
+          dealerName: order.dealerName,
           billNumber: order.billNumber,
         }))
     }).sort((a, b) => b.date.localeCompare(a.date))
@@ -321,14 +321,14 @@ export function DashboardScreen() {
 
               <div className="grid gap-6 xl:grid-cols-2">
                 <div>
-                  <p className="mb-2 text-sm font-medium text-foreground">Top customers</p>
+                  <p className="mb-2 text-sm font-medium text-foreground">Top dealers</p>
                   <div className="space-y-2">
-                    {mdExtras.topCustomers.length ? mdExtras.topCustomers.map((customer) => (
-                      <div key={customer.id} className="flex items-center justify-between rounded-xl border border-border/70 p-3">
-                        <p className="font-medium">{customer.name}</p>
-                        <p className="font-semibold">{formatCurrency(customer.totalSpend, data?.settings.currency)}</p>
+                    {mdExtras.topDealers.length ? mdExtras.topDealers.map((dealer) => (
+                      <div key={dealer.id} className="flex items-center justify-between rounded-xl border border-border/70 p-3">
+                        <p className="font-medium">{dealer.name}</p>
+                        <p className="font-semibold">{formatCurrency(dealer.totalSpend, data?.settings.currency)}</p>
                       </div>
-                    )) : <p className="text-sm text-muted-foreground">No customer sales recorded yet.</p>}
+                    )) : <p className="text-sm text-muted-foreground">No dealer sales recorded yet.</p>}
                   </div>
                 </div>
                 <div>
@@ -373,7 +373,7 @@ export function DashboardScreen() {
           <Card className="border-border/70 shadow-sm">
             <CardHeader>
               <CardTitle>Product sales lookup</CardTitle>
-              <CardDescription>Search a product to see quantity, sales amount and customers for the selected period.</CardDescription>
+              <CardDescription>Search a product to see quantity, sales amount and dealers for the selected period.</CardDescription>
               <div className="grid gap-3 pt-2 sm:grid-cols-[1fr_160px]">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -397,8 +397,8 @@ export function DashboardScreen() {
               </div>
               <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-muted"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Product</th><th className="p-3 text-left">Customer</th><th className="p-3 text-right">Qty</th><th className="p-3 text-right">Amount</th></tr></thead>
-                  <tbody>{productSales.map((row) => <tr key={row.key} className="border-t border-border/70"><td className="p-3">{new Date(row.date).toLocaleDateString('en-BD')}</td><td className="p-3 font-medium">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.billNumber}</span></td><td className="p-3">{row.customerName}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right">{formatCurrency(row.amount, data?.settings.currency)}</td></tr>)}</tbody>
+                  <thead className="sticky top-0 bg-muted"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Product</th><th className="p-3 text-left">Dealer</th><th className="p-3 text-right">Qty</th><th className="p-3 text-right">Amount</th></tr></thead>
+                  <tbody>{productSales.map((row) => <tr key={row.key} className="border-t border-border/70"><td className="p-3">{new Date(row.date).toLocaleDateString('en-BD')}</td><td className="p-3 font-medium">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.billNumber}</span></td><td className="p-3">{row.dealerName}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right">{formatCurrency(row.amount, data?.settings.currency)}</td></tr>)}</tbody>
                 </table>
                 {!productSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No matching sales found.</p> : null}
               </div>

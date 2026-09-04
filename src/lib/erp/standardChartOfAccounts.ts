@@ -16,7 +16,7 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
   { code: '1001', name: 'Cash', type: 'asset', ledgerAccount: 'cash' },
   { code: '1002', name: 'Bank', type: 'asset', ledgerAccount: 'bank' },
   { code: '1002a', name: 'MFS (Mobile Banking)', type: 'asset', ledgerAccount: 'mfs' },
-  { code: '1003', name: 'Accounts Receivable', type: 'asset', ledgerAccount: 'customer' },
+  { code: '1003', name: 'Accounts Receivable', type: 'asset', ledgerAccount: 'dealer' },
   { code: '1004', name: 'Inventory', type: 'asset', ledgerAccount: 'inventory' },
   { code: '1005', name: 'Raw Material', type: 'asset' },
   { code: '1006', name: 'Finished Goods', type: 'asset' },

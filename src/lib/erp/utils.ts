@@ -306,19 +306,22 @@ function escapeCsv(value: string) {
   return value
 }
 
-export const PREMIUM_CUSTOMER_THRESHOLD = 200000
-
-export function computeCustomerTotals(data: ERPData | null) {
+export function computeDealerTotals(data: ERPData | null) {
   const orders = toArray(data?.orders)
 
   return orders.reduce<Record<string, number>>((totals, order) => {
-    totals[order.customerId] = (totals[order.customerId] ?? 0) + order.total
+    totals[order.dealerId] = (totals[order.dealerId] ?? 0) + order.total
     return totals
   }, {})
 }
 
-export function isPremiumCustomer(totalSpend: number, threshold = PREMIUM_CUSTOMER_THRESHOLD) {
-  return totalSpend >= threshold
+// Outstanding balance is no longer stored on the dealer — it's always the
+// live sum of order.due for that dealer's non-cancelled orders (order.due
+// itself is already kept correct through collections/returns/cancellations).
+export function computeDealerDue(data: ERPData | null, dealerId: string) {
+  return toArray(data?.orders)
+    .filter((order) => order.dealerId === dealerId && order.status !== 'cancelled')
+    .reduce((sum, order) => sum + order.due, 0)
 }
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {

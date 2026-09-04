@@ -118,7 +118,7 @@ export default function FinancePage() {
     () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
     [data?.expenses]
   )
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   // Section 56 — live balances, independent of the reporting-period picker
   // above (a dashboard is a snapshot, not something you scope by date).
   const financeDashboard = useMemo(() => buildFinanceDashboard(data), [data])
@@ -231,7 +231,7 @@ export default function FinancePage() {
   }, [orders, selectedMonth])
 
   function buildInvoiceHtml(order: OrderRecord) {
-    const customer = customers.find((entry) => entry.id === order.customerId)
+    const dealer = dealers.find((entry) => entry.id === order.dealerId)
     const invoiceNumber = (order.billNumber || order.id).replace(/\D/g, '').slice(-8).padStart(8, '0')
     const rows = order.items
       .map(
@@ -293,9 +293,9 @@ export default function FinancePage() {
           <div class="grid">
             <div class="box">
               <strong>Bill To</strong>
-              <p>${escapeHtml(order.customerName)}</p>
-              <p><strong>Mobile:</strong> ${escapeHtml(customer?.phone || 'N/A')}</p>
-              <p><strong>Location:</strong> ${escapeHtml(customer?.location || 'N/A')}</p>
+              <p>${escapeHtml(order.dealerName)}</p>
+              <p><strong>Mobile:</strong> ${escapeHtml(dealer?.phone || 'N/A')}</p>
+              <p><strong>Address:</strong> ${escapeHtml(dealer?.address || 'N/A')}</p>
             </div>
             <div class="box">
               <strong>Payment</strong>
@@ -425,7 +425,7 @@ export default function FinancePage() {
             {[
               ['Revenue / Sales', formatCurrency(finance.revenue, currency), ArrowUpRight, 'Total invoice value'],
               ['Cash received', formatCurrency(finance.cashIn, currency), Wallet, 'Paid amount collected'],
-              ['Customer due', formatCurrency(finance.receivable, currency), ReceiptText, 'Receivable balance'],
+              ['Dealer due', formatCurrency(finance.receivable, currency), ReceiptText, 'Receivable balance'],
               ['Gross profit/loss', formatCurrency(finance.grossProfit, currency), finance.grossProfit >= 0 ? ArrowUpRight : ArrowDownLeft, 'Sales minus product cost'],
             ].map(([label, value, Icon, note]) => {
               const MetricIcon = Icon as typeof ArrowUpRight
@@ -502,7 +502,7 @@ export default function FinancePage() {
                           <TableRow key={order.id} className={cn(order.due > 0 && 'bg-rose-500/10 text-rose-700 hover:bg-rose-500/15 dark:text-rose-300')}>
                             <TableCell className="font-medium">{order.id}</TableCell>
                             <TableCell>{formatDate(order.createdAt)}</TableCell>
-                            <TableCell>{order.customerName}</TableCell>
+                            <TableCell>{order.dealerName}</TableCell>
                             <TableCell>{formatCurrency(order.total, currency)}</TableCell>
                             <TableCell>{formatCurrency(order.paid, currency)}</TableCell>
                             <TableCell>{formatCurrency(order.due, currency)}</TableCell>
@@ -536,7 +536,7 @@ export default function FinancePage() {
             <Card className="border-border/70 shadow-sm">
               <CardHeader>
                 <CardTitle>Expense and payable view</CardTitle>
-                <CardDescription>Period expenses and outstanding customer receivables.</CardDescription>
+                <CardDescription>Period expenses and outstanding dealer receivables.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
@@ -544,8 +544,8 @@ export default function FinancePage() {
                   <p className="mt-2 text-2xl font-semibold">{formatCurrency(expenseTotal, currency)}</p>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-                  <p className="text-sm text-muted-foreground">Total customer ledger due</p>
-                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(customers.reduce((sum, customer) => sum + customer.due, 0), currency)}</p>
+                  <p className="text-sm text-muted-foreground">Total dealer ledger due</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(orders.reduce((sum, order) => sum + order.due, 0), currency)}</p>
                 </div>
               </CardContent>
             </Card>

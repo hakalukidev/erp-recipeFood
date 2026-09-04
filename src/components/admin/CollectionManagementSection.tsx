@@ -70,7 +70,7 @@ export function CollectionManagementSection() {
       dueOrders.map((order) => ({
         value: order.id,
         label: order.billNumber,
-        sublabel: `${order.customerName} — due ${formatCurrency(order.due, currency)}`,
+        sublabel: `${order.dealerName} — due ${formatCurrency(order.due, currency)}`,
       })),
     [dueOrders, currency]
   )
@@ -103,7 +103,7 @@ export function CollectionManagementSection() {
 
     try {
       await recordCollection({ orderId, amount: Number(amount), method, collectionDate })
-      setFeedback('Collection recorded — customer ledger and receipt updated.')
+      setFeedback('Collection recorded — dealer ledger and receipt updated.')
       setDialogOpen(false)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record collection.')
@@ -144,7 +144,7 @@ export function CollectionManagementSection() {
             </div>
           </div>
           <div class="box">
-            <div class="row"><span>Received from</span><strong>${escapeHtml(collection.customerName)}</strong></div>
+            <div class="row"><span>Received from</span><strong>${escapeHtml(collection.dealerName)}</strong></div>
             <div class="row"><span>Against invoice</span><strong>${escapeHtml(collection.billNumber)}</strong></div>
             <div class="row"><span>Payment method</span><strong>${methodLabel[collection.method]}</strong></div>
             <div class="row"><span>Collected by</span><strong>${escapeHtml(collection.collectedByName)}</strong></div>
@@ -179,7 +179,7 @@ export function CollectionManagementSection() {
           </div>
           <div>
             <CardTitle>Collections</CardTitle>
-            <CardDescription>Sales/Collection Officer entry against a specific due invoice — receipt and customer ledger update automatically.</CardDescription>
+            <CardDescription>Sales/Collection Officer entry against a specific due invoice — receipt and dealer ledger update automatically.</CardDescription>
           </div>
         </div>
         <Button onClick={openDialog} className="h-10 rounded-xl" disabled={dueOrders.length === 0}>
@@ -195,7 +195,7 @@ export function CollectionManagementSection() {
               <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead>Receipt</TableHead>
                 <TableHead>Invoice</TableHead>
-                <TableHead>Customer</TableHead>
+                <TableHead>Dealer</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Method</TableHead>
                 <TableHead>Date</TableHead>
@@ -207,7 +207,7 @@ export function CollectionManagementSection() {
                 <TableRow key={entry.id}>
                   <TableCell className="font-medium">{entry.receiptNumber}</TableCell>
                   <TableCell>{entry.billNumber}</TableCell>
-                  <TableCell>{entry.customerName}</TableCell>
+                  <TableCell>{entry.dealerName}</TableCell>
                   <TableCell>{formatCurrency(entry.amount, currency)}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className={cn('rounded-full', methodTone[entry.method])}>
@@ -250,7 +250,7 @@ export function CollectionManagementSection() {
                 value={orderId}
                 onChange={selectOrder}
                 placeholder="Select an outstanding invoice"
-                searchPlaceholder="Search bill number or customer..."
+                searchPlaceholder="Search bill number or dealer..."
               />
               {selectedOrder ? (
                 <p className="text-xs text-muted-foreground">Outstanding due: {formatCurrency(selectedOrder.due, currency)}</p>

@@ -47,39 +47,16 @@ export type LoginHistoryRecord = {
   createdAt: string
 }
 
-export type CustomerType = 'retailer' | 'wholesaler' | 'distributor' | 'dealer' | 'corporate'
-
-export type CustomerRecord = {
+// ---- Dealer (replaces the former Customers/CRM module) -------------------
+// A dealer is just who an order/sale is billed to — nothing more. There is
+// no credit limit, due-balance, territory, or customer-type distinction
+// anymore; outstanding balances are always derived live from OrderRecord.due
+// (see computeDealerDue in utils.ts) instead of being stored here.
+export type DealerRecord = {
   id: string
-  customerCode?: string
   name: string
-  company: string
-  ownerName?: string
+  address: string
   phone: string
-  location: string
-  district?: string
-  territory?: string
-  salesArea?: string
-  salesOfficerId?: string
-  customerType?: CustomerType
-  creditLimit?: number
-  creditDays?: number
-  openingBalance?: number
-  paymentTerms?: string
-  priceCategory?: string
-  discountCategory?: string
-  bankInformation?: string
-  status?: 'active' | 'inactive'
-  due: number
-  supportStatus: 'none' | 'needed' | 'in-progress' | 'resolved'
-  supportNote: string
-  isPremium: boolean
-  isWholesale?: boolean
-  leadSource?: 'facebook' | 'local-marketing' | 'visiting-customer'
-  reminderCustomer?: boolean
-  previousBillNumber?: string
-  previousPurchaseDetails?: string
-  previousPurchaseAmount?: number
   createdAt: string
   updatedAt: string
 }
@@ -158,8 +135,8 @@ export type PriceMode = 'retail' | 'wholesale'
 export type OrderRecord = {
   id: string
   billNumber: string
-  customerId: string
-  customerName: string
+  dealerId: string
+  dealerName: string
   salesPersonId: string
   salesPersonName: string
   status: OrderStatus
@@ -181,9 +158,9 @@ export type OrderRecord = {
   createdAt: string
   items: OrderItem[]
   // Section 49 — Sales Approval Workflow: approval is only required for the
-  // three special cases the spec lists (Credit Limit Exceeded / Special
-  // Discount / Below Minimum Price); a plain order skips straight to
-  // "approved". This records which condition(s) actually fired, so an
+  // special cases the spec lists (Special Discount / Below Minimum Price); a
+  // plain order skips straight to "approved". This records which
+  // condition(s) actually fired, so an
   // approver (Sales Manager / Finance-Credit Control / Management — gated
   // on the existing orders:approve permission, same simplification already
   // used for this single-stage gate) can see why the order needs sign-off.
@@ -199,7 +176,7 @@ export type OrderRecord = {
 //
 // This is the fixed set of *system* posting keys the Automatic Accounting
 // Engine already knows how to write to on its own (Sales, Purchase, Sales
-// Cost, Customer Collection, Supplier Payment, Expense — Section 29). Every
+// Cost, Dealer Collection, Supplier Payment, Expense — Section 29). Every
 // other Chart of Accounts account (Section 28) that has no automatic
 // posting wired up yet — Bank, Raw Material, Finished Goods, Fixed Assets,
 // Advance, Bank Loan, Other Payable, Share Capital, Retained Earnings,
@@ -208,7 +185,7 @@ export type OrderRecord = {
 // (see resolveLedgerAccount in the accounting page for how the two schemes
 // are reconciled into one General Ledger).
 export type LedgerAccount =
-  | 'customer'
+  | 'dealer'
   | 'sales'
   | 'vat_payable'
   | 'cogs'
@@ -484,9 +461,9 @@ export type StockCountInput = {
 //   both percentages are the figure above ÷ dealerRateTotal
 //   depotReceivable    = dealerRateTotal + previousDue − damage −
 //                         routeDiscount − targetIncentive
-// previousDue defaults from the linked dealer's existing CustomerRecord.due
-// when dealerCustomerId is set, but is a plain stored number here so past
-// vouchers don't change if that balance moves later.
+// previousDue is a plain stored number entered by hand (Dealer records carry
+// no running balance) so past vouchers don't change if a dealer's later
+// orders move their outstanding balance.
 export type RateCardLineItem = {
   productId?: string
   productName: string
@@ -511,10 +488,9 @@ export type RateCardRecord = {
   recipientName: string
   date: string
   deliveryDate?: string
-  // Links recipientName back to a Customers (CRM) record (customerType
-  // 'dealer') so name/proprietor/address/phone and the opening previousDue
-  // can be auto-filled instead of retyped.
-  dealerCustomerId?: string
+  // Links recipientName back to a Dealer List record so name/phone can be
+  // auto-filled instead of retyped.
+  dealerId?: string
   // The "To: Depot" box on a Depot voucher / "From: Depot" box on a Dealer
   // voucher — free text since depots aren't (yet) their own master-data
   // entity.
@@ -551,7 +527,7 @@ export type RateCardInput = {
   recipientName: string
   date: string
   deliveryDate?: string
-  dealerCustomerId?: string
+  dealerId?: string
   depotName?: string
   depotAddress?: string
   depotMobile?: string
@@ -640,8 +616,8 @@ export type SalesReturnRecord = {
   returnNumber: string
   orderId: string
   billNumber: string
-  customerId: string
-  customerName: string
+  dealerId: string
+  dealerName: string
   items: SalesReturnItem[]
   totalRefund: number
   restockedQty: number
@@ -670,8 +646,8 @@ export type CollectionRecord = {
   receiptNumber: string
   orderId: string
   billNumber: string
-  customerId: string
-  customerName: string
+  dealerId: string
+  dealerName: string
   amount: number
   method: CollectionMethod
   collectionDate: string
@@ -796,10 +772,8 @@ export type BudgetInput = {
 // Achievement is deliberately never stored — like Budget's Actual, it is
 // the live sum of net sales for the matching orders in that period, so it
 // can never drift from the books (see achievedAmountFor in dashboards.ts).
-// 'territory'/'sales-area' targets key off the matching free-text field on
-// CustomerRecord (there is no separate Territory master); 'distributor'
-// targets key off one specific distributor/dealer customer.
-export type SalesTargetEntityType = 'sales-officer' | 'territory' | 'sales-area' | 'distributor'
+// 'dealer' targets key off one specific dealer (entityId = DealerRecord.id).
+export type SalesTargetEntityType = 'sales-officer' | 'dealer'
 
 export type SalesTargetRecord = {
   id: string
@@ -898,7 +872,7 @@ export type ERPData = {
   permissions: Record<string, PermissionDefinition>
   roles: Record<string, RoleRecord>
   users: Record<string, UserRecord>
-  customers: Record<string, CustomerRecord>
+  dealers: Record<string, DealerRecord>
   products: Record<string, ProductRecord>
   orders: Record<string, OrderRecord>
   ledgerEntries: Record<string, LedgerEntryRecord>
@@ -977,40 +951,14 @@ export type ProductInput = {
   imagePublicId?: string
 }
 
-export type CustomerInput = {
-  customerCode?: string
+export type DealerInput = {
   name: string
-  company?: string
-  ownerName?: string
+  address?: string
   phone: string
-  location?: string
-  district?: string
-  territory?: string
-  salesArea?: string
-  salesOfficerId?: string
-  customerType?: CustomerType
-  creditLimit?: number
-  creditDays?: number
-  openingBalance?: number
-  paymentTerms?: string
-  priceCategory?: string
-  discountCategory?: string
-  bankInformation?: string
-  status?: CustomerRecord['status']
-  due?: number
-  supportStatus?: CustomerRecord['supportStatus']
-  supportNote?: string
-  isPremium?: boolean
-  isWholesale?: boolean
-  leadSource?: CustomerRecord['leadSource']
-  reminderCustomer?: boolean
-  previousBillNumber?: string
-  previousPurchaseDetails?: string
-  previousPurchaseAmount?: number
 }
 
 export type OrderInput = {
-  customerId: string
+  dealerId: string
   items: Array<{
     productId: string
     quantity: number

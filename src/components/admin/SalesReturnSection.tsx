@@ -43,7 +43,7 @@ export function SalesReturnSection() {
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const orderOptions: ComboboxOption[] = useMemo(
-    () => orders.map((order) => ({ value: order.id, label: order.billNumber, sublabel: order.customerName })),
+    () => orders.map((order) => ({ value: order.id, label: order.billNumber, sublabel: order.dealerName })),
     [orders]
   )
 
@@ -103,7 +103,7 @@ export function SalesReturnSection() {
 
     try {
       const returnId = await createSalesReturn({ orderId: selectedOrderId, items, inspectionNote })
-      setFeedback(`Return recorded (${returnId}). Stock and customer ledger updated automatically.`)
+      setFeedback(`Return recorded (${returnId}). Stock and dealer ledger updated automatically.`)
       setDialogOpen(false)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record sales return.')
@@ -120,7 +120,7 @@ export function SalesReturnSection() {
           <div>
             <CardTitle>Sales returns</CardTitle>
             <CardDescription>
-              Return Inspection → Good/Bad Classification → Stock Update → Customer Ledger → Accounting — all in one entry.
+              Return Inspection → Good/Bad Classification → Stock Update → Dealer Ledger → Accounting — all in one entry.
             </CardDescription>
           </div>
         </div>
@@ -137,7 +137,7 @@ export function SalesReturnSection() {
               <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead>Return</TableHead>
                 <TableHead>Order</TableHead>
-                <TableHead>Customer</TableHead>
+                <TableHead>Dealer</TableHead>
                 <TableHead>Items</TableHead>
                 <TableHead>Refund</TableHead>
                 <TableHead>Stock outcome</TableHead>
@@ -149,7 +149,7 @@ export function SalesReturnSection() {
                 <TableRow key={entry.id}>
                   <TableCell className="font-medium">{entry.returnNumber}</TableCell>
                   <TableCell>{entry.billNumber}</TableCell>
-                  <TableCell>{entry.customerName}</TableCell>
+                  <TableCell>{entry.dealerName}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {entry.items.map((item) => `${item.productName} x${item.quantity}`).join(', ')}
                   </TableCell>
@@ -187,7 +187,7 @@ export function SalesReturnSection() {
           <DialogHeader>
             <DialogTitle>Record sales return</DialogTitle>
             <DialogDescription>
-              Mark each returned line "Good" to put it back on the shelf, or "Damaged" to write it off — the customer is refunded either way.
+              Mark each returned line "Good" to put it back on the shelf, or "Damaged" to write it off — the dealer is refunded either way.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmit}>
@@ -198,7 +198,7 @@ export function SalesReturnSection() {
                 value={selectedOrderId}
                 onChange={selectOrder}
                 placeholder="Select the original sales order"
-                searchPlaceholder="Search bill number or customer..."
+                searchPlaceholder="Search bill number or dealer..."
               />
             </div>
 

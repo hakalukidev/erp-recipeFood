@@ -14,24 +14,23 @@ import {
 import { Input } from '@/components/ui/input'
 import { useERP } from '@/lib/erp/provider'
 
-type QuickCreateCustomerDialogProps = {
+type QuickCreateDealerDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   initialName?: string
-  onCreated: (customerId: string) => void
+  onCreated: (dealerId: string) => void
 }
 
-export function QuickCreateCustomerDialog({
+export function QuickCreateDealerDialog({
   open,
   onOpenChange,
   initialName = '',
   onCreated,
-}: QuickCreateCustomerDialogProps) {
-  const { saveCustomer } = useERP()
+}: QuickCreateDealerDialogProps) {
+  const { saveDealer } = useERP()
   const [name, setName] = useState(initialName)
   const [phone, setPhone] = useState('')
-  const [company, setCompany] = useState('')
-  const [location, setLocation] = useState('')
+  const [address, setAddress] = useState('')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -39,8 +38,7 @@ export function QuickCreateCustomerDialog({
     if (open) {
       setName(initialName)
       setPhone('')
-      setCompany('')
-      setLocation('')
+      setAddress('')
       setFeedback(null)
     }
   }, [open, initialName])
@@ -51,11 +49,11 @@ export function QuickCreateCustomerDialog({
     setSaving(true)
 
     try {
-      const customerId = await saveCustomer({ name, phone, company, location })
-      onCreated(customerId)
+      const dealerId = await saveDealer({ name, phone, address })
+      onCreated(dealerId)
       onOpenChange(false)
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to save customer.')
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to save dealer.')
     } finally {
       setSaving(false)
     }
@@ -65,15 +63,13 @@ export function QuickCreateCustomerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Create new customer</DialogTitle>
-          <DialogDescription>
-            Just the essentials — you can add due balance or service notes later from the customer list.
-          </DialogDescription>
+          <DialogTitle>Create new dealer</DialogTitle>
+          <DialogDescription>Name and phone number, plus an address if you have it.</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">
-              Customer name<span className="ml-0.5 text-rose-500">*</span>
+              Dealer name<span className="ml-0.5 text-rose-500">*</span>
             </p>
             <Input
               value={name}
@@ -94,19 +90,11 @@ export function QuickCreateCustomerDialog({
               required
             />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Company <span className="font-normal text-muted-foreground">(optional)</span>
-              </p>
-              <Input value={company} onChange={(event) => setCompany(event.target.value)} placeholder="e.g. Karim Traders" />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Location <span className="font-normal text-muted-foreground">(optional)</span>
-              </p>
-              <Input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="e.g. Mirpur, Dhaka" />
-            </div>
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-foreground">
+              Address <span className="font-normal text-muted-foreground">(optional)</span>
+            </p>
+            <Input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="e.g. Mirpur, Dhaka" />
           </div>
           {feedback ? <p className="text-sm text-destructive">{feedback}</p> : null}
           <DialogFooter>
@@ -114,7 +102,7 @@ export function QuickCreateCustomerDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={saving}>
-              {saving ? 'Saving...' : 'Create customer'}
+              {saving ? 'Saving...' : 'Create dealer'}
             </Button>
           </DialogFooter>
         </form>

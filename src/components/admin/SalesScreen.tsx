@@ -8,7 +8,6 @@ import {
   ClipboardPlus,
   FileDown,
   FileSpreadsheet,
-  MapPin,
   PencilLine,
   Plus,
   Printer,
@@ -28,7 +27,7 @@ import {
 import { AdminShell } from './AdminShell'
 import { CollectionManagementSection } from './CollectionManagementSection'
 import { SalesReturnSection } from './SalesReturnSection'
-import { QuickCreateCustomerDialog } from './quick-create/QuickCreateCustomerDialog'
+import { QuickCreateDealerDialog } from './quick-create/QuickCreateDealerDialog'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,7 +49,7 @@ import { buildSalesDashboard } from '@/lib/erp/dashboards'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRecord } from '@/lib/erp/types'
 import { cn } from '@/lib/utils'
-import { exportXlsx, formatCurrency, formatDate, getReadableOrderState, toArray } from '@/lib/erp/utils'
+import { computeDealerDue, exportXlsx, formatCurrency, formatDate, getReadableOrderState, toArray } from '@/lib/erp/utils'
 
 function defaultPaymentDueDate() {
   const date = new Date()
@@ -59,7 +58,7 @@ function defaultPaymentDueDate() {
 }
 
 const emptyOrder = {
-  customerId: '',
+  dealerId: '',
   items: [{ productId: '', quantity: '1', unitPrice: '' }],
   discount: '0',
   promotionalDiscount: '0',
@@ -75,7 +74,7 @@ const emptyOrder = {
 
 type SalesDocument = Pick<
   OrderRecord,
-  'id' | 'billNumber' | 'customerId' | 'customerName' | 'salesPersonName' | 'total' | 'paid' | 'due' | 'deliveryDate' | 'createdAt' | 'items'
+  'id' | 'billNumber' | 'dealerId' | 'dealerName' | 'salesPersonName' | 'total' | 'paid' | 'due' | 'deliveryDate' | 'createdAt' | 'items'
 > & { subtotal?: number; discount?: number; promotionalDiscount?: number; vat?: number; remarks?: string }
 
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid'
@@ -110,7 +109,7 @@ export function SalesScreen() {
     () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.orders]
   )
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   // Section 58 — Sales Dashboard.
   const salesDashboard = useMemo(() => buildSalesDashboard(data), [data])
@@ -128,12 +127,12 @@ export function SalesScreen() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [newSaleOpen, setNewSaleOpen] = useState(false)
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
-  const [quickCreateCustomerOpen, setQuickCreateCustomerOpen] = useState(false)
+  const [quickCreateDealerOpen, setQuickCreateDealerOpen] = useState(false)
   const [quickCreateProductOpen, setQuickCreateProductOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
-  const selectedCustomer = useMemo(
-    () => customers.find((customer) => customer.id === orderForm.customerId),
-    [customers, orderForm.customerId]
+  const selectedDealer = useMemo(
+    () => dealers.find((dealer) => dealer.id === orderForm.dealerId),
+    [dealers, orderForm.dealerId]
   )
   const orderSubtotal = orderForm.items.reduce(
     (sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
@@ -149,14 +148,14 @@ export function SalesScreen() {
   const orderTotal = orderNetSales + orderVat
   const orderDue = Math.max(orderTotal - Number(orderForm.paid || 0), 0)
 
-  const customerOptions: ComboboxOption[] = useMemo(
+  const dealerOptions: ComboboxOption[] = useMemo(
     () =>
-      customers.map((customer) => ({
-        value: customer.id,
-        label: customer.name,
-        sublabel: `due ${formatCurrency(customer.due, data?.settings.currency)}`,
+      dealers.map((dealer) => ({
+        value: dealer.id,
+        label: dealer.name,
+        sublabel: `due ${formatCurrency(computeDealerDue(data, dealer.id), data?.settings.currency)}`,
       })),
-    [customers, data?.settings.currency]
+    [dealers, data]
   )
 
   const productOptions: ComboboxOption[] = useMemo(
@@ -201,7 +200,7 @@ export function SalesScreen() {
     return orders.filter((order) => {
       const matchesSearch =
         !normalizedQuery ||
-        [order.billNumber, order.customerName, order.salesPersonName, ...order.items.map((item) => item.productName)]
+        [order.billNumber, order.dealerName, order.salesPersonName, ...order.items.map((item) => item.productName)]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
@@ -227,7 +226,7 @@ export function SalesScreen() {
     setFeedback(null)
 
     const orderInput = {
-      customerId: orderForm.customerId,
+      dealerId: orderForm.dealerId,
       items: orderForm.items.map((item) => ({
         productId: item.productId,
         quantity: Number(item.quantity),
@@ -242,7 +241,7 @@ export function SalesScreen() {
       deliveryDate: orderForm.deliveryDate,
       paymentDueDate: orderForm.paymentDueDate,
       dueReference: orderForm.dueReference,
-      priceMode: (selectedCustomer?.isWholesale ? 'wholesale' : 'retail') as OrderRecord['priceMode'],
+      priceMode: 'retail' as OrderRecord['priceMode'],
       remarks: orderForm.remarks,
     }
 
@@ -274,7 +273,7 @@ export function SalesScreen() {
     setFeedback(null)
     setEditingOrderId(order.id)
     setOrderForm({
-      customerId: order.customerId,
+      dealerId: order.dealerId,
       items: order.items.map((item) => ({
         productId: item.productId,
         quantity: String(item.quantity),
@@ -312,7 +311,7 @@ export function SalesScreen() {
     // Section 64 (Approval System): cancelling is a limited action — the
     // prompt doubles as confirmation and captures the reason for the audit trail.
     const reason = window.prompt(
-      `Cancel order ${order.billNumber}? Stock will be returned to inventory and the customer's due will be adjusted.\n\nReason for cancelling (required):`
+      `Cancel order ${order.billNumber}? Stock will be returned to inventory and the dealer's due will be adjusted.\n\nReason for cancelling (required):`
     )
     if (!reason || !reason.trim()) {
       return
@@ -328,7 +327,7 @@ export function SalesScreen() {
   }
 
   function buildSalesDocumentHtml(type: 'Quotation' | 'Invoice', document: SalesDocument) {
-    const customer = customers.find((entry) => entry.id === document.customerId)
+    const dealer = dealers.find((entry) => entry.id === document.dealerId)
     const issueDate = formatDate(document.createdAt)
     const deliveryDate = formatDate(document.deliveryDate)
     const currency = data?.settings.currency
@@ -406,10 +405,9 @@ export function SalesScreen() {
           <div class="section party-grid">
             <div class="party">
               <h2>Bill To</h2>
-              <p><strong>${escapeHtml(document.customerName)}</strong></p>
-              <p>${escapeHtml(customer?.company ?? 'Retail')}</p>
-              <p><strong>Mobile:</strong> ${escapeHtml(customer?.phone || 'N/A')}</p>
-              <p><strong>Location:</strong> ${escapeHtml(customer?.location || 'N/A')}</p>
+              <p><strong>${escapeHtml(document.dealerName)}</strong></p>
+              <p><strong>Mobile:</strong> ${escapeHtml(dealer?.phone || 'N/A')}</p>
+              <p><strong>Address:</strong> ${escapeHtml(dealer?.address || 'N/A')}</p>
             </div>
             <div class="party">
               <h2>Prepared By</h2>
@@ -471,22 +469,22 @@ export function SalesScreen() {
   function handleQuotationPrint() {
     setFeedback(null)
 
-    const customer = customers.find((entry) => entry.id === orderForm.customerId)
+    const dealer = dealers.find((entry) => entry.id === orderForm.dealerId)
     const quotationItems = orderForm.items.map((item) => {
       const product = products.find((entry) => entry.id === item.productId)
       return product ? { product, quantity: Number(item.quantity), unitPrice: Number(item.unitPrice) } : null
     })
 
-    if (!customer || quotationItems.some((item) => !item || item.quantity <= 0 || item.unitPrice < 0) || !orderForm.deliveryDate) {
-      setFeedback('Select customer, product, quantity, and due date before printing a quotation.')
+    if (!dealer || quotationItems.some((item) => !item || item.quantity <= 0 || item.unitPrice < 0) || !orderForm.deliveryDate) {
+      setFeedback('Select dealer, product, quantity, and due date before printing a quotation.')
       return
     }
 
     printSalesDocument('Quotation', {
       id: `QT-${Date.now()}`,
       billNumber: `QT-${Date.now().toString().slice(-8)}`,
-      customerId: customer.id,
-      customerName: customer.name,
+      dealerId: dealer.id,
+      dealerName: dealer.name,
       salesPersonName: 'Sales desk',
       subtotal: orderSubtotal,
       discount: orderDiscount,
@@ -522,7 +520,7 @@ export function SalesScreen() {
     const currency = data?.settings.currency
     const rows = filteredOrders.map((order) => [
       order.billNumber,
-      order.customerName,
+      order.dealerName,
       order.salesPersonName,
       order.items.map((item) => `${item.productName} x${item.quantity}`).join('; '),
       formatCurrency(order.total, currency),
@@ -536,7 +534,7 @@ export function SalesScreen() {
     void exportXlsx(
       `ims-sales-export-${new Date().toISOString().slice(0, 10)}.xlsx`,
       'Sales',
-      ['Bill', 'Customer', 'Sales Person', 'Items', 'Total', 'Paid', 'Due', 'Status', 'Delivery', 'Created'],
+      ['Bill', 'Dealer', 'Sales Person', 'Items', 'Total', 'Paid', 'Due', 'Status', 'Delivery', 'Created'],
       rows
     )
   }
@@ -582,26 +580,7 @@ export function SalesScreen() {
               </div>
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-3">
-              <div>
-                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><MapPin className="h-4 w-4" /> Territory-wise sales</p>
-                <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-muted"><tr><th className="p-2.5 text-left">Territory</th><th className="p-2.5 text-right">Orders</th><th className="p-2.5 text-right">Sales</th></tr></thead>
-                    <tbody>
-                      {salesDashboard.territoryWiseSales.map((row) => (
-                        <tr key={row.key} className="border-t border-border/70">
-                          <td className="p-2.5">{row.label}</td>
-                          <td className="p-2.5 text-right">{row.orders}</td>
-                          <td className="p-2.5 text-right">{formatCurrency(row.total, data?.settings.currency)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!salesDashboard.territoryWiseSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No sales recorded this month.</p> : null}
-                </div>
-              </div>
-
+            <div className="grid gap-6 xl:grid-cols-2">
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground"><UserRound className="h-4 w-4" /> Sales officer-wise sales</p>
                 <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
@@ -722,7 +701,7 @@ export function SalesScreen() {
           </Card>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Customer receivable</p>
+              <p className="text-sm text-muted-foreground">Dealer receivable</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(receivableTotal, data?.settings.currency)}</p>
               <p className="mt-2 text-xs text-muted-foreground">{overdueOrders.length} overdue reminders</p>
             </CardContent>
@@ -772,7 +751,7 @@ export function SalesScreen() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="pl-9"
-                  placeholder="Search bill, customer, product, sales person"
+                  placeholder="Search bill, dealer, product, sales person"
                 />
               </div>
               <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as typeof statusFilter)}>
@@ -842,7 +821,7 @@ export function SalesScreen() {
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
                     <TableHead>Bill</TableHead>
-                    <TableHead>Customer</TableHead>
+                    <TableHead>Dealer</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead>Sales person</TableHead>
                     <TableHead>Total</TableHead>
@@ -864,7 +843,7 @@ export function SalesScreen() {
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        <p className="font-semibold">{order.customerName}</p>
+                        <p className="font-semibold">{order.dealerName}</p>
                       </TableCell>
                       <TableCell>{order.items[0]?.productName ?? 'N/A'}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{order.salesPersonName}</TableCell>
@@ -996,7 +975,7 @@ export function SalesScreen() {
             <DialogTitle>{editingOrderId ? 'Edit sale' : 'Create new sale'}</DialogTitle>
             <DialogDescription>
               {editingOrderId
-                ? 'Update this pending order. Stock and customer due will be recalculated automatically.'
+                ? 'Update this pending order. Stock and dealer due will be recalculated automatically.'
                 : 'Save a sales order from the live inventory set, or print a quotation first.'}
             </DialogDescription>
           </DialogHeader>
@@ -1005,37 +984,32 @@ export function SalesScreen() {
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Order details</p>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">
-                  Customer<span className="ml-0.5 text-rose-500">*</span>
+                  Dealer<span className="ml-0.5 text-rose-500">*</span>
                 </p>
                 <Combobox
-                  options={customerOptions}
-                  value={orderForm.customerId}
-                  onChange={(value) => setOrderForm((current) => ({ ...current, customerId: value }))}
-                  placeholder="Select a customer"
-                  searchPlaceholder="Search customers..."
+                  options={dealerOptions}
+                  value={orderForm.dealerId}
+                  onChange={(value) => setOrderForm((current) => ({ ...current, dealerId: value }))}
+                  placeholder="Select a dealer"
+                  searchPlaceholder="Search dealers..."
                   onCreateNew={(typedText) => {
                     setPendingSearchText(typedText)
-                    setQuickCreateCustomerOpen(true)
+                    setQuickCreateDealerOpen(true)
                   }}
-                  createNewLabel="Create customer"
+                  createNewLabel="Create dealer"
                 />
-                {selectedCustomer?.isWholesale ? (
-                  <Badge variant="outline" className="rounded-full border-violet-200 bg-violet-500/10 text-violet-700 dark:border-violet-900 dark:text-violet-300">
-                    Wholesale customer — product prices default to wholesale price
-                  </Badge>
-                ) : null}
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Mobile number</p>
                   <div className="flex h-10 items-center rounded-md border border-input bg-background px-3 text-sm">
-                    {selectedCustomer?.phone || 'N/A'}
+                    {selectedDealer?.phone || 'N/A'}
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Location</p>
+                  <p className="text-sm font-medium text-foreground">Address</p>
                   <div className="flex min-h-10 items-center rounded-md border border-input bg-background px-3 py-2 text-sm">
-                    {selectedCustomer?.location || 'N/A'}
+                    {selectedDealer?.address || 'N/A'}
                   </div>
                 </div>
               </div>
@@ -1060,9 +1034,7 @@ export function SalesScreen() {
                           value={item.productId}
                           onChange={(value) => setOrderForm((current) => {
                             const selectedProduct = products.find((product) => product.id === value)
-                            const unitPrice = selectedCustomer?.isWholesale
-                              ? selectedProduct?.wholesalePrice ?? selectedProduct?.sellingPrice
-                              : selectedProduct?.sellingPrice
+                            const unitPrice = selectedProduct?.sellingPrice
 
                             return {
                               ...current,
@@ -1204,11 +1176,11 @@ export function SalesScreen() {
         </DialogContent>
       </Dialog>
 
-      <QuickCreateCustomerDialog
-        open={quickCreateCustomerOpen}
-        onOpenChange={setQuickCreateCustomerOpen}
+      <QuickCreateDealerDialog
+        open={quickCreateDealerOpen}
+        onOpenChange={setQuickCreateDealerOpen}
         initialName={pendingSearchText}
-        onCreated={(customerId) => setOrderForm((current) => ({ ...current, customerId }))}
+        onCreated={(dealerId) => setOrderForm((current) => ({ ...current, dealerId }))}
       />
       <QuickCreateProductDialog
         open={quickCreateProductOpen}
