@@ -19,7 +19,6 @@ import {
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
-  ShoppingCart,
   Users,
   Wallet,
   X,
@@ -70,13 +69,6 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/dashboard',
         icon: LayoutDashboard,
         permission: 'dashboard:view',
-      },
-      {
-        label: 'Sales & Billing',
-        description: 'POS, invoices, returns, and due tracking',
-        href: '/admin/sales',
-        icon: ShoppingCart,
-        permission: 'orders:view',
       },
       {
         label: 'Product List',
@@ -384,8 +376,8 @@ function NotificationBell() {
 
 // ---- Global Search (Section 83) ------------------------------------------
 // One search box, searched across the identifiers a day-to-day user is
-// actually likely to type into it — bill/invoice number, dealer, product,
-// batch, PO/GRN number, bank payment, and collection receipt — each result
+// actually likely to type into it — dealer, product,
+// batch, PO/GRN number, and bank payment — each result
 // jumping to the workspace page that record lives on (there's no single
 // "record detail" route yet, so this gets the user to the right list rather
 // than a specific row).
@@ -406,13 +398,6 @@ function useGlobalSearchResults(query: string): SearchResult[] {
 
     const results: SearchResult[] = []
     const limit = 6
-
-    const orders = toArray(data.orders).filter(
-      (order) => order.billNumber.toLowerCase().includes(term) || order.dealerName.toLowerCase().includes(term)
-    )
-    orders.slice(0, limit).forEach((order) =>
-      results.push({ id: order.id, category: 'Invoice', title: order.billNumber, subtitle: order.dealerName, href: '/admin/sales' })
-    )
 
     const dealers = toArray(data.dealers).filter(
       (dealer) => dealer.name.toLowerCase().includes(term) || dealer.phone.toLowerCase().includes(term)
@@ -449,13 +434,6 @@ function useGlobalSearchResults(query: string): SearchResult[] {
         subtitle: transaction.bankLabel,
         href: '/admin/finance',
       })
-    )
-
-    const receipts = toArray(data.collections).filter(
-      (collection) => collection.receiptNumber.toLowerCase().includes(term) || collection.dealerName.toLowerCase().includes(term)
-    )
-    receipts.slice(0, limit).forEach((collection) =>
-      results.push({ id: collection.id, category: 'Receipt', title: collection.receiptNumber, subtitle: collection.dealerName, href: '/admin/sales' })
     )
 
     return results
