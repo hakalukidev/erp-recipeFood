@@ -706,14 +706,6 @@ export function StockOverviewScreen() {
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Stock</p>
-                  <div className="grid gap-5 sm:grid-cols-2">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Opening stock</p><Input type="number" min="0" value={productForm.stockQty} onChange={(event) => setProductForm((current) => ({ ...current, stockQty: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Reorder level</p><Input type="number" min="0" value={productForm.minStock} onChange={(event) => setProductForm((current) => ({ ...current, minStock: event.target.value }))} required /></div>
-                  </div>
-                </div>
-
                 <div className="space-y-3 rounded-2xl border border-border/70 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
