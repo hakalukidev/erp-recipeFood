@@ -687,7 +687,7 @@ export function StockOverviewScreen() {
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
                   <div className="grid gap-5 sm:grid-cols-2">
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="e.g. 24 pcs / 1 Ctn" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(optional — pieces per carton)</span></p><Input type="number" min="0" placeholder="e.g. 24" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
                   </div>
                 </div>
 
