@@ -829,8 +829,9 @@ export default function RateCardPage() {
             <div className="space-y-4">
               <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Product lines</p>
               {form.items.map((item, index) => {
-                const lineTotal =
-                  (Number(item.qty) || 0) * parsePerCtnMultiplier(item.perCtnBgs) * (Number(item.dealerRate) || 0)
+                const cartonSize = parsePerCtnMultiplier(item.perCtnBgs)
+                const totalPieces = (Number(item.qty) || 0) * cartonSize
+                const lineTotal = totalPieces * (Number(item.dealerRate) || 0)
                 return (
                   <div
                     key={item.key}
@@ -849,6 +850,9 @@ export default function RateCardPage() {
                             updateItem(item.key, {
                               productId: value,
                               productName: selected?.name ?? item.productName,
+                              // Carton size is fully automatic — always taken from the
+                              // product (Edit product → Carton size), never typed by hand.
+                              perCtnBgs: selected?.packSize ?? '',
                               // Only prefill each rate the first time — never overwrite a
                               // rate the user has already typed. Source: the product's own
                               // Rate Card defaults (Edit product → Rate Card rates).
@@ -897,13 +901,11 @@ export default function RateCardPage() {
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-sm text-muted-foreground">Per Ctn/Bgs</label>
-                            <Input
-                              value={item.perCtnBgs}
-                              onChange={(event) => updateItem(item.key, { perCtnBgs: event.target.value })}
-                              placeholder="1 bg"
-                              className="h-10 bg-background text-base"
-                            />
+                            <label className="text-sm text-muted-foreground">Total pieces</label>
+                            <div className="flex h-10 items-center justify-between rounded-md border border-input bg-muted/40 px-3 text-base tabular-nums text-foreground">
+                              <span className="font-medium">{totalPieces.toLocaleString('en-BD')}</span>
+                              <span className="text-xs text-muted-foreground">{cartonSize}/ctn</span>
+                            </div>
                           </div>
                         </div>
                       </div>
