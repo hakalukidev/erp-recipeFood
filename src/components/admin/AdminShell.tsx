@@ -15,6 +15,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   ReceiptText,
   Search,
   Settings as SettingsIcon,
@@ -64,7 +65,7 @@ const navigationGroups: NavigationGroup[] = [
     items: [
       {
         label: 'Dashboard',
-        description: "Today's sales, alerts, and warranty claims",
+        description: 'Company earnings, recent rate cards/expenses, and low stock alerts',
         href: '/admin/dashboard',
         icon: LayoutDashboard,
         permission: 'dashboard:view',
@@ -95,6 +96,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Record and review day-to-day running costs',
         href: '/admin/finance',
         icon: ReceiptText,
+        permission: 'finance:view',
+      },
+      {
+        label: 'Company Earnings',
+        description: 'Depot-sale profit vs expenses, with a monthly breakdown',
+        href: '/admin/earnings',
+        icon: PiggyBank,
         permission: 'finance:view',
       },
     ],
@@ -392,7 +400,10 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     const limit = 6
 
     const dealers = toArray(data.dealers).filter(
-      (dealer) => dealer.name.toLowerCase().includes(term) || dealer.phone.toLowerCase().includes(term)
+      (dealer) =>
+        dealer.name.toLowerCase().includes(term) ||
+        dealer.proprietorName.toLowerCase().includes(term) ||
+        dealer.phone.toLowerCase().includes(term)
     )
     dealers.slice(0, limit).forEach((dealer) =>
       results.push({ id: dealer.id, category: 'Dealer', title: dealer.name, subtitle: dealer.phone, href: '/admin/dealers' })

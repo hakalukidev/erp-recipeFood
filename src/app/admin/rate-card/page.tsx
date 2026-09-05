@@ -36,7 +36,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { RateCardLineItem, RateCardRecord } from '@/lib/erp/types'
-import { createId, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { createId, formatDate, parsePerCtnMultiplier, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 
 // Company letterhead used on every printed voucher — matches the client's
 // paper invoices (Moyner Mor / Mymensingh Sadar office), not the Dhaka
@@ -139,7 +139,8 @@ function escapeHtml(value: string) {
 // saved record.
 function computeTotals(items: LineItemForm[]) {
   const parsed = items.map((item) => ({
-    qty: Number(item.qty) || 0,
+    // pieces = qty (cartons/bags) × how many pieces one carton/bag holds.
+    pieces: (Number(item.qty) || 0) * parsePerCtnMultiplier(item.perCtnBgs),
     rawRate: Number(item.rawRate) || 0,
     manufRate: Number(item.manufRate) || 0,
     depotRate: Number(item.depotRate) || 0,
@@ -147,12 +148,12 @@ function computeTotals(items: LineItemForm[]) {
     tpRate: Number(item.tpRate) || 0,
     mrpRate: Number(item.mrpRate) || 0,
   }))
-  const rawRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.rawRate, 0)
-  const manufRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
-  const depotRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
-  const dealerRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.dealerRate, 0)
-  const tpRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.tpRate, 0)
-  const mrpRateTotal = parsed.reduce((sum, item) => sum + item.qty * item.mrpRate, 0)
+  const rawRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.rawRate, 0)
+  const manufRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.manufRate, 0)
+  const depotRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.depotRate, 0)
+  const dealerRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.dealerRate, 0)
+  const tpRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.tpRate, 0)
+  const mrpRateTotal = parsed.reduce((sum, item) => sum + item.pieces * item.mrpRate, 0)
   const pouchCartonAmount = manufRateTotal - rawRateTotal
   const usableMoney = depotRateTotal - manufRateTotal
   const usableUDepot = dealerRateTotal - manufRateTotal
@@ -198,7 +199,7 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
         <td class="numeric">${item.qty}</td>
         ${columns.map((column) => `<td class="numeric">${formatAmount(rateValue(item, column))}</td>`).join('')}
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
-        ${columns.map((column) => `<td class="numeric">${formatAmount(item.qty * rateValue(item, column))}</td>`).join('')}
+        ${columns.map((column) => `<td class="numeric">${formatAmount(item.qty * parsePerCtnMultiplier(item.perCtnBgs) * rateValue(item, column))}</td>`).join('')}
       </tr>
     `
     )
@@ -285,7 +286,7 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
 const PARTY_BOX_STYLES = `
           .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
           .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
-          .top { display: flex; justify-content: flex-end; margin-top: 12px; }
+          .top { display: flex; justify-content: flex-start; margin-top: 12px; }
           .meta { border: 1px solid #d1d5db; border-collapse: collapse; width: 55%; }
           .meta td { border: 1px solid #d1d5db; padding: 4px 8px; font-size: 12.5px; }
           .meta td:first-child { font-weight: 600; width: 60%; }
@@ -305,8 +306,10 @@ const PARTY_BOX_STYLES = `
 `
 
 // Depot → Dealer invoice: shows DP (= dealerRate, what the dealer pays) and
-// TP (= tpRate, what the dealer resells at).
+// TP (= tpRate, what the dealer resells at) — the gap between the two is the
+// dealer's own margin (Dealer Margin, mirroring Depot Net Profit above).
 function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
+  const dealerMargin = rateCard.tpRateTotal - rateCard.dealerRateTotal
   const rows = rateCard.items
     .map(
       (item, index) => `
@@ -317,7 +320,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
         <td class="numeric">${formatAmount(item.tpRate ?? 0)}</td>
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
-        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * parsePerCtnMultiplier(item.perCtnBgs) * item.dealerRate)}</td>
       </tr>
     `
     )
@@ -348,6 +351,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
             <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Goods Amount:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
+            <tr><td>Dealer Margin:</td><td class="numeric hl">${formatAmount(dealerMargin)}</td></tr>
           </table>
         </div>
 
@@ -407,8 +411,8 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord) {
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
-        <td class="numeric">${formatAmount(item.qty * item.depotRate)}</td>
-        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * parsePerCtnMultiplier(item.perCtnBgs) * item.depotRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * parsePerCtnMultiplier(item.perCtnBgs) * item.dealerRate)}</td>
       </tr>
     `
     )
@@ -822,17 +826,18 @@ export default function RateCardPage() {
                 absolutely positioned relative to this row, and a horizontally
                 scrolling table (overflow-x-auto) clips that popover to a tiny
                 sliver instead of letting it float over the rest of the row. */}
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product lines</p>
+            <div className="space-y-4">
+              <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Product lines</p>
               {form.items.map((item, index) => {
-                const lineTotal = (Number(item.qty) || 0) * (Number(item.dealerRate) || 0)
+                const lineTotal =
+                  (Number(item.qty) || 0) * parsePerCtnMultiplier(item.perCtnBgs) * (Number(item.dealerRate) || 0)
                 return (
                   <div
                     key={item.key}
-                    className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm transition-colors hover:border-border"
+                    className="space-y-5 rounded-2xl border border-border/60 bg-card p-6 shadow-sm transition-colors hover:border-border"
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                    <div className="flex items-center gap-4">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
                         {index + 1}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -854,8 +859,8 @@ export default function RateCardPage() {
                         />
                       </div>
                       <div className="hidden shrink-0 text-right sm:block">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Line total</p>
-                        <p className="text-sm font-semibold tabular-nums">{formatAmount(lineTotal)}</p>
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Line total</p>
+                        <p className="text-base font-semibold tabular-nums">{formatAmount(lineTotal)}</p>
                       </div>
                       <Button
                         type="button"
@@ -870,106 +875,106 @@ export default function RateCardPage() {
                       </Button>
                     </div>
 
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Quantity
                         </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Qty</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Qty</label>
                             <Input
                               type="number"
                               value={item.qty}
                               onChange={(event) => updateItem(item.key, { qty: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Per Ctn/Bgs</label>
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Per Ctn/Bgs</label>
                             <Input
                               value={item.perCtnBgs}
                               onChange={(event) => updateItem(item.key, { perCtnBgs: event.target.value })}
                               placeholder="1 bg"
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
                         </div>
                       </div>
 
-                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <div className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Costing
                         </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Raw M</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Raw M</label>
                             <Input
                               type="number"
                               value={item.rawRate}
                               onChange={(event) => updateItem(item.key, { rawRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Manuf</label>
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Manuf</label>
                             <Input
                               type="number"
                               value={item.manufRate}
                               onChange={(event) => updateItem(item.key, { manufRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
                         </div>
                       </div>
 
-                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <div className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Trade rates
                         </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Depot</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Depot</label>
                             <Input
                               type="number"
                               value={item.depotRate}
                               onChange={(event) => updateItem(item.key, { depotRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">Dealer</label>
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">Dealer</label>
                             <Input
                               type="number"
                               value={item.dealerRate}
                               onChange={(event) => updateItem(item.key, { dealerRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
                         </div>
                       </div>
 
-                      <div className="space-y-2 rounded-lg border border-border/50 bg-muted/20 p-2.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <div className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                           Market rates
                         </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">TP</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">TP</label>
                             <Input
                               type="number"
                               value={item.tpRate}
                               onChange={(event) => updateItem(item.key, { tpRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground">MRP</label>
+                          <div className="space-y-1.5">
+                            <label className="text-sm text-muted-foreground">MRP</label>
                             <Input
                               type="number"
                               value={item.mrpRate}
                               onChange={(event) => updateItem(item.key, { mrpRate: event.target.value })}
-                              className="bg-background"
+                              className="h-10 bg-background text-base"
                             />
                           </div>
                         </div>
@@ -977,8 +982,8 @@ export default function RateCardPage() {
                     </div>
 
                     <div className="text-right sm:hidden">
-                      <span className="text-xs text-muted-foreground">Line total: </span>
-                      <span className="text-sm font-semibold tabular-nums">{formatAmount(lineTotal)}</span>
+                      <span className="text-sm text-muted-foreground">Line total: </span>
+                      <span className="text-base font-semibold tabular-nums">{formatAmount(lineTotal)}</span>
                     </div>
                   </div>
                 )

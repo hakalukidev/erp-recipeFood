@@ -1,7 +1,7 @@
 "use client"
 
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
-import { Search, Sparkles, Trash2 } from 'lucide-react'
+import { Pencil, Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
@@ -21,7 +21,7 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
-import { toArray } from '@/lib/erp/utils'
+import { formatCurrency, toArray } from '@/lib/erp/utils'
 
 // Doubles as the Section 15 "Stock Type" classification — Raw Material,
 // Packaging Material, Semi-Finished Goods, Finished Goods, Damaged Goods,
@@ -63,6 +63,12 @@ type ProductFormState = {
   dealerPrice: string
   distributorPrice: string
   minSellingPrice: string
+  rawRate: string
+  manufRate: string
+  depotRate: string
+  dealerRate: string
+  tpRate: string
+  mrpRate: string
   batchApplicable: boolean
   expiryApplicable: boolean
   isActive: boolean
@@ -103,6 +109,12 @@ function createEmptyProductForm(): ProductFormState {
     dealerPrice: '',
     distributorPrice: '',
     minSellingPrice: '',
+    rawRate: '0',
+    manufRate: '0',
+    depotRate: '0',
+    dealerRate: '0',
+    tpRate: '0',
+    mrpRate: '0',
     batchApplicable: false,
     expiryApplicable: false,
     isActive: true,
@@ -177,6 +189,12 @@ function productToForm(product: {
   dealerPrice?: number
   distributorPrice?: number
   minSellingPrice?: number
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate?: number
+  tpRate?: number
+  mrpRate?: number
   batchApplicable?: boolean
   expiryApplicable?: boolean
   isActive?: boolean
@@ -210,6 +228,12 @@ function productToForm(product: {
     dealerPrice: product.dealerPrice ? String(product.dealerPrice) : '',
     distributorPrice: product.distributorPrice ? String(product.distributorPrice) : '',
     minSellingPrice: product.minSellingPrice ? String(product.minSellingPrice) : '',
+    rawRate: String(product.rawRate ?? 0),
+    manufRate: String(product.manufRate ?? 0),
+    depotRate: String(product.depotRate ?? 0),
+    dealerRate: String(product.dealerRate ?? 0),
+    tpRate: String(product.tpRate ?? 0),
+    mrpRate: String(product.mrpRate ?? 0),
     batchApplicable: product.batchApplicable ?? false,
     expiryApplicable: product.expiryApplicable ?? false,
     isActive: product.isActive ?? true,
@@ -323,9 +347,18 @@ export function StockOverviewScreen() {
     )
   }, [deferredSearch, products])
 
-  const productExportHeaders = ['Product', 'Price']
+  const productExportHeaders = ['Product', 'Raw rate', 'Manuf rate', 'Depot rate', 'Dealer rate', 'TP rate', 'MRP']
   const productExportRows = useMemo(
-    () => filteredProducts.map((product) => [formatProductDisplayName(product), product.sellingPrice]),
+    () =>
+      filteredProducts.map((product) => [
+        formatProductDisplayName(product),
+        product.rawRate ?? 0,
+        product.manufRate ?? 0,
+        product.depotRate ?? 0,
+        product.dealerRate ?? 0,
+        product.tpRate ?? 0,
+        product.mrpRate ?? 0,
+      ]),
     [filteredProducts]
   )
 
@@ -490,6 +523,12 @@ export function StockOverviewScreen() {
           dealerPrice: parseAmount(productForm.dealerPrice),
           distributorPrice: parseAmount(productForm.distributorPrice),
           minSellingPrice: parseAmount(productForm.minSellingPrice),
+          rawRate: parseAmount(productForm.rawRate),
+          manufRate: parseAmount(productForm.manufRate),
+          depotRate: parseAmount(productForm.depotRate),
+          dealerRate: parseAmount(productForm.dealerRate),
+          tpRate: parseAmount(productForm.tpRate),
+          mrpRate: parseAmount(productForm.mrpRate),
           batchApplicable: productForm.batchApplicable,
           expiryApplicable: productForm.expiryApplicable,
           isActive: productForm.isActive,
@@ -551,7 +590,7 @@ export function StockOverviewScreen() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <CardTitle>Product list</CardTitle>
-                <CardDescription>Every product — name and price.</CardDescription>
+                <CardDescription>Every product — image, and Raw/Manuf/Depot/Dealer/TP rate plus MRP.</CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory}>
@@ -580,19 +619,52 @@ export function StockOverviewScreen() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
+                      <TableHead>Image</TableHead>
                       <TableHead>Product name</TableHead>
-                      {canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
+                      <TableHead className="text-right">Raw rate</TableHead>
+                      <TableHead className="text-right">Manuf rate</TableHead>
+                      <TableHead className="text-right">Depot rate</TableHead>
+                      <TableHead className="text-right">Dealer rate</TableHead>
+                      <TableHead className="text-right">TP rate</TableHead>
+                      <TableHead className="text-right">MRP</TableHead>
+                      {canEditInventory || canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredProducts.map((product) => (
                       <TableRow key={product.id}>
                         <TableCell>
+                          {product.imageUrl ? (
+                            <img src={product.imageUrl} alt={product.name} className="h-10 w-10 rounded-lg border border-border/70 object-cover" />
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/30 text-[9px] uppercase text-muted-foreground">
+                              No img
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
                           <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={formatProductDisplayName(product)}>{formatProductDisplayName(product)}</p>
                         </TableCell>
-                        {canDeleteInventory ? (
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.rawRate ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.manufRate ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.depotRate ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.dealerRate ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.tpRate ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(product.mrpRate ?? 0, currency)}</TableCell>
+                        {canEditInventory || canDeleteInventory ? (
                           <TableCell>
                             <div className="flex justify-end gap-2">
+                              {canEditInventory ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 rounded-lg px-2"
+                                  onClick={() => openEditProductDialog(product.id)}
+                                  aria-label={`Edit ${product.name}`}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              ) : null}
                               {canDeleteInventory ? (
                                 <Button
                                   variant="outline"
@@ -600,6 +672,7 @@ export function StockOverviewScreen() {
                                   className="h-8 rounded-lg border-rose-200 px-2 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
                                   onClick={() => void handleDeleteProduct(product.id)}
                                   disabled={busyProductId === product.id}
+                                  aria-label={`Delete ${product.name}`}
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </Button>
@@ -671,6 +744,21 @@ export function StockOverviewScreen() {
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Dealer price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="150" value={productForm.dealerPrice} onChange={(event) => setProductForm((current) => ({ ...current, dealerPrice: event.target.value }))} /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Distributor price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="140" value={productForm.distributorPrice} onChange={(event) => setProductForm((current) => ({ ...current, distributorPrice: event.target.value }))} /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Minimum selling price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="130" value={productForm.minSellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, minSellingPrice: event.target.value }))} /></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Rate Card rates ({currency})</p>
+                  <p className="text-xs text-muted-foreground">
+                    Defaults used to prefill a Rate Card line for this product — Raw material → Manufacturing → Depot → Dealer → TP → MRP.
+                  </p>
+                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Raw rate <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.rawRate} onChange={(event) => setProductForm((current) => ({ ...current, rawRate: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Manufacture rate <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.manufRate} onChange={(event) => setProductForm((current) => ({ ...current, manufRate: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Depot rate <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.depotRate} onChange={(event) => setProductForm((current) => ({ ...current, depotRate: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Dealer rate <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.dealerRate} onChange={(event) => setProductForm((current) => ({ ...current, dealerRate: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">TP rate <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.tpRate} onChange={(event) => setProductForm((current) => ({ ...current, tpRate: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">MRP <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="0" value={productForm.mrpRate} onChange={(event) => setProductForm((current) => ({ ...current, mrpRate: event.target.value }))} /></div>
                   </div>
                 </div>
 

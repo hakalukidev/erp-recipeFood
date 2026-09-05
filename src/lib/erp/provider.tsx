@@ -84,6 +84,7 @@ import {
   getPermissions,
   getProductStatus,
   hasPermission as hasPermissionCheck,
+  parsePerCtnMultiplier,
   toArray,
 } from '@/lib/erp/utils'
 import {
@@ -330,6 +331,7 @@ function normalizeDealerRecord(dealer: DealerRecord): DealerRecord {
   return {
     ...dealer,
     phone: dealer.phone || '',
+    proprietorName: dealer.proprietorName || '',
     address: dealer.address || '',
     createdAt: dealer.createdAt || now,
     updatedAt: dealer.updatedAt || dealer.createdAt || now,
@@ -799,6 +801,12 @@ function normalizeProductInput(input: ProductInput) {
     dealerPrice: Math.max(input.dealerPrice ?? 0, 0),
     distributorPrice: Math.max(input.distributorPrice ?? 0, 0),
     minSellingPrice: Math.max(input.minSellingPrice ?? 0, 0),
+    rawRate: Math.max(input.rawRate ?? 0, 0),
+    manufRate: Math.max(input.manufRate ?? 0, 0),
+    depotRate: Math.max(input.depotRate ?? 0, 0),
+    dealerRate: Math.max(input.dealerRate ?? 0, 0),
+    tpRate: Math.max(input.tpRate ?? 0, 0),
+    mrpRate: Math.max(input.mrpRate ?? 0, 0),
     batchApplicable: input.batchApplicable ?? false,
     expiryApplicable: input.expiryApplicable ?? false,
     isActive: input.isActive ?? true,
@@ -814,6 +822,7 @@ function normalizeProductInput(input: ProductInput) {
 function normalizeDealerInput(input: DealerInput) {
   return {
     name: input.name.trim(),
+    proprietorName: input.proprietorName?.trim() ?? '',
     address: input.address?.trim() ?? '',
     phone: input.phone.trim(),
   }
@@ -3787,12 +3796,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // means; this is the one place those formulas are computed so the saved
   // record, the list screen, and every printed voucher all agree.
   function computeRateCardTotals(items: RateCardLineItem[]) {
-    const rawRateTotal = items.reduce((sum, item) => sum + item.qty * item.rawRate, 0)
-    const manufRateTotal = items.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
-    const depotRateTotal = items.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
-    const dealerRateTotal = items.reduce((sum, item) => sum + item.qty * item.dealerRate, 0)
-    const tpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.tpRate ?? 0), 0)
-    const mrpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.mrpRate ?? 0), 0)
+    // pieces = qty (cartons/bags) × how many pieces one carton/bag holds.
+    const pieces = (item: RateCardLineItem) => item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+    const rawRateTotal = items.reduce((sum, item) => sum + pieces(item) * item.rawRate, 0)
+    const manufRateTotal = items.reduce((sum, item) => sum + pieces(item) * item.manufRate, 0)
+    const depotRateTotal = items.reduce((sum, item) => sum + pieces(item) * item.depotRate, 0)
+    const dealerRateTotal = items.reduce((sum, item) => sum + pieces(item) * item.dealerRate, 0)
+    const tpRateTotal = items.reduce((sum, item) => sum + pieces(item) * (item.tpRate ?? 0), 0)
+    const mrpRateTotal = items.reduce((sum, item) => sum + pieces(item) * (item.mrpRate ?? 0), 0)
     const pouchCartonAmount = manufRateTotal - rawRateTotal
     const usableMoney = depotRateTotal - manufRateTotal
     const usableUDepot = dealerRateTotal - manufRateTotal

@@ -1,7 +1,6 @@
 import type {
   ActivityRecord,
   ERPData,
-  NotificationRecord,
   OrderRecord,
   ProductRecord,
   UserRecord,
@@ -13,6 +12,20 @@ export function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[])
 
 export function toArray<T extends { id: string }>(record?: Record<string, T> | null) {
   return record ? Object.values(record) : []
+}
+
+// Rate Card line items enter qty as the number of cartons/bags ordered and
+// each rate column as a per-piece price — "Per Ctn/Bgs" (free text like
+// "500 ps = 1 bg" or "24 pcs = 1 Ct") records how many pieces sit inside one
+// of those cartons/bags, so a line's amount is qty × rate × this multiplier,
+// not just qty × rate. Reads the leading number off that text; defaults to 1
+// (qty already counts pieces, matching the old un-multiplied total) when
+// there's no leading number to parse — e.g. a blank field or plain "1 bg".
+export function parsePerCtnMultiplier(perCtnBgs?: string) {
+  const match = perCtnBgs?.match(/[\d.,]+/)
+  if (!match) return 1
+  const value = Number(match[0].replace(/,/g, ''))
+  return value > 0 ? value : 1
 }
 
 export function formatCurrency(value: number, currency = 'BDT') {
@@ -78,193 +91,130 @@ export function hasPermission(data: ERPData | null, user: UserRecord | null, per
   return data.roles[user.roleId]?.permissions?.[permission] === true
 }
 
-export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
-  const orders = sortByCreatedAtDesc(toArray(data?.orders))
+// Dashboard overview built from the modules that actually have a page in
+// the sidebar today (Product List, Dealer List, Rate Card/Costing,
+// Expenses) — there's no Sales/Orders screen anymore to ever populate
+// `data.orders`, so a dashboard built on orders would just show zeros
+// forever. "Sold" and "top dealers" figures come from Rate Card line items
+// instead, since that's the only place a sale actually gets recorded now.
+export function buildOperationsOverview(data: ERPData | null) {
   const products = toArray(data?.products)
-  const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
-  const notifications = rawNotifications.filter((item) => {
-    if (!roleId) return true
-    if (roleId === 'super_admin') return true
-    if (!item.roles || item.roles.length === 0) return true
-    return item.roles.includes(roleId)
-  })
-  const activities = sortByCreatedAtDesc(toArray(data?.activities))
+  const dealers = toArray(data?.dealers)
+  const rateCards = sortByCreatedAtDesc(toArray(data?.rateCards))
+  const expenses = sortByCreatedAtDesc(toArray(data?.expenses))
 
-  const todayOrders = orders.filter((order) => isSameCalendarDay(order.createdAt))
-  const todaySales = todayOrders.reduce((total, order) => total + order.total, 0)
-  const todayCost = todayOrders.reduce(
-    (total, order) =>
-      total +
-      order.items.reduce((sum, item) => {
-        return sum + item.purchasePrice * item.quantity
-      }, 0),
-    0
-  )
   const lowStock = products.filter((product) => product.stockQty <= product.minStock)
-  const topProducts = products
-    .map((product) => {
-      const sold = orders.reduce((sum, order) => {
-        const item = order.items.find((entry) => entry.productId === product.id)
-        return sum + (item?.quantity ?? 0)
-      }, 0)
 
-      return {
-        id: product.id,
-        name: product.name,
-        stockQty: product.stockQty,
-        sold,
-        revenue: orders.reduce((sum, order) => {
-          const item = order.items.find((entry) => entry.productId === product.id)
-          return sum + (item ? item.unitPrice * item.quantity : 0)
-        }, 0),
-      }
+  const soldByProduct = new Map<string, { name: string; qty: number; revenue: number }>()
+  rateCards.forEach((card) => {
+    card.items.forEach((item) => {
+      const key = item.productId || item.productName
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const existing = soldByProduct.get(key) ?? { name: item.productName, qty: 0, revenue: 0 }
+      existing.qty += pieces
+      existing.revenue += pieces * item.dealerRate
+      soldByProduct.set(key, existing)
     })
-    .sort((left, right) => right.sold - left.sold)
+  })
+  const topProducts = Array.from(soldByProduct.values())
+    .sort((left, right) => right.revenue - left.revenue)
     .slice(0, 5)
 
-  const orderStatusCounts = orders.reduce<Record<string, number>>((result, order) => {
-    result[order.status] = (result[order.status] ?? 0) + 1
-    return result
-  }, {})
+  const dealerTotals = new Map<string, { name: string; total: number }>()
+  rateCards.forEach((card) => {
+    const key = card.dealerId || card.recipientName
+    const existing = dealerTotals.get(key) ?? { name: card.recipientName, total: 0 }
+    existing.total += card.dealerRateTotal
+    dealerTotals.set(key, existing)
+  })
+  const topDealers = Array.from(dealerTotals.values())
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 5)
 
-  const monthlyRevenue = Array.from({ length: 6 }).map((_, index) => {
+  return {
+    counts: {
+      products: products.length,
+      dealers: dealers.length,
+      rateCards: rateCards.length,
+      lowStock: lowStock.length,
+    },
+    lowStock,
+    recentRateCards: rateCards.slice(0, 5),
+    recentExpenses: expenses.slice(0, 5),
+    topProducts,
+    topDealers,
+  }
+}
+
+// Company Earnings (Section: Rate Card profit vs Expenses). "Earning" here
+// is specifically the company's own margin from selling through the Depot
+// channel — usableMoney (= depotRateTotal − manufRateTotal) on every saved
+// rate card, the same figure the Company voucher prints — not general order
+// revenue. "Expense" is every non-rejected ExpenseRecord.
+export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
+  const rateCards = toArray(data?.rateCards)
+  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
+
+  const totalEarning = rateCards.reduce((sum, card) => sum + card.usableMoney, 0)
+  const totalExpense = expenses.reduce((sum, expense) => sum + expense.amount, 0)
+
+  const monthly = Array.from({ length: months }).map((_, index) => {
     const date = new Date()
-    date.setMonth(date.getMonth() - (5 - index))
+    date.setDate(1)
+    date.setMonth(date.getMonth() - (months - 1 - index))
     const key = `${date.getFullYear()}-${date.getMonth()}`
-    const label = date.toLocaleDateString('en-BD', { month: 'short' })
-    const monthOrders = orders.filter((order) => {
-      const orderDate = new Date(order.createdAt)
-      return `${orderDate.getFullYear()}-${orderDate.getMonth()}` === key
-    })
-    const revenue = monthOrders.reduce((sum, order) => sum + order.total, 0)
+    const label = date.toLocaleDateString('en-BD', { month: 'short', year: '2-digit' })
 
-    return {
-      month: label,
-      revenue,
-      orders: monthOrders.length,
-    }
+    const earning = rateCards
+      .filter((card) => {
+        const cardDate = new Date(card.date)
+        return `${cardDate.getFullYear()}-${cardDate.getMonth()}` === key
+      })
+      .reduce((sum, card) => sum + card.usableMoney, 0)
+
+    const expense = expenses
+      .filter((item) => {
+        const expenseDate = new Date(item.date)
+        return `${expenseDate.getFullYear()}-${expenseDate.getMonth()}` === key
+      })
+      .reduce((sum, item) => sum + item.amount, 0)
+
+    return { month: label, earning, expense, net: earning - expense }
+  })
+
+  // Every calendar year that has at least one rate card or expense, oldest
+  // first — unlike `monthly` this isn't a fixed trailing window, since a
+  // year-over-year view should show the company's whole history, not just
+  // the current year.
+  const years = Array.from(
+    new Set([
+      ...rateCards.map((card) => new Date(card.date).getFullYear()),
+      ...expenses.map((expense) => new Date(expense.date).getFullYear()),
+    ])
+  ).sort((left, right) => left - right)
+  if (years.length === 0) {
+    years.push(new Date().getFullYear())
+  }
+
+  const yearly = years.map((year) => {
+    const earning = rateCards
+      .filter((card) => new Date(card.date).getFullYear() === year)
+      .reduce((sum, card) => sum + card.usableMoney, 0)
+
+    const expense = expenses
+      .filter((item) => new Date(item.date).getFullYear() === year)
+      .reduce((sum, item) => sum + item.amount, 0)
+
+    return { year: String(year), earning, expense, net: earning - expense }
   })
 
   return {
-    metrics: {
-      todaySales,
-      todayProfit: todaySales - todayCost,
-      pendingDelivery: orders.filter((order) => ['pending', 'ready'].includes(order.status)).length,
-      pendingPayment: orders.filter((order) => order.due > 0).length,
-      todaysOrders: todayOrders.length,
-      lowStockCount: lowStock.length,
-    },
-    topProducts,
-    orderStatusCounts,
-    lowStock,
-    notifications,
-    activities,
-    monthlyRevenue,
+    totalEarning,
+    totalExpense,
+    netProfit: totalEarning - totalExpense,
+    monthly,
+    yearly,
   }
-}
-
-export const REVENUE_RANGE_OPTIONS = [
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: '3m', label: 'Last 3 months' },
-  { value: '6m', label: 'Last 6 months' },
-  { value: '12m', label: 'Last 12 months' },
-] as const
-
-export type RevenueRange = (typeof REVENUE_RANGE_OPTIONS)[number]['value']
-
-export function revenueRangeStartDate(range: RevenueRange) {
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-
-  if (range === '7d') date.setDate(date.getDate() - 6)
-  else if (range === '30d') date.setDate(date.getDate() - 29)
-  else if (range === '3m') date.setMonth(date.getMonth() - 3)
-  else if (range === '12m') date.setMonth(date.getMonth() - 12)
-  else date.setMonth(date.getMonth() - 6)
-
-  return date
-}
-
-export function buildCategoryRevenue(data: ERPData | null, range: RevenueRange) {
-  const orders = toArray(data?.orders)
-  const products = toArray(data?.products)
-  const categoryByProductId = new Map(products.map((product) => [product.id, product.category || 'Uncategorized']))
-  const start = revenueRangeStartDate(range)
-
-  const totals = orders
-    .filter((order) => new Date(order.createdAt) >= start)
-    .reduce<Record<string, number>>((result, order) => {
-      order.items.forEach((item) => {
-        const category = categoryByProductId.get(item.productId) ?? 'Uncategorized'
-        result[category] = (result[category] ?? 0) + item.unitPrice * item.quantity
-      })
-      return result
-    }, {})
-
-  return Object.entries(totals)
-    .map(([category, revenue]) => ({ category, revenue }))
-    .sort((left, right) => right.revenue - left.revenue)
-    .slice(0, 8)
-}
-
-export function buildPaymentStatusCounts(data: ERPData | null) {
-  const orders = toArray(data?.orders)
-
-  return orders.reduce<Record<string, number>>((result, order) => {
-    result[order.paymentStatus] = (result[order.paymentStatus] ?? 0) + 1
-    return result
-  }, {})
-}
-
-export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
-  const orders = toArray(data?.orders)
-  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
-
-  if (range === '7d' || range === '30d') {
-    const days = range === '7d' ? 7 : 30
-    return Array.from({ length: days }).map((_, index) => {
-      const date = new Date()
-      date.setHours(0, 0, 0, 0)
-      date.setDate(date.getDate() - (days - 1 - index))
-      const key = date.toDateString()
-      const label = date.toLocaleDateString('en-BD', { day: 'numeric', month: 'short' })
-
-      const dayOrders = orders.filter((order) => new Date(order.createdAt).toDateString() === key)
-      const dayExpenses = expenses.filter((expense) => new Date(expense.date).toDateString() === key)
-
-      return {
-        month: label,
-        revenue: dayOrders.reduce((sum, order) => sum + order.total, 0),
-        expense: dayExpenses.reduce((sum, expense) => sum + expense.amount, 0),
-        orders: dayOrders.length,
-      }
-    })
-  }
-
-  const months = range === '3m' ? 3 : range === '12m' ? 12 : 6
-  return Array.from({ length: months }).map((_, index) => {
-    const date = new Date()
-    date.setMonth(date.getMonth() - (months - 1 - index))
-    const key = `${date.getFullYear()}-${date.getMonth()}`
-    const label = date.toLocaleDateString('en-BD', { month: 'short', year: months > 6 ? '2-digit' : undefined })
-
-    const monthOrders = orders.filter((order) => {
-      const orderDate = new Date(order.createdAt)
-      return `${orderDate.getFullYear()}-${orderDate.getMonth()}` === key
-    })
-    const monthExpenses = expenses.filter((expense) => {
-      const expenseDate = new Date(expense.date)
-      return `${expenseDate.getFullYear()}-${expenseDate.getMonth()}` === key
-    })
-
-    return {
-      month: label,
-      revenue: monthOrders.reduce((sum, order) => sum + order.total, 0),
-      expense: monthExpenses.reduce((sum, expense) => sum + expense.amount, 0),
-      orders: monthOrders.length,
-    }
-  })
 }
 
 export function buildUserReport(data: ERPData | null) {
@@ -382,18 +332,6 @@ export async function exportPdf(filename: string, title: string, headers: string
   })
 
   doc.save(filename)
-}
-
-export function notificationToneClass(notification: NotificationRecord) {
-  if (notification.level === 'critical') {
-    return 'border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300'
-  }
-
-  if (notification.level === 'warning') {
-    return 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
-  }
-
-  return 'border-sky-200 bg-sky-500/10 text-sky-700 dark:border-sky-900 dark:text-sky-300'
 }
 
 export function activitySummary(activity: ActivityRecord) {

@@ -52,9 +52,12 @@ export type LoginHistoryRecord = {
 // no credit limit, due-balance, territory, or customer-type distinction
 // anymore; outstanding balances are always derived live from OrderRecord.due
 // (see computeDealerDue in utils.ts) instead of being stored here.
+// `name` is the dealer's business/shop name; `proprietorName` is the owner's
+// personal name (optional — not every dealer record has one on file).
 export type DealerRecord = {
   id: string
   name: string
+  proprietorName: string
   address: string
   phone: string
   createdAt: string
@@ -92,6 +95,17 @@ export type ProductRecord = {
   dealerPrice?: number
   distributorPrice?: number
   minSellingPrice?: number
+  // Rate Card defaults — the same six rate columns a Rate Card line item
+  // carries (see RateCardLineItem), stored here so a new line can prefill
+  // from the product instead of being retyped every time. Independent of
+  // purchasePrice/sellingPrice/etc. above, which drive stock valuation and
+  // the (currently unreachable) Sales Order module.
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate?: number
+  tpRate?: number
+  mrpRate?: number
   batchApplicable?: boolean
   expiryApplicable?: boolean
   isActive?: boolean
@@ -741,8 +755,8 @@ export type BudgetInput = {
 
 // ---- Sales Target (Section 41) ------------------------------------------
 // Achievement is deliberately never stored — like Budget's Actual, it is
-// the live sum of net sales for the matching orders in that period, so it
-// can never drift from the books (see achievedAmountFor in dashboards.ts).
+// meant to be the live sum of net sales for the matching orders in that
+// period, so it can never drift from the books.
 // 'dealer' targets key off one specific dealer (entityId = DealerRecord.id).
 export type SalesTargetEntityType = 'sales-officer' | 'dealer'
 
@@ -911,6 +925,12 @@ export type ProductInput = {
   dealerPrice?: number
   distributorPrice?: number
   minSellingPrice?: number
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate?: number
+  tpRate?: number
+  mrpRate?: number
   batchApplicable?: boolean
   expiryApplicable?: boolean
   isActive?: boolean
@@ -924,6 +944,7 @@ export type ProductInput = {
 
 export type DealerInput = {
   name: string
+  proprietorName?: string
   address?: string
   phone: string
 }

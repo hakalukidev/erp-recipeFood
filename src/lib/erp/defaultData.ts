@@ -254,6 +254,7 @@ export function createDefaultERPData(): ERPData {
       dealer_one: {
         id: 'dealer_one',
         name: 'Nahid Hasan',
+        proprietorName: '',
         address: 'Mirpur, Dhaka',
         phone: '+8801900000001',
         createdAt: shiftDays(-45),
@@ -262,6 +263,7 @@ export function createDefaultERPData(): ERPData {
       dealer_two: {
         id: 'dealer_two',
         name: 'Apex Fashion',
+        proprietorName: '',
         address: 'Banani, Dhaka',
         phone: '+8801900000002',
         createdAt: shiftDays(-38),
@@ -270,6 +272,7 @@ export function createDefaultERPData(): ERPData {
       dealer_three: {
         id: 'dealer_three',
         name: 'Shanta Enterprise',
+        proprietorName: '',
         address: 'Agrabad, Chattogram',
         phone: '+8801900000003',
         createdAt: shiftDays(-30),

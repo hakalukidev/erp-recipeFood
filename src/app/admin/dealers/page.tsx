@@ -23,14 +23,15 @@ import { toArray } from '@/lib/erp/utils'
 
 type DealerFormState = {
   name: string
+  proprietorName: string
   phone: string
   address: string
 }
 
-const emptyDealerForm: DealerFormState = { name: '', phone: '', address: '' }
+const emptyDealerForm: DealerFormState = { name: '', proprietorName: '', phone: '', address: '' }
 
 function formFromDealer(dealer: DealerRecord): DealerFormState {
-  return { name: dealer.name, phone: dealer.phone, address: dealer.address }
+  return { name: dealer.name, proprietorName: dealer.proprietorName, phone: dealer.phone, address: dealer.address }
 }
 
 export default function DealersPage() {
@@ -53,13 +54,13 @@ export default function DealersPage() {
     if (!normalizedQuery) return dealers
 
     return dealers.filter((dealer) =>
-      [dealer.name, dealer.phone, dealer.address].join(' ').toLowerCase().includes(normalizedQuery)
+      [dealer.name, dealer.proprietorName, dealer.phone, dealer.address].join(' ').toLowerCase().includes(normalizedQuery)
     )
   }, [dealers, query])
 
-  const exportHeaders = ['Name', 'Phone', 'Address']
+  const exportHeaders = ['Business Name', 'Proprietor Name', 'Phone', 'Address']
   const exportRows = useMemo(
-    () => filteredDealers.map((dealer) => [dealer.name, dealer.phone, dealer.address]),
+    () => filteredDealers.map((dealer) => [dealer.name, dealer.proprietorName, dealer.phone, dealer.address]),
     [filteredDealers]
   )
 
@@ -83,6 +84,7 @@ export default function DealersPage() {
 
     const input: DealerInput = {
       name: dealerForm.name,
+      proprietorName: dealerForm.proprietorName,
       phone: dealerForm.phone,
       address: dealerForm.address,
     }
@@ -130,7 +132,7 @@ export default function DealersPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Dealer list</CardTitle>
-              <CardDescription>Search by name, phone, or address.</CardDescription>
+              <CardDescription>Search by business name, proprietor name, phone, or address.</CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
               <div className="relative">
@@ -139,7 +141,7 @@ export default function DealersPage() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="pl-9"
-                  placeholder="Search by name, phone, or address"
+                  placeholder="Search by business/proprietor name, phone, or address"
                 />
               </div>
               <Button onClick={openCreateDialog} className="h-10 rounded-xl">
@@ -154,8 +156,9 @@ export default function DealersPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead>Dealer</TableHead>
-                    <TableHead>Phone</TableHead>
+                    <TableHead>Business name</TableHead>
+                    <TableHead>Proprietor</TableHead>
+                    <TableHead>Mobile</TableHead>
                     <TableHead>Address</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -178,6 +181,7 @@ export default function DealersPage() {
                           <p className="font-semibold">{dealer.name}</p>
                         </div>
                       </TableCell>
+                      <TableCell className="min-w-40">{dealer.proprietorName || 'N/A'}</TableCell>
                       <TableCell className="min-w-44">
                         <div className="flex items-center gap-2">
                           <Phone className="h-4 w-4 text-muted-foreground" />
@@ -211,7 +215,7 @@ export default function DealersPage() {
                   ))}
                   {filteredDealers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="h-28 text-center text-muted-foreground">
                         No dealers found.
                       </TableCell>
                     </TableRow>
@@ -227,23 +231,33 @@ export default function DealersPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{editingDealer ? 'Edit dealer' : 'Add new dealer'}</DialogTitle>
-            <DialogDescription>Name and phone number, plus an address if you have it.</DialogDescription>
+            <DialogDescription>Business name and mobile number are required; proprietor name and address are optional.</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">
-                Dealer name<span className="ml-0.5 text-rose-500">*</span>
+                Business name<span className="ml-0.5 text-rose-500">*</span>
               </p>
               <Input
                 value={dealerForm.name}
                 onChange={(event) => setDealerForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="e.g. Md. Karim Uddin"
+                placeholder="e.g. Karim Traders"
                 required
               />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">
-                Phone number<span className="ml-0.5 text-rose-500">*</span>
+                Proprietor name <span className="font-normal text-muted-foreground">(optional)</span>
+              </p>
+              <Input
+                value={dealerForm.proprietorName}
+                onChange={(event) => setDealerForm((current) => ({ ...current, proprietorName: event.target.value }))}
+                placeholder="e.g. Md. Karim Uddin"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                Mobile number<span className="ml-0.5 text-rose-500">*</span>
               </p>
               <Input
                 value={dealerForm.phone}
