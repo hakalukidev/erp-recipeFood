@@ -119,6 +119,17 @@ function parseAmount(value: string) {
   return normalized ? Number(normalized) : 0
 }
 
+// Distinguishes otherwise-identical products (e.g. two "Mustard Oil"
+// entries in different pack sizes) in list views without needing a
+// separate column — "Mustard Oil (2L)", "Mustard Oil (5L)".
+function formatProductDisplayName(product: { name: string; packSize?: string }) {
+  const packSize = product.packSize?.trim()
+  if (!packSize || product.name.toLowerCase().includes(packSize.toLowerCase())) {
+    return product.name
+  }
+  return `${product.name} (${packSize})`
+}
+
 // The quick "Add product" form only asks for a name and size, but every
 // product still needs a unique SKU internally (invoices, batches, and
 // exports all key off it) — so one is derived from the name here instead
@@ -314,7 +325,7 @@ export function StockOverviewScreen() {
 
   const productExportHeaders = ['Product', 'Price']
   const productExportRows = useMemo(
-    () => filteredProducts.map((product) => [product.name, product.sellingPrice]),
+    () => filteredProducts.map((product) => [formatProductDisplayName(product), product.sellingPrice]),
     [filteredProducts]
   )
 
@@ -540,7 +551,7 @@ export function StockOverviewScreen() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <CardTitle>Product list</CardTitle>
-                <CardDescription>Every product — name, image, and price.</CardDescription>
+                <CardDescription>Every product — name and price.</CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory}>
@@ -569,10 +580,8 @@ export function StockOverviewScreen() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="w-16">Image</TableHead>
                       <TableHead>Product name</TableHead>
                       <TableHead>Price</TableHead>
-                      <TableHead>Status</TableHead>
                       {canEditInventory || canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
                     </TableRow>
                   </TableHeader>
@@ -580,28 +589,10 @@ export function StockOverviewScreen() {
                     {filteredProducts.map((product) => (
                       <TableRow key={product.id}>
                         <TableCell>
-                          <div className="h-12 w-12 overflow-hidden rounded-lg bg-muted/30">
-                            {product.imageUrl ? (
-                              <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center text-[8px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
-                                No image
-                              </div>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={product.name}>{product.name}</p>
+                          <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={formatProductDisplayName(product)}>{formatProductDisplayName(product)}</p>
                         </TableCell>
                         <TableCell>
                           <p className="text-sm font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
-                        </TableCell>
-                        <TableCell>
-                          {product.isActive === false ? (
-                            <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge>
-                          ) : (
-                            <Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-[10px] text-emerald-700">Active</Badge>
-                          )}
                         </TableCell>
                         {canEditInventory || canDeleteInventory ? (
                           <TableCell>
