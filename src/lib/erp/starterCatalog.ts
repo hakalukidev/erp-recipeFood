@@ -53,16 +53,17 @@ export const RECIPE_STARTER_CATALOG: StarterCatalogItem[] = [
   item('MUR-200G', 'Muri 200 g', 'Muri', '200 g', 'Gram'),
   item('MUR-400G', 'Muri 400 g', 'Muri', '400 g', 'Gram'),
 
-  // Spice Products
-  item('SPC-CHILI', 'Chili Powder', 'Spice Products', '', 'Gram'),
-  item('SPC-TURMERIC', 'Turmeric Powder', 'Spice Products', '', 'Gram'),
-  item('SPC-CORIANDER', 'Coriander Powder', 'Spice Products', '', 'Gram'),
-  item('SPC-BIRYANI', 'Biryani Masala', 'Spice Products', '', 'Gram'),
-  item('SPC-CHICKEN', 'Chicken Masala', 'Spice Products', '', 'Gram'),
-  item('SPC-BEEF', 'Beef Masala', 'Spice Products', '', 'Gram'),
-  item('SPC-MEAT', 'Meat Masala', 'Spice Products', '', 'Gram'),
-  item('SPC-ROAST', 'Roast Masala', 'Spice Products', '', 'Gram'),
-  item('SPC-PANCH', 'Panch Phoron', 'Spice Products', '', 'Gram'),
+  // Spice Products — carton size not in the spec, defaults to 1 (update from
+  // the Product List once known, same as their zero price/stock).
+  item('SPC-CHILI', 'Chili Powder', 'Spice Products', '1', 'Gram'),
+  item('SPC-TURMERIC', 'Turmeric Powder', 'Spice Products', '1', 'Gram'),
+  item('SPC-CORIANDER', 'Coriander Powder', 'Spice Products', '1', 'Gram'),
+  item('SPC-BIRYANI', 'Biryani Masala', 'Spice Products', '1', 'Gram'),
+  item('SPC-CHICKEN', 'Chicken Masala', 'Spice Products', '1', 'Gram'),
+  item('SPC-BEEF', 'Beef Masala', 'Spice Products', '1', 'Gram'),
+  item('SPC-MEAT', 'Meat Masala', 'Spice Products', '1', 'Gram'),
+  item('SPC-ROAST', 'Roast Masala', 'Spice Products', '1', 'Gram'),
+  item('SPC-PANCH', 'Panch Phoron', 'Spice Products', '1', 'Gram'),
 ]
 
 export const RECIPE_STARTER_CATEGORIES: string[] = Array.from(

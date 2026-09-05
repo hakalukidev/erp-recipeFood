@@ -792,7 +792,7 @@ function normalizeProductInput(input: ProductInput) {
     purchaseUnit: input.purchaseUnit?.trim() ?? '',
     salesUnit: input.salesUnit?.trim() ?? '',
     conversionRatio: Math.max(input.conversionRatio ?? 1, 0),
-    packSize: input.packSize?.trim() ?? '',
+    packSize: input.packSize.trim(),
     weight: Math.max(input.weight ?? 0, 0),
     purchasePrice: input.purchasePrice,
     sellingPrice: input.sellingPrice,
@@ -1292,6 +1292,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     if (!normalized.sku) {
       throw new Error('SKU or model code is required.')
+    }
+
+    if (!normalized.packSize) {
+      throw new Error('Carton size is required.')
     }
 
     const db = getDatabaseOrThrow()

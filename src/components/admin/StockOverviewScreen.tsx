@@ -322,11 +322,12 @@ export function StockOverviewScreen() {
     )
   }, [deferredSearch, products])
 
-  const productExportHeaders = ['Product', 'Raw rate', 'Manuf rate', 'Depot rate', 'Dealer rate', 'TP rate', 'MRP']
+  const productExportHeaders = ['Product', 'Carton size', 'Raw rate', 'Manuf rate', 'Depot rate', 'Dealer rate', 'TP rate', 'MRP']
   const productExportRows = useMemo(
     () =>
       filteredProducts.map((product) => [
         formatProductDisplayName(product),
+        product.packSize,
         product.rawRate ?? 0,
         product.manufRate ?? 0,
         product.depotRate ?? 0,
@@ -596,6 +597,7 @@ export function StockOverviewScreen() {
                     <TableRow className="hover:bg-transparent">
                       <TableHead>Image</TableHead>
                       <TableHead>Product name</TableHead>
+                      <TableHead className="text-right">Carton size</TableHead>
                       <TableHead className="text-right">Raw rate</TableHead>
                       <TableHead className="text-right">Manuf rate</TableHead>
                       <TableHead className="text-right">Depot rate</TableHead>
@@ -620,6 +622,7 @@ export function StockOverviewScreen() {
                         <TableCell>
                           <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={formatProductDisplayName(product)}>{formatProductDisplayName(product)}</p>
                         </TableCell>
+                        <TableCell className="text-right tabular-nums">{product.packSize}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.rawRate ?? 0, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.manufRate ?? 0, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.depotRate ?? 0, currency)}</TableCell>
@@ -677,7 +680,7 @@ export function StockOverviewScreen() {
               <DialogDescription>
                 {editingProductId
                   ? 'Use the essential fields only. This form is optimized for workshop and lift inventory records.'
-                  : 'Just the product name and size for now — a SKU is generated automatically. Add pricing, stock, and other details later from Edit product.'}
+                  : 'Just the product name and carton size for now — a SKU is generated automatically. Add rates and other details later from Edit product.'}
               </DialogDescription>
             </DialogHeader>
             {(editingProductId ? canEditInventory : canCreateInventory) ? (
@@ -687,7 +690,7 @@ export function StockOverviewScreen() {
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
                   <div className="grid gap-5 sm:grid-cols-2">
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(optional — pieces per carton)</span></p><Input type="number" min="0" placeholder="e.g. 24" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(pieces per carton)</span></p><Input type="number" min="1" placeholder="e.g. 24" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} required /></div>
                   </div>
                 </div>
 
@@ -735,11 +738,14 @@ export function StockOverviewScreen() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Size <span className="font-normal text-muted-foreground">(optional)</span></p>
+                  <p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(pieces per carton)</span></p>
                   <Input
-                    placeholder="200 ml"
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 24"
                     value={productForm.packSize}
                     onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))}
+                    required
                   />
                 </div>
                 <DialogFooter>

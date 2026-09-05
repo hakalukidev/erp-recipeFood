@@ -86,7 +86,10 @@ export type ProductRecord = {
   purchaseUnit?: string
   salesUnit?: string
   conversionRatio?: number
-  packSize?: string
+  // Pieces per carton — required, shown as "(N)" on the product name and
+  // used to multiply Qty into total pieces on a Rate Card line (see
+  // parsePerCtnMultiplier in utils.ts).
+  packSize: string
   weight?: number
   purchasePrice: number
   sellingPrice: number
@@ -916,7 +919,7 @@ export type ProductInput = {
   purchaseUnit?: string
   salesUnit?: string
   conversionRatio?: number
-  packSize?: string
+  packSize: string
   weight?: number
   purchasePrice: number
   sellingPrice: number
