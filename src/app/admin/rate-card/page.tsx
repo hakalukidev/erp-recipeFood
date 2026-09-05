@@ -501,7 +501,7 @@ export default function RateCardPage() {
       products.map((product) => ({
         value: product.id,
         label: product.name,
-        sublabel: [product.category, product.sku].filter(Boolean).join(' · '),
+        sublabel: product.category,
       })),
     [products]
   )

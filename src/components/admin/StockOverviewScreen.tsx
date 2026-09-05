@@ -114,17 +114,6 @@ function parseAmount(value: string) {
   return normalized ? Number(normalized) : 0
 }
 
-// Distinguishes otherwise-identical products (e.g. two "Mustard Oil"
-// entries in different pack sizes) in list views without needing a
-// separate column — "Mustard Oil (2L)", "Mustard Oil (5L)".
-function formatProductDisplayName(product: { name: string; packSize?: string }) {
-  const packSize = product.packSize?.trim()
-  if (!packSize || product.name.toLowerCase().includes(packSize.toLowerCase())) {
-    return product.name
-  }
-  return `${product.name} (${packSize})`
-}
-
 // The quick "Add product" form only asks for a name and size, but every
 // product still needs a unique SKU internally (invoices, batches, and
 // exports all key off it) — so one is derived from the name here instead
@@ -326,7 +315,7 @@ export function StockOverviewScreen() {
   const productExportRows = useMemo(
     () =>
       filteredProducts.map((product) => [
-        formatProductDisplayName(product),
+        product.name,
         product.packSize,
         product.rawRate ?? 0,
         product.manufRate ?? 0,
@@ -620,7 +609,7 @@ export function StockOverviewScreen() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={formatProductDisplayName(product)}>{formatProductDisplayName(product)}</p>
+                          <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={product.name}>{product.name}</p>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{product.packSize}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.rawRate ?? 0, currency)}</TableCell>
@@ -677,19 +666,14 @@ export function StockOverviewScreen() {
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingProductId ? 'Edit product' : 'Add product'}</DialogTitle>
-              <DialogDescription>
-                {editingProductId
-                  ? 'Use the essential fields only. This form is optimized for workshop and lift inventory records.'
-                  : 'Just the product name and carton size for now — a SKU is generated automatically. Add rates and other details later from Edit product.'}
-              </DialogDescription>
+              <DialogDescription>Name, carton size, Rate Card rates, and an image — the same form either way.</DialogDescription>
             </DialogHeader>
             {(editingProductId ? canEditInventory : canCreateInventory) ? (
-              editingProductId ? (
               <form className="space-y-6" onSubmit={handleSaveProduct}>
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
                   <div className="grid gap-5 sm:grid-cols-2">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} autoFocus required /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(pieces per carton)</span></p><Input type="number" min="1" placeholder="e.g. 24" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} required /></div>
                   </div>
                 </div>
@@ -722,38 +706,9 @@ export function StockOverviewScreen() {
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setAddProductOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : 'Update product'}</Button>
+                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : editingProductId ? 'Update product' : 'Save product'}</Button>
                 </DialogFooter>
               </form>
-              ) : (
-              <form className="space-y-5" onSubmit={handleSaveProduct}>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Product name</p>
-                  <Input
-                    placeholder="Mustard Oil 200ml"
-                    value={productForm.name}
-                    onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))}
-                    autoFocus
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(pieces per carton)</span></p>
-                  <Input
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 24"
-                    value={productForm.packSize}
-                    onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))}
-                    required
-                  />
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setAddProductOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={isSavingProduct}>{isSavingProduct ? 'Saving...' : 'Save product'}</Button>
-                </DialogFooter>
-              </form>
-              )
             ) : <p className="text-sm text-muted-foreground">Your current role can view products but cannot create or edit them.</p>}
           </DialogContent>
         </Dialog>
