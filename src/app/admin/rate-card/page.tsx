@@ -645,7 +645,7 @@ export default function RateCardPage() {
   }
 
   return (
-    <AdminShell active="Rate Card / Costing">
+    <AdminShell active="Invoice">
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2">
           <Card className="border-border/70 shadow-sm">

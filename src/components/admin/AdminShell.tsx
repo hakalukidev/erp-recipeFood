@@ -85,7 +85,7 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'dealers:view',
       },
       {
-        label: 'Rate Card / Costing',
+        label: 'Invoice',
         description: 'Raw material → manufacturing → depot → dealer rate cascade with profit margins, and Company/Depot/Dealer vouchers',
         href: '/admin/rate-card',
         icon: Calculator,
