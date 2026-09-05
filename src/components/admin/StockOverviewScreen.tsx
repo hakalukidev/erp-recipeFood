@@ -21,7 +21,7 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
-import { formatCurrency, toArray } from '@/lib/erp/utils'
+import { toArray } from '@/lib/erp/utils'
 
 // Doubles as the Section 15 "Stock Type" classification — Raw Material,
 // Packaging Material, Semi-Finished Goods, Finished Goods, Damaged Goods,
@@ -581,7 +581,6 @@ export function StockOverviewScreen() {
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
                       <TableHead>Product name</TableHead>
-                      <TableHead>Price</TableHead>
                       {canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
                     </TableRow>
                   </TableHeader>
@@ -590,9 +589,6 @@ export function StockOverviewScreen() {
                       <TableRow key={product.id}>
                         <TableCell>
                           <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={formatProductDisplayName(product)}>{formatProductDisplayName(product)}</p>
-                        </TableCell>
-                        <TableCell>
-                          <p className="text-sm font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
                         </TableCell>
                         {canDeleteInventory ? (
                           <TableCell>

@@ -3851,10 +3851,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const id = existing?.id ?? createId('ratecard')
     const now = new Date().toISOString()
     const totals = computeRateCardTotals(items)
-    const previousDue = Number(input.previousDue) || 0
-    const damage = Number(input.damage) || 0
-    const routeDiscount = Number(input.routeDiscount) || 0
-    const targetIncentive = Number(input.targetIncentive) || 0
     const rateCard: RateCardRecord = {
       id,
       invoiceNo,
@@ -3862,18 +3858,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: input.date,
       deliveryDate: input.deliveryDate?.trim() ?? '',
       dealerId: input.dealerId ?? '',
-      depotName: input.depotName?.trim() ?? '',
-      depotAddress: input.depotAddress?.trim() ?? '',
-      depotMobile: input.depotMobile?.trim() ?? '',
-      depotHelpline: input.depotHelpline?.trim() ?? '',
-      previousDue,
-      damage,
-      routeDiscount,
-      targetIncentive,
       items,
       remarks: input.remarks?.trim() ?? '',
       ...totals,
-      depotReceivable: totals.dealerRateTotal + previousDue - damage - routeDiscount - targetIncentive,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }

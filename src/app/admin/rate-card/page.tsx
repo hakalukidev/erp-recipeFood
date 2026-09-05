@@ -11,7 +11,6 @@ import {
   Printer,
   Search,
   Trash2,
-  Wallet,
   TrendingUp,
 } from 'lucide-react'
 
@@ -33,7 +32,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
@@ -91,14 +89,6 @@ type RateCardForm = {
   date: string
   deliveryDate: string
   dealerId: string
-  depotName: string
-  depotAddress: string
-  depotMobile: string
-  depotHelpline: string
-  previousDue: string
-  damage: string
-  routeDiscount: string
-  targetIncentive: string
   remarks: string
   items: LineItemForm[]
 }
@@ -110,14 +100,6 @@ function emptyRateCardForm(): RateCardForm {
     date: new Date().toISOString().slice(0, 10),
     deliveryDate: new Date().toISOString().slice(0, 10),
     dealerId: '',
-    depotName: '',
-    depotAddress: '',
-    depotMobile: '',
-    depotHelpline: '',
-    previousDue: '0',
-    damage: '0',
-    routeDiscount: '0',
-    targetIncentive: '0',
     remarks: '',
     items: [emptyLineItem()],
   }
@@ -323,8 +305,7 @@ const PARTY_BOX_STYLES = `
 `
 
 // Depot → Dealer invoice: shows DP (= dealerRate, what the dealer pays) and
-// TP (= tpRate, what the dealer resells at), and settles a running account
-// (previousDue, damage, routeDiscount, targetIncentive → depotReceivable).
+// TP (= tpRate, what the dealer resells at).
 function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
   const rows = rateCard.items
     .map(
@@ -367,21 +348,13 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
             <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Goods Amount:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
-            <tr><td>Previous Due:</td><td class="numeric">${formatAmount(rateCard.previousDue ?? 0)}</td></tr>
-            <tr><td>Damage:</td><td class="numeric">${formatAmount(rateCard.damage ?? 0)}</td></tr>
-            <tr><td>Route Discount:</td><td class="numeric">${formatAmount(rateCard.routeDiscount ?? 0)}</td></tr>
-            <tr><td>Target Incentive:</td><td class="numeric">${formatAmount(rateCard.targetIncentive ?? 0)}</td></tr>
-            <tr><td>Depot Will Receive:</td><td class="numeric hl">${formatAmount(rateCard.depotReceivable)}</td></tr>
           </table>
         </div>
 
         <div class="parties">
           <div class="party">
             <p class="label">From</p>
-            <p class="name">${escapeHtml(rateCard.depotName || 'Depot')}</p>
-            ${rateCard.depotAddress ? `<p>${escapeHtml(rateCard.depotAddress)}</p>` : ''}
-            ${rateCard.depotMobile ? `<p>Mob: ${escapeHtml(rateCard.depotMobile)}</p>` : ''}
-            ${rateCard.depotHelpline ? `<p>Help Line: ${escapeHtml(rateCard.depotHelpline)}</p>` : ''}
+            <p class="name">Depot</p>
           </div>
           <div class="party">
             <p class="label">To &middot; Dealer</p>
@@ -463,7 +436,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord) {
           <table class="meta">
             <tr><td>Order Date:</td><td>${escapeHtml(rateCard.date)}</td></tr>
             <tr><td>Delivery Date:</td><td>${escapeHtml(rateCard.deliveryDate || rateCard.date)}</td></tr>
-            <tr><td>Depot Name:</td><td>${escapeHtml(rateCard.depotName || rateCard.recipientName)}</td></tr>
+            <tr><td>Depot Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
             <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Depot Sales Price:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
@@ -481,10 +454,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord) {
           </div>
           <div class="party">
             <p class="label">To &middot; Depot</p>
-            <p class="name">${escapeHtml(rateCard.depotName || rateCard.recipientName)}</p>
-            ${rateCard.depotAddress ? `<p>${escapeHtml(rateCard.depotAddress)}</p>` : ''}
-            ${rateCard.depotMobile ? `<p>Mob: ${escapeHtml(rateCard.depotMobile)}</p>` : ''}
-            ${rateCard.depotHelpline ? `<p>Help Line: ${escapeHtml(rateCard.depotHelpline)}</p>` : ''}
+            <p class="name">${escapeHtml(rateCard.recipientName)}</p>
           </div>
         </div>
 
@@ -548,7 +518,6 @@ export default function RateCardPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
-  const [showDepotDetails, setShowDepotDetails] = useState(false)
   const [showBreakdown, setShowBreakdown] = useState(false)
 
   const filteredRateCards = useMemo(() => {
@@ -559,21 +528,11 @@ export default function RateCardPage() {
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
   const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
-  const depotReceivable = useMemo(
-    () =>
-      totals.dealerRateTotal +
-      (Number(form.previousDue) || 0) -
-      (Number(form.damage) || 0) -
-      (Number(form.routeDiscount) || 0) -
-      (Number(form.targetIncentive) || 0),
-    [totals.dealerRateTotal, form.previousDue, form.damage, form.routeDiscount, form.targetIncentive]
-  )
 
   function openCreateDialog() {
     setEditingId(null)
     setForm(emptyRateCardForm())
     setFormError(null)
-    setShowDepotDetails(false)
     setShowBreakdown(false)
     setDialogOpen(true)
   }
@@ -586,21 +545,10 @@ export default function RateCardPage() {
       date: card.date,
       deliveryDate: card.deliveryDate || card.date,
       dealerId: card.dealerId ?? '',
-      depotName: card.depotName ?? '',
-      depotAddress: card.depotAddress ?? '',
-      depotMobile: card.depotMobile ?? '',
-      depotHelpline: card.depotHelpline ?? '',
-      previousDue: String(card.previousDue ?? 0),
-      damage: String(card.damage ?? 0),
-      routeDiscount: String(card.routeDiscount ?? 0),
-      targetIncentive: String(card.targetIncentive ?? 0),
       remarks: card.remarks ?? '',
       items: card.items.map(toLineItemForm),
     })
     setFormError(null)
-    // Already has depot/account data from before — show it open rather than
-    // hiding what was already filled in.
-    setShowDepotDetails(Boolean(card.depotName || card.previousDue || card.damage || card.routeDiscount || card.targetIncentive))
     setShowBreakdown(false)
     setDialogOpen(true)
   }
@@ -661,14 +609,6 @@ export default function RateCardPage() {
           date: form.date,
           deliveryDate: form.deliveryDate || undefined,
           dealerId: form.dealerId || undefined,
-          depotName: form.depotName.trim() || undefined,
-          depotAddress: form.depotAddress.trim() || undefined,
-          depotMobile: form.depotMobile.trim() || undefined,
-          depotHelpline: form.depotHelpline.trim() || undefined,
-          previousDue: Number(form.previousDue) || 0,
-          damage: Number(form.damage) || 0,
-          routeDiscount: Number(form.routeDiscount) || 0,
-          targetIncentive: Number(form.targetIncentive) || 0,
           remarks: form.remarks.trim() || undefined,
           items,
         },
@@ -703,7 +643,7 @@ export default function RateCardPage() {
   return (
     <AdminShell active="Rate Card / Costing">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Rate cards</p>
@@ -718,15 +658,6 @@ export default function RateCardPage() {
                 {formatAmount(rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0))}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Across all saved rate cards</p>
-            </CardContent>
-          </Card>
-          <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Total depot receivable</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">
-                {formatAmount(rateCards.reduce((sum, card) => sum + card.depotReceivable, 0))}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">Goods Amount + due − damage − discount − incentive</p>
             </CardContent>
           </Card>
         </div>
@@ -772,7 +703,6 @@ export default function RateCardPage() {
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Goods Amount</TableHead>
                     <TableHead className="text-right">Depot Net Profit</TableHead>
-                    <TableHead className="text-right">Depot Receivable</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -784,7 +714,6 @@ export default function RateCardPage() {
                       <TableCell>{formatDate(card.date)}</TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal)}</TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal - card.depotRateTotal)}</TableCell>
-                      <TableCell className="text-right">{formatAmount(card.depotReceivable)}</TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -887,87 +816,6 @@ export default function RateCardPage() {
                   className="bg-background"
                 />
               </div>
-            </div>
-
-            <div className="overflow-hidden rounded-xl border border-border/60">
-              <button
-                type="button"
-                onClick={() => setShowDepotDetails((current) => !current)}
-                className="flex w-full items-center gap-1.5 px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground"
-              >
-                {showDepotDetails ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                <span className="font-medium">Depot &amp; account details</span>
-                <span className="text-xs">(optional — used on the Depot and Dealer vouchers)</span>
-              </button>
-              {showDepotDetails ? (
-                <div className="space-y-4 border-t border-border/60 bg-muted/20 p-4">
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <Input
-                      value={form.depotName}
-                      onChange={(event) => setForm((current) => ({ ...current, depotName: event.target.value }))}
-                      placeholder="Depot / distributor name"
-                      className="bg-background"
-                    />
-                    <Input
-                      value={form.depotAddress}
-                      onChange={(event) => setForm((current) => ({ ...current, depotAddress: event.target.value }))}
-                      placeholder="Address"
-                      className="bg-background"
-                    />
-                    <Input
-                      value={form.depotMobile}
-                      onChange={(event) => setForm((current) => ({ ...current, depotMobile: event.target.value }))}
-                      placeholder="Mobile"
-                      className="bg-background"
-                    />
-                    <Input
-                      value={form.depotHelpline}
-                      onChange={(event) => setForm((current) => ({ ...current, depotHelpline: event.target.value }))}
-                      placeholder="Help line"
-                      className="bg-background"
-                    />
-                  </div>
-                  <Separator />
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Previous due</label>
-                      <Input
-                        type="number"
-                        value={form.previousDue}
-                        onChange={(event) => setForm((current) => ({ ...current, previousDue: event.target.value }))}
-                        className="bg-background"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Damage</label>
-                      <Input
-                        type="number"
-                        value={form.damage}
-                        onChange={(event) => setForm((current) => ({ ...current, damage: event.target.value }))}
-                        className="bg-background"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Route discount</label>
-                      <Input
-                        type="number"
-                        value={form.routeDiscount}
-                        onChange={(event) => setForm((current) => ({ ...current, routeDiscount: event.target.value }))}
-                        className="bg-background"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">Target incentive</label>
-                      <Input
-                        type="number"
-                        value={form.targetIncentive}
-                        onChange={(event) => setForm((current) => ({ ...current, targetIncentive: event.target.value }))}
-                        className="bg-background"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             {/* Cards, not a <Table>, on purpose — the Combobox's dropdown is
@@ -1148,7 +996,7 @@ export default function RateCardPage() {
             </div>
 
             <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-background p-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-foreground/5 text-foreground">
                     <Package className="h-4 w-4" />
@@ -1167,15 +1015,6 @@ export default function RateCardPage() {
                     <p className="text-lg font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                       {formatAmount(depotNetProfit)}
                     </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <Wallet className="h-4 w-4" />
-                  </span>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Depot Receivable</p>
-                    <p className="text-lg font-semibold tabular-nums text-primary">{formatAmount(depotReceivable)}</p>
                   </div>
                 </div>
               </div>
@@ -1227,14 +1066,6 @@ export default function RateCardPage() {
                     <div>
                       <p className="text-muted-foreground">Consumer total (MRP total)</p>
                       <p className="font-semibold tabular-nums">{formatAmount(totals.mrpRateTotal)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground">Damage / discount / incentive</p>
-                      <p className="font-semibold tabular-nums">
-                        {formatAmount(
-                          (Number(form.damage) || 0) + (Number(form.routeDiscount) || 0) + (Number(form.targetIncentive) || 0)
-                        )}
-                      </p>
                     </div>
                   </div>
                 </div>

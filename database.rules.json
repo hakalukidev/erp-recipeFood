@@ -40,13 +40,10 @@
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:delete').val() === true))"
         }
       },
-      "customers": {
+      "dealers": {
         ".read": "auth != null",
         "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('customers:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('customers:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('customers:delete').val() === true))",
-          "due": {
-            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true)"
-          }
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:delete').val() === true))"
         }
       },
       "suppliers": {

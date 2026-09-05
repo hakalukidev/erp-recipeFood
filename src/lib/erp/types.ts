@@ -447,9 +447,7 @@ export type StockCountInput = {
 //   Depot voucher    — Depot P P (= depotRate) / Depot S P (= dealerRate)
 //     and Depot Net Profit (dealerRateTotal − depotRateTotal, derived, not
 //     stored)
-//   Dealer voucher   — DP (= dealerRate) / TP (= tpRate) and the running
-//     account (previousDue, damage, routeDiscount, targetIncentive →
-//     depotReceivable)
+//   Dealer voucher   — DP (= dealerRate) / TP (= tpRate)
 //   mrpRate — the end-consumer price (Maximum Retail Price), one step past
 //     TP; not printed on any of the three depot-chain vouchers above (none
 //     of the client's paper invoices show it — they stop at TP) but kept on
@@ -459,11 +457,6 @@ export type StockCountInput = {
 //   usableMoney        = depotRateTotal − manufRateTotal   (margin up to Depot)
 //   usableUDepot        = dealerRateTotal − manufRateTotal  (margin skipping Depot)
 //   both percentages are the figure above ÷ dealerRateTotal
-//   depotReceivable    = dealerRateTotal + previousDue − damage −
-//                         routeDiscount − targetIncentive
-// previousDue is a plain stored number entered by hand (Dealer records carry
-// no running balance) so past vouchers don't change if a dealer's later
-// orders move their outstanding balance.
 export type RateCardLineItem = {
   productId?: string
   productName: string
@@ -491,19 +484,6 @@ export type RateCardRecord = {
   // Links recipientName back to a Dealer List record so name/phone can be
   // auto-filled instead of retyped.
   dealerId?: string
-  // The "To: Depot" box on a Depot voucher / "From: Depot" box on a Dealer
-  // voucher — free text since depots aren't (yet) their own master-data
-  // entity.
-  depotName?: string
-  depotAddress?: string
-  depotMobile?: string
-  depotHelpline?: string
-  // Dealer voucher running-account adjustments; see depotReceivable formula
-  // above. Each defaults to 0.
-  previousDue?: number
-  damage?: number
-  routeDiscount?: number
-  targetIncentive?: number
   items: RateCardLineItem[]
   remarks?: string
   rawRateTotal: number
@@ -517,7 +497,6 @@ export type RateCardRecord = {
   usableMoneyPercent: number
   usableUDepot: number
   usableUDepotPercent: number
-  depotReceivable: number
   createdAt: string
   updatedAt: string
 }
@@ -528,14 +507,6 @@ export type RateCardInput = {
   date: string
   deliveryDate?: string
   dealerId?: string
-  depotName?: string
-  depotAddress?: string
-  depotMobile?: string
-  depotHelpline?: string
-  previousDue?: number
-  damage?: number
-  routeDiscount?: number
-  targetIncentive?: number
   items: RateCardLineItem[]
   remarks?: string
 }
