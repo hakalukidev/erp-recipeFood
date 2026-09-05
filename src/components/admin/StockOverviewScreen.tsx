@@ -1,7 +1,7 @@
 "use client"
 
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
-import { PencilLine, Search, Sparkles, Trash2 } from 'lucide-react'
+import { Search, Sparkles, Trash2 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
@@ -582,7 +582,7 @@ export function StockOverviewScreen() {
                     <TableRow className="hover:bg-transparent">
                       <TableHead>Product name</TableHead>
                       <TableHead>Price</TableHead>
-                      {canEditInventory || canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
+                      {canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -594,14 +594,9 @@ export function StockOverviewScreen() {
                         <TableCell>
                           <p className="text-sm font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
                         </TableCell>
-                        {canEditInventory || canDeleteInventory ? (
+                        {canDeleteInventory ? (
                           <TableCell>
                             <div className="flex justify-end gap-2">
-                              {canEditInventory ? (
-                                <Button variant="outline" size="sm" className="h-8 rounded-lg px-2" onClick={() => openEditProductDialog(product.id)}>
-                                  <PencilLine className="h-3.5 w-3.5" />
-                                </Button>
-                              ) : null}
                               {canDeleteInventory ? (
                                 <Button
                                   variant="outline"
