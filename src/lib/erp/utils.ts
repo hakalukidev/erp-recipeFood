@@ -105,19 +105,21 @@ export function buildOperationsOverview(data: ERPData | null) {
 
   const lowStock = products.filter((product) => product.stockQty <= product.minStock)
 
-  const soldByProduct = new Map<string, { name: string; qty: number; revenue: number }>()
+  // Profit, not sales value — pieces × (Dealer rate − Manufacture rate), the
+  // same margin the Company voucher calls "Usable u Depot" per unit.
+  const soldByProduct = new Map<string, { name: string; qty: number; profit: number }>()
   rateCards.forEach((card) => {
     card.items.forEach((item) => {
       const key = item.productId || item.productName
       const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
-      const existing = soldByProduct.get(key) ?? { name: item.productName, qty: 0, revenue: 0 }
+      const existing = soldByProduct.get(key) ?? { name: item.productName, qty: 0, profit: 0 }
       existing.qty += pieces
-      existing.revenue += pieces * item.dealerRate
+      existing.profit += pieces * (item.dealerRate - item.manufRate)
       soldByProduct.set(key, existing)
     })
   })
   const topProducts = Array.from(soldByProduct.values())
-    .sort((left, right) => right.revenue - left.revenue)
+    .sort((left, right) => right.profit - left.profit)
     .slice(0, 5)
 
   const dealerTotals = new Map<string, { name: string; total: number }>()

@@ -268,7 +268,7 @@ export function DashboardScreen() {
         <Card className="border-border/70 shadow-sm">
           <CardHeader>
             <CardTitle>Top selling products</CardTitle>
-            <CardDescription>By Rate Card sales value (pieces × Dealer rate), all time.</CardDescription>
+            <CardDescription>By Rate Card profit (pieces × (Dealer rate − Manufacture rate)), all time.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {overview.topProducts.length ? (
@@ -280,8 +280,8 @@ export function DashboardScreen() {
                       <p className="text-sm text-muted-foreground">{product.qty.toLocaleString('en-BD')} pieces sold</p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold">{formatCurrency(product.revenue, currency)}</p>
-                      <p className="text-sm text-muted-foreground">Revenue</p>
+                      <p className="font-semibold">{formatCurrency(product.profit, currency)}</p>
+                      <p className="text-sm text-muted-foreground">Profit</p>
                     </div>
                   </div>
                 </div>
