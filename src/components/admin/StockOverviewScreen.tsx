@@ -685,7 +685,10 @@ export function StockOverviewScreen() {
               <form className="space-y-6" onSubmit={handleSaveProduct}>
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Identity</p>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
+                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Carton size <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="e.g. 24 pcs / 1 Ctn" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
