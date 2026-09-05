@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
 import { formatCurrency, toArray } from '@/lib/erp/utils'
@@ -564,47 +565,70 @@ export function StockOverviewScreen() {
             {feedback ? <p className="rounded-xl bg-primary/5 p-3 text-sm text-primary">{feedback}</p> : null}
 
             {filteredProducts.length ? (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                {filteredProducts.map((product) => (
-                  <div key={product.id} className="group overflow-hidden rounded-2xl border border-border/70 bg-card">
-                    <div className="aspect-square w-full overflow-hidden bg-muted/30">
-                      {product.imageUrl ? (
-                        <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                          No image
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-2 p-3">
-                      <p className="truncate text-sm font-semibold text-foreground" title={product.name}>{product.name}</p>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-base font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
-                        {product.isActive === false ? <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge> : null}
-                      </div>
-                      {canEditInventory || canDeleteInventory ? (
-                        <div className="flex gap-2 pt-1">
-                          {canEditInventory ? (
-                            <Button variant="outline" size="sm" className="h-8 flex-1 rounded-lg px-2" onClick={() => openEditProductDialog(product.id)}>
-                              <PencilLine className="h-3.5 w-3.5" />
-                            </Button>
-                          ) : null}
-                          {canDeleteInventory ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 flex-1 rounded-lg border-rose-200 px-2 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-                              onClick={() => void handleDeleteProduct(product.id)}
-                              disabled={busyProductId === product.id}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
+              <div className="overflow-hidden rounded-2xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-16">Image</TableHead>
+                      <TableHead>Product name</TableHead>
+                      <TableHead>Price</TableHead>
+                      <TableHead>Status</TableHead>
+                      {canEditInventory || canDeleteInventory ? <TableHead className="text-right">Actions</TableHead> : null}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredProducts.map((product) => (
+                      <TableRow key={product.id}>
+                        <TableCell>
+                          <div className="h-12 w-12 overflow-hidden rounded-lg bg-muted/30">
+                            {product.imageUrl ? (
+                              <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[8px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
+                                No image
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <p className="max-w-[16rem] truncate text-sm font-semibold text-foreground" title={product.name}>{product.name}</p>
+                        </TableCell>
+                        <TableCell>
+                          <p className="text-sm font-semibold text-foreground">{formatCurrency(product.sellingPrice, currency)}</p>
+                        </TableCell>
+                        <TableCell>
+                          {product.isActive === false ? (
+                            <Badge variant="outline" className="border-rose-200 bg-rose-500/10 text-[10px] text-rose-700">Inactive</Badge>
+                          ) : (
+                            <Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-[10px] text-emerald-700">Active</Badge>
+                          )}
+                        </TableCell>
+                        {canEditInventory || canDeleteInventory ? (
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              {canEditInventory ? (
+                                <Button variant="outline" size="sm" className="h-8 rounded-lg px-2" onClick={() => openEditProductDialog(product.id)}>
+                                  <PencilLine className="h-3.5 w-3.5" />
+                                </Button>
+                              ) : null}
+                              {canDeleteInventory ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 rounded-lg border-rose-200 px-2 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                                  onClick={() => void handleDeleteProduct(product.id)}
+                                  disabled={busyProductId === product.id}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                        ) : null}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             ) : (
               <p className="py-12 text-center text-sm text-muted-foreground">
