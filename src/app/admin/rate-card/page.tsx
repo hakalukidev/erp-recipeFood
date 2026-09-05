@@ -849,9 +849,15 @@ export default function RateCardPage() {
                             updateItem(item.key, {
                               productId: value,
                               productName: selected?.name ?? item.productName,
-                              // Only prefill Raw M the first time — never overwrite a rate
-                              // the user has already typed.
-                              rawRate: item.rawRate === '0' ? String(selected?.purchasePrice ?? 0) : item.rawRate,
+                              // Only prefill each rate the first time — never overwrite a
+                              // rate the user has already typed. Source: the product's own
+                              // Rate Card defaults (Edit product → Rate Card rates).
+                              rawRate: item.rawRate === '0' ? String(selected?.rawRate ?? 0) : item.rawRate,
+                              manufRate: item.manufRate === '0' ? String(selected?.manufRate ?? 0) : item.manufRate,
+                              depotRate: item.depotRate === '0' ? String(selected?.depotRate ?? 0) : item.depotRate,
+                              dealerRate: item.dealerRate === '0' ? String(selected?.dealerRate ?? 0) : item.dealerRate,
+                              tpRate: item.tpRate === '0' ? String(selected?.tpRate ?? 0) : item.tpRate,
+                              mrpRate: item.mrpRate === '0' ? String(selected?.mrpRate ?? 0) : item.mrpRate,
                             })
                           }}
                           placeholder="Select a product"

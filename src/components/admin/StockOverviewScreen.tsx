@@ -17,27 +17,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { RECIPE_STARTER_CATALOG, RECIPE_STARTER_CATEGORIES } from '@/lib/erp/starterCatalog'
 import { formatCurrency, toArray } from '@/lib/erp/utils'
-
-// Doubles as the Section 15 "Stock Type" classification — Raw Material,
-// Packaging Material, Semi-Finished Goods, Finished Goods, Damaged Goods,
-// Returned Goods, and Promotional Stock are all represented here rather
-// than in a second, near-duplicate field.
-const productTypeOptions = [
-  'Raw Material',
-  'Packaging Material',
-  'Semi-Finished Goods',
-  'Finished Goods',
-  'Damaged Goods',
-  'Returned Goods',
-  'Promotional Stock',
-  'Trading Goods',
-]
-const unitOptions = ['Pcs', 'Kg', 'Gram', 'Litre', 'ML', 'Box', 'Carton', 'Pack', 'Set', 'Dozen']
 
 type ProductFormState = {
   name: string
@@ -306,14 +289,6 @@ export function StockOverviewScreen() {
     () => [...toArray(data?.products)].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [data?.products]
   )
-  const categoryOptions = useMemo(
-    () =>
-      Array.from(
-        new Set([...RECIPE_STARTER_CATEGORIES, ...products.map((product) => product.category).filter(Boolean)])
-      ).sort(),
-    [products]
-  )
-
   const [search, setSearch] = useState('')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [productForm, setProductForm] = useState<ProductFormState>(() => createEmptyProductForm())
@@ -713,37 +688,6 @@ export function StockOverviewScreen() {
                   <div className="grid gap-5 sm:grid-cols-2">
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Mustard Oil 200ml" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product code / SKU</p><Input placeholder="RFP-MO-200" value={productForm.sku} onChange={(event) => setProductForm((current) => ({ ...current, sku: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">বাংলা নাম <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="সরিষার তেল ২০০ মিলি" value={productForm.banglaName} onChange={(event) => setProductForm((current) => ({ ...current, banglaName: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">English name <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Mustard Oil 200ml" value={productForm.englishName} onChange={(event) => setProductForm((current) => ({ ...current, englishName: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Category</p><Input list="product-category-options" placeholder="Edible Oil" value={productForm.category} onChange={(event) => setProductForm((current) => ({ ...current, category: event.target.value }))} /><datalist id="product-category-options">{categoryOptions.map((category) => (<option key={category} value={category} />))}</datalist></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Sub-category <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Mustard Oil" value={productForm.subCategory} onChange={(event) => setProductForm((current) => ({ ...current, subCategory: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Brand <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="Recipe" value={productForm.brand} onChange={(event) => setProductForm((current) => ({ ...current, brand: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product type <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-type-options" placeholder="Finished Goods" value={productForm.productType} onChange={(event) => setProductForm((current) => ({ ...current, productType: event.target.value }))} /><datalist id="product-type-options">{productTypeOptions.map((type) => (<option key={type} value={type} />))}</datalist></div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Units &amp; Packaging</p>
-                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Unit</p><Input list="product-unit-options" placeholder="Pcs / Kg / Litre" value={productForm.unit} onChange={(event) => setProductForm((current) => ({ ...current, unit: event.target.value }))} /><datalist id="product-unit-options">{unitOptions.map((unit) => (<option key={unit} value={unit} />))}</datalist></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Purchase unit <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-unit-options" placeholder="Defaults to unit" value={productForm.purchaseUnit} onChange={(event) => setProductForm((current) => ({ ...current, purchaseUnit: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Sales unit <span className="font-normal text-muted-foreground">(optional)</span></p><Input list="product-unit-options" placeholder="Defaults to unit" value={productForm.salesUnit} onChange={(event) => setProductForm((current) => ({ ...current, salesUnit: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Conversion ratio <span className="font-normal text-muted-foreground">(purchase → sales)</span></p><Input type="number" min="0" step="0.01" placeholder="1" value={productForm.conversionRatio} onChange={(event) => setProductForm((current) => ({ ...current, conversionRatio: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Pack size <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="200 ml" value={productForm.packSize} onChange={(event) => setProductForm((current) => ({ ...current, packSize: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Weight <span className="font-normal text-muted-foreground">(kg, optional)</span></p><Input type="number" min="0" step="0.01" placeholder="0.2" value={productForm.weight} onChange={(event) => setProductForm((current) => ({ ...current, weight: event.target.value }))} /></div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Pricing ({currency})</p>
-                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Cost price</p><Input inputMode="numeric" placeholder="120" value={productForm.purchasePrice} onChange={(event) => setProductForm((current) => ({ ...current, purchasePrice: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">MRP <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="180" value={productForm.mrp} onChange={(event) => setProductForm((current) => ({ ...current, mrp: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Retail (selling) price</p><Input inputMode="numeric" placeholder="170" value={productForm.sellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, sellingPrice: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Wholesale price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="Defaults to selling price" value={productForm.wholesalePrice} onChange={(event) => setProductForm((current) => ({ ...current, wholesalePrice: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Dealer price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="150" value={productForm.dealerPrice} onChange={(event) => setProductForm((current) => ({ ...current, dealerPrice: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Distributor price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="140" value={productForm.distributorPrice} onChange={(event) => setProductForm((current) => ({ ...current, distributorPrice: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Minimum selling price <span className="font-normal text-muted-foreground">(optional)</span></p><Input inputMode="numeric" placeholder="130" value={productForm.minSellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, minSellingPrice: event.target.value }))} /></div>
                   </div>
                 </div>
 
@@ -763,24 +707,10 @@ export function StockOverviewScreen() {
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Stock &amp; Batch</p>
-                  <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Stock</p>
+                  <div className="grid gap-5 sm:grid-cols-2">
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Opening stock</p><Input type="number" min="0" value={productForm.stockQty} onChange={(event) => setProductForm((current) => ({ ...current, stockQty: event.target.value }))} required /></div>
                     <div className="space-y-2"><p className="text-sm font-medium text-foreground">Reorder level</p><Input type="number" min="0" value={productForm.minStock} onChange={(event) => setProductForm((current) => ({ ...current, minStock: event.target.value }))} required /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Maximum stock <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="No cap" value={productForm.maxStock} onChange={(event) => setProductForm((current) => ({ ...current, maxStock: event.target.value }))} /></div>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Batch applicable</p><Switch checked={productForm.batchApplicable} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, batchApplicable: checked }))} /></div>
-                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Expiry applicable</p><Switch checked={productForm.expiryApplicable} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, expiryApplicable: checked }))} /></div>
-                    <div className="flex items-center justify-between rounded-xl border border-border/70 px-4 py-3"><p className="text-sm font-medium text-foreground">Active</p><Switch checked={productForm.isActive} onCheckedChange={(checked) => setProductForm((current) => ({ ...current, isActive: checked }))} /></div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Warranty <span className="font-normal normal-case text-muted-foreground/80">(only for warranted goods)</span></p>
-                  <div className="grid gap-5 sm:grid-cols-2">
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Serial number <span className="font-normal text-muted-foreground">(optional)</span></p><Input placeholder="SN-000123" value={productForm.serialNumber} onChange={(event) => setProductForm((current) => ({ ...current, serialNumber: event.target.value }))} /></div>
-                    <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warranty (months) <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="0" value={productForm.warrantyMonths} onChange={(event) => setProductForm((current) => ({ ...current, warrantyMonths: event.target.value }))} /></div>
                   </div>
                 </div>
 
