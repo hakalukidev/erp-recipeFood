@@ -1072,7 +1072,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           queryClient.setQueryData(erpQueryKeys.collection(key), snapshot.val())
           commit()
         },
-        () => {
+        (error) => {
+          // RTDB cancels a listener outright on permission_denied — it never
+          // retries on its own, even after the rules that caused it are
+          // fixed, so a bad ".read" rule silently freezes this collection at
+          // null for the rest of the session (looks like "no data" in the
+          // UI) until the page is reloaded and the listener re-attaches.
+          // Logging it is the only way to tell that apart from "really
+          // empty".
+          console.error(`[erp] listener for "erp/${key}" was denied/cancelled:`, error)
           raw[key] = null
           loadedKeys.add(key)
           queryClient.setQueryData(erpQueryKeys.collection(key), null)
