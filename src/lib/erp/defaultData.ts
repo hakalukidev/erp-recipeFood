@@ -279,6 +279,26 @@ export function createDefaultERPData(): ERPData {
         updatedAt: shiftDays(0),
       },
     },
+    dealerCategories: {
+      dealer_category_wholesaler: {
+        id: 'dealer_category_wholesaler',
+        name: 'Wholesaler',
+        createdAt: shiftDays(-45),
+        updatedAt: shiftDays(-45),
+      },
+      dealer_category_retailer: {
+        id: 'dealer_category_retailer',
+        name: 'Retailer',
+        createdAt: shiftDays(-45),
+        updatedAt: shiftDays(-45),
+      },
+      dealer_category_distributor: {
+        id: 'dealer_category_distributor',
+        name: 'Distributor',
+        createdAt: shiftDays(-45),
+        updatedAt: shiftDays(-45),
+      },
+    },
     products: {
       prd_jacket: {
         id: 'prd_jacket',
@@ -422,6 +442,7 @@ export function createDefaultERPData(): ERPData {
       },
     },
     discountProducts: {},
+    tradeSalesProducts: {},
     orders: {
       ord_1001: {
         id: 'ord_1001',

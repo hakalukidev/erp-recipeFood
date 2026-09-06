@@ -36,6 +36,8 @@ import type {
   CommissionPayoutRecord,
   CommissionRuleInput,
   CommissionRuleRecord,
+  DealerCategoryInput,
+  DealerCategoryRecord,
   DealerInput,
   DealerRecord,
   DiscountProductInput,
@@ -74,6 +76,8 @@ import type {
   StockAdjustmentRecord,
   StockCountInput,
   StockCountRecord,
+  TradeSalesProductInput,
+  TradeSalesProductRecord,
   UserInput,
   UserRecord,
 } from '@/lib/erp/types'
@@ -117,10 +121,14 @@ type ERPContextValue = {
   deleteRole: (roleId: string) => Promise<void>
   saveDealer: (input: DealerInput, dealerId?: string) => Promise<string>
   deleteDealer: (dealerId: string) => Promise<void>
+  saveDealerCategory: (input: DealerCategoryInput, categoryId?: string) => Promise<string>
+  deleteDealerCategory: (categoryId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
   deleteProduct: (productId: string) => Promise<void>
   saveDiscountProduct: (input: DiscountProductInput, productId?: string) => Promise<string>
   deleteDiscountProduct: (productId: string) => Promise<void>
+  saveTradeSalesProduct: (input: TradeSalesProductInput, productId?: string) => Promise<string>
+  deleteTradeSalesProduct: (productId: string) => Promise<void>
   createStockAdjustmentRequest: (input: StockAdjustmentInput) => Promise<string>
   approveStockAdjustment: (adjustmentId: string) => Promise<void>
   rejectStockAdjustment: (adjustmentId: string) => Promise<void>
@@ -217,6 +225,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'commissionPayouts',
   'investors',
   'discountProducts',
+  'tradeSalesProducts',
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
@@ -349,6 +358,23 @@ function normalizeDealerMap(dealers?: Record<string, DealerRecord> | null) {
   )
 }
 
+function normalizeDealerCategoryRecord(category: DealerCategoryRecord): DealerCategoryRecord {
+  const now = new Date().toISOString()
+
+  return {
+    ...category,
+    name: category.name || '',
+    createdAt: category.createdAt || now,
+    updatedAt: category.updatedAt || category.createdAt || now,
+  }
+}
+
+function normalizeDealerCategoryMap(categories?: Record<string, DealerCategoryRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(categories ?? {}).map(([id, category]) => [id, normalizeDealerCategoryRecord(category)])
+  )
+}
+
 function normalizeDiscountProductRecord(product: DiscountProductRecord): DiscountProductRecord {
   const now = new Date().toISOString()
 
@@ -373,6 +399,32 @@ function normalizeDiscountProductRecord(product: DiscountProductRecord): Discoun
 function normalizeDiscountProductMap(products?: Record<string, DiscountProductRecord> | null) {
   return Object.fromEntries(
     Object.entries(products ?? {}).map(([id, product]) => [id, normalizeDiscountProductRecord(product)])
+  )
+}
+
+function normalizeTradeSalesProductRecord(product: TradeSalesProductRecord): TradeSalesProductRecord {
+  const now = new Date().toISOString()
+
+  return {
+    ...product,
+    banglaName: product.banglaName || '',
+    category: product.category || '',
+    perCtnBgs: product.perCtnBgs || '',
+    rawRate: Number(product.rawRate ?? 0),
+    manufRate: Number(product.manufRate ?? 0),
+    depotRate: Number(product.depotRate ?? 0),
+    dealerRate: Number(product.dealerRate ?? 0),
+    tpRate: Number(product.tpRate ?? 0),
+    mrpRate: Number(product.mrpRate ?? 0),
+    isActive: product.isActive ?? true,
+    createdAt: product.createdAt || now,
+    updatedAt: product.updatedAt || product.createdAt || now,
+  }
+}
+
+function normalizeTradeSalesProductMap(products?: Record<string, TradeSalesProductRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(products ?? {}).map(([id, product]) => [id, normalizeTradeSalesProductRecord(product)])
   )
 }
 
@@ -721,8 +773,10 @@ function normalizeERPData(data: ERPData | null): ERPData {
     roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
     users: source.users ?? {},
     dealers: normalizeDealerMap(source.dealers),
+    dealerCategories: normalizeDealerCategoryMap(source.dealerCategories),
     products: normalizeProductMap(source.products),
     discountProducts: normalizeDiscountProductMap(source.discountProducts),
+    tradeSalesProducts: normalizeTradeSalesProductMap(source.tradeSalesProducts),
     orders: normalizeOrderMap(source.orders),
     ledgerEntries: source.ledgerEntries ?? {},
     chartOfAccounts: source.chartOfAccounts ?? {},
@@ -861,6 +915,12 @@ function normalizeDealerInput(input: DealerInput) {
   }
 }
 
+function normalizeDealerCategoryInput(input: DealerCategoryInput) {
+  return {
+    name: input.name.trim(),
+  }
+}
+
 function normalizeDiscountProductInput(input: DiscountProductInput) {
   return {
     name: input.name.trim(),
@@ -873,6 +933,22 @@ function normalizeDiscountProductInput(input: DiscountProductInput) {
     dealerRate: Math.max(input.dealerRate ?? 0, 0),
     srCommissionPercent: Math.max(input.srCommissionPercent ?? 8, 0),
     tpPercent: Math.max(input.tpPercent ?? 0, 0),
+    mrpRate: Math.max(input.mrpRate ?? 0, 0),
+    isActive: input.isActive ?? true,
+  }
+}
+
+function normalizeTradeSalesProductInput(input: TradeSalesProductInput) {
+  return {
+    name: input.name.trim(),
+    banglaName: input.banglaName?.trim() ?? '',
+    category: input.category?.trim() ?? '',
+    perCtnBgs: input.perCtnBgs?.trim() ?? '',
+    rawRate: Math.max(input.rawRate ?? 0, 0),
+    manufRate: Math.max(input.manufRate ?? 0, 0),
+    depotRate: Math.max(input.depotRate ?? 0, 0),
+    dealerRate: Math.max(input.dealerRate ?? 0, 0),
+    tpRate: Math.max(input.tpRate ?? 0, 0),
     mrpRate: Math.max(input.mrpRate ?? 0, 0),
     isActive: input.isActive ?? true,
   }
@@ -1706,6 +1782,55 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('dealer_deleted', 'dealers', `Deleted dealer ${dealer.name}.`)
   }
 
+  async function saveDealerCategory(input: DealerCategoryInput, categoryId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existingCategory = categoryId ? data.dealerCategories[categoryId] : null
+    const normalized = normalizeDealerCategoryInput(input)
+
+    if (!normalized.name) {
+      throw new Error('Category name is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingCategory?.id ?? createId('dealer_category')
+    const now = new Date().toISOString()
+    const category = {
+      id,
+      ...normalized,
+      createdAt: existingCategory?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/dealerCategories'), { [id]: category })
+    await writeActivity(
+      existingCategory ? 'dealer_category_updated' : 'dealer_category_created',
+      'dealers',
+      existingCategory ? `Updated dealer category ${category.name}.` : `Added dealer category ${category.name}.`
+    )
+
+    return id
+  }
+
+  async function deleteDealerCategory(categoryId: string) {
+    if (!data) {
+      return
+    }
+
+    const category = data.dealerCategories[categoryId]
+    if (!category) {
+      throw new Error('Dealer category not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`dealerCategories/${categoryId}`]: null,
+    })
+    await writeActivity('dealer_category_deleted', 'dealers', `Deleted dealer category ${category.name}.`)
+  }
+
   async function saveDiscountProduct(input: DiscountProductInput, productId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -1753,6 +1878,55 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`discountProducts/${productId}`]: null,
     })
     await writeActivity('discount_product_deleted', 'inventory', `Deleted ${product.name} from the discount product list.`)
+  }
+
+  async function saveTradeSalesProduct(input: TradeSalesProductInput, productId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const normalized = normalizeTradeSalesProductInput(input)
+
+    if (!normalized.name) {
+      throw new Error('Product name is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existingProduct = productId ? data.tradeSalesProducts[productId] : null
+    const id = existingProduct?.id ?? createId('trade_sales_product')
+    const now = new Date().toISOString()
+    const product: TradeSalesProductRecord = {
+      id,
+      ...normalized,
+      createdAt: existingProduct?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/tradeSalesProducts'), { [id]: product })
+    await writeActivity(
+      existingProduct ? 'trade_sales_product_updated' : 'trade_sales_product_created',
+      'inventory',
+      existingProduct ? `Updated ${product.name} in the trade sales product list.` : `Added ${product.name} to the trade sales product list.`
+    )
+
+    return id
+  }
+
+  async function deleteTradeSalesProduct(productId: string) {
+    if (!data) {
+      return
+    }
+
+    const product = data.tradeSalesProducts[productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`tradeSalesProducts/${productId}`]: null,
+    })
+    await writeActivity('trade_sales_product_deleted', 'inventory', `Deleted ${product.name} from the trade sales product list.`)
   }
 
   // Resolves a QC Hold either back into sellable stock (release — the
@@ -4025,12 +4199,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteProduct,
       saveDiscountProduct,
       deleteDiscountProduct,
+      saveTradeSalesProduct,
+      deleteTradeSalesProduct,
       createStockAdjustmentRequest,
       approveStockAdjustment,
       rejectStockAdjustment,
       createStockCount,
       saveDealer,
       deleteDealer,
+      saveDealerCategory,
+      deleteDealerCategory,
       createSalesReturn,
       recordCollection,
       releaseQcHold,

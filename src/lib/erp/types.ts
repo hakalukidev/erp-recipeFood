@@ -64,6 +64,15 @@ export type DealerRecord = {
   updatedAt: string
 }
 
+// A simple named grouping for dealers (e.g. Wholesaler, Retailer, Distributor)
+// managed from its own "Dealer Category" admin section — just a name, nothing more.
+export type DealerCategoryRecord = {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type ProductStatus = 'active' | 'low-stock' | 'out-of-stock'
 
 export type ProductRecord = {
@@ -588,6 +597,49 @@ export type DiscountProductInput = {
   isActive?: boolean
 }
 
+// ---- Trade Sales Product List --------------------------------------------
+// A third price catalog, for hubs where the company runs a depot but has no
+// dealer under it — the company manufactures and sells retail directly
+// through its own staff there. Same rate-card chain as ProductRecord (Raw M
+// → Manu R → Depot P R → Depot S R → TP → MRP, all typed in directly, no
+// percentage-derived steps like the Discount Product List's SR Com/TP %) —
+// this list just exists standalone from ProductRecord the same way
+// DiscountProductRecord does, e.g. for a different set of hub-specific
+// prices without touching the main Product List.
+export type TradeSalesProductRecord = {
+  id: string
+  name: string
+  banglaName?: string
+  category?: string
+  // Pieces per carton/bag, e.g. "06 ps = 1 bg" — same role as ProductRecord's
+  // packSize/RateCardLineItem's perCtnBgs.
+  perCtnBgs?: string
+  rawRate: number
+  manufRate: number
+  depotRate: number
+  // Depot's selling rate, typed in by hand ("Depot S R" column).
+  dealerRate: number
+  tpRate: number
+  mrpRate: number
+  isActive?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type TradeSalesProductInput = {
+  name: string
+  banglaName?: string
+  category?: string
+  perCtnBgs?: string
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate?: number
+  tpRate?: number
+  mrpRate?: number
+  isActive?: boolean
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module — the detailed lab-test parameters. Production
 // (completeProduction) is the only source that creates these today; 'purchase'
@@ -921,8 +973,10 @@ export type ERPData = {
   roles: Record<string, RoleRecord>
   users: Record<string, UserRecord>
   dealers: Record<string, DealerRecord>
+  dealerCategories: Record<string, DealerCategoryRecord>
   products: Record<string, ProductRecord>
   discountProducts: Record<string, DiscountProductRecord>
+  tradeSalesProducts: Record<string, TradeSalesProductRecord>
   orders: Record<string, OrderRecord>
   ledgerEntries: Record<string, LedgerEntryRecord>
   chartOfAccounts: Record<string, ChartOfAccountRecord>
@@ -1011,6 +1065,10 @@ export type DealerInput = {
   proprietorName?: string
   address?: string
   phone: string
+}
+
+export type DealerCategoryInput = {
+  name: string
 }
 
 export type OrderInput = {

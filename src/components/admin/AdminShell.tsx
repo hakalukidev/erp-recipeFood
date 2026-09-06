@@ -21,6 +21,8 @@ import {
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
+  Store,
+  Tags,
   Users,
   X,
 } from 'lucide-react'
@@ -86,10 +88,24 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'products:view',
       },
       {
+        label: 'Trade Sales Product List',
+        description: 'For a depot with no dealer — company-run direct retail sale price list',
+        href: '/admin/trade-sales-products',
+        icon: Store,
+        permission: 'products:view',
+      },
+      {
         label: 'Dealer List',
         description: 'Dealer directory — name, address, and phone number',
         href: '/admin/dealers',
         icon: Users,
+        permission: 'dealers:view',
+      },
+      {
+        label: 'Dealer Category',
+        description: 'Manage the category names used to group dealers (e.g. Wholesaler, Retailer, Distributor)',
+        href: '/admin/dealer-categories',
+        icon: Tags,
         permission: 'dealers:view',
       },
       {
@@ -435,6 +451,19 @@ function useGlobalSearchResults(query: string): SearchResult[] {
         title: product.name,
         subtitle: `Dealer Rate ${product.dealerRate}`,
         href: '/admin/discount-products',
+      })
+    )
+
+    const tradeSalesProducts = toArray(data.tradeSalesProducts).filter((product) =>
+      product.name.toLowerCase().includes(term)
+    )
+    tradeSalesProducts.slice(0, limit).forEach((product) =>
+      results.push({
+        id: product.id,
+        category: 'Trade Sales Product',
+        title: product.name,
+        subtitle: `Dealer Rate ${product.dealerRate}`,
+        href: '/admin/trade-sales-products',
       })
     )
 
