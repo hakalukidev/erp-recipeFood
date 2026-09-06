@@ -28,6 +28,21 @@ export function parsePerCtnMultiplier(perCtnBgs?: string) {
   return value > 0 ? value : 1
 }
 
+// Discount Product List — see DiscountProductRecord in types.ts. srRate/
+// tpRate are derived on the fly from dealerRate rather than stored, so an
+// edit to the commission or markup percentage always recomputes them:
+//   srRate = dealerRate * (1 + srCommissionPercent / 100)
+//   tpRate = srRate * (1 + tpPercent / 100)
+export function computeDiscountProductRates(
+  dealerRate: number,
+  srCommissionPercent: number,
+  tpPercent: number
+) {
+  const srRate = dealerRate * (1 + srCommissionPercent / 100)
+  const tpRate = srRate * (1 + tpPercent / 100)
+  return { srRate, tpRate }
+}
+
 export function formatCurrency(value: number, currency = 'BDT') {
   return new Intl.NumberFormat('en-BD', {
     style: 'currency',

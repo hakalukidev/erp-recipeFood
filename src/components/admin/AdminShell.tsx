@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  BadgePercent,
   Bell,
   Boxes,
   Calculator,
@@ -75,6 +76,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Product catalog with name, image, and price, plus stock control',
         href: '/admin/stock/overview',
         icon: Boxes,
+        permission: 'products:view',
+      },
+      {
+        label: 'Discount Product List',
+        description: 'Flat-rate/commission price list — Dealer Rate, SR commission, TP, and MRP',
+        href: '/admin/discount-products',
+        icon: BadgePercent,
         permission: 'products:view',
       },
       {
@@ -414,6 +422,19 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     )
     products.slice(0, limit).forEach((product) =>
       results.push({ id: product.id, category: 'Product', title: product.name, subtitle: product.sku, href: '/admin/stock/overview' })
+    )
+
+    const discountProducts = toArray(data.discountProducts).filter((product) =>
+      product.name.toLowerCase().includes(term)
+    )
+    discountProducts.slice(0, limit).forEach((product) =>
+      results.push({
+        id: product.id,
+        category: 'Discount Product',
+        title: product.name,
+        subtitle: `Dealer Rate ${product.dealerRate}`,
+        href: '/admin/discount-products',
+      })
     )
 
     const batches = toArray(data.batches).filter(

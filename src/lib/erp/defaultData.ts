@@ -421,6 +421,7 @@ export function createDefaultERPData(): ERPData {
         updatedAt: shiftDays(-1),
       },
     },
+    discountProducts: {},
     orders: {
       ord_1001: {
         id: 'ord_1001',

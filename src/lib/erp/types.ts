@@ -528,6 +528,61 @@ export type RateCardInput = {
   remarks?: string
 }
 
+// ---- Discount Product List -----------------------------------------------
+// A second price catalog mirroring every rate column on the printed Rate
+// Card (Raw M → Manu R → Depot P R → Depot S R → SR Com +N% → TP+N% → MRP),
+// for the flat-rate/commission-based selling chain rather than the
+// depot-invoice chain ProductRecord's six rate fields feed. Same field names
+// as ProductRecord (rawRate/manufRate/depotRate/dealerRate/mrpRate) for the
+// unit-rate columns already shared with it, plus the two percentage columns
+// unique to this flat-rate chain:
+//   rawRate              -- "Raw M" column: raw material cost per unit
+//   manufRate            -- "Manu R" column: manufacturing cost per unit
+//   depotRate            -- "Depot P R" column: what Depot pays (purchase)
+//   dealerRate           -- "Depot S R" column: what Depot charges the dealer
+//   srCommissionPercent  -- SR's cut added on top ("SR Com +N%" column)
+//   tpPercent            -- further markup to Trade Price ("TP+N%" column)
+//   mrpRate              -- end-consumer price, set independently — not a
+//     percentage step off tpRate the way srRate/tpRate are off each other
+// srRate and tpRate are derived, not stored — see computeDiscountProductRates
+// in utils.ts:
+//   srRate = dealerRate * (1 + srCommissionPercent / 100)
+//   tpRate = srRate * (1 + tpPercent / 100)
+export type DiscountProductRecord = {
+  id: string
+  name: string
+  banglaName?: string
+  category?: string
+  // Pieces per carton/bag, e.g. "06 ps = 1 bg" — same role as ProductRecord's
+  // packSize/RateCardLineItem's perCtnBgs.
+  perCtnBgs?: string
+  rawRate: number
+  manufRate: number
+  depotRate: number
+  dealerRate: number
+  srCommissionPercent: number
+  tpPercent: number
+  mrpRate: number
+  isActive?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type DiscountProductInput = {
+  name: string
+  banglaName?: string
+  category?: string
+  perCtnBgs?: string
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate: number
+  srCommissionPercent?: number
+  tpPercent?: number
+  mrpRate?: number
+  isActive?: boolean
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module — the detailed lab-test parameters. Production
 // (completeProduction) is the only source that creates these today; 'purchase'
@@ -862,6 +917,7 @@ export type ERPData = {
   users: Record<string, UserRecord>
   dealers: Record<string, DealerRecord>
   products: Record<string, ProductRecord>
+  discountProducts: Record<string, DiscountProductRecord>
   orders: Record<string, OrderRecord>
   ledgerEntries: Record<string, LedgerEntryRecord>
   chartOfAccounts: Record<string, ChartOfAccountRecord>
