@@ -497,7 +497,23 @@ export type RateCardLineItem = {
   // Maximum Retail Price — what the end consumer pays; one step past TP.
   mrpRate?: number
   perCtnBgs?: string
+  // Only meaningful when the invoice this line belongs to has
+  // saleType:'commission' and the line was picked from the Discount Product
+  // List (see DiscountProductRecord) rather than the regular Product List —
+  // the SR Commission %/TP % actually applied at billing time, copied in at
+  // save time (not looked up live) so the printed voucher stays correct even
+  // if the Discount Product List's own percentages change later. Absent/0 on
+  // a line sourced from the regular Product List.
+  srCommissionPercent?: number
+  tpPercent?: number
 }
+
+// Which pricing chain this invoice was billed under — chosen on the invoice
+// form and used to split the Sales Reports section (see buildSalesReportSummary
+// in utils.ts) into "Commission-based" vs "Others" totals. Invoices saved
+// before this field existed have no saleType at all and are reported as
+// "Unclassified" rather than silently bucketed into either side.
+export type SaleType = 'commission' | 'others'
 
 export type RateCardRecord = {
   id: string
@@ -510,6 +526,7 @@ export type RateCardRecord = {
   // Links recipientName back to a Dealer List record so name/phone can be
   // auto-filled instead of retyped.
   dealerId?: string
+  saleType?: SaleType
   items: RateCardLineItem[]
   remarks?: string
   rawRateTotal: number
@@ -533,6 +550,7 @@ export type RateCardInput = {
   date: string
   deliveryDate?: string
   dealerId?: string
+  saleType?: SaleType
   items: RateCardLineItem[]
   remarks?: string
 }

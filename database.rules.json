@@ -16,40 +16,16 @@
           }
         }
       },
-      "warehouses": {
-        ".read": "auth != null",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:delete').val() === true))"
-        }
-      },
-      "purchases": {
-        ".read": "auth != null",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:delete').val() === true))"
-        }
-      },
       "orders": {
         ".read": "auth != null",
         "$id": {
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:delete').val() === true))"
         }
       },
-      "couriers": {
-        ".read": "auth != null",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:delete').val() === true))"
-        }
-      },
       "dealers": {
         ".read": "auth != null",
         "$id": {
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:delete').val() === true))"
-        }
-      },
-      "suppliers": {
-        ".read": "auth != null",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('suppliers:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('suppliers:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('suppliers:delete').val() === true))"
         }
       },
       "expenses": {
@@ -59,18 +35,6 @@
         }
       },
       "investors": {
-        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
-        }
-      },
-      "sellers": {
-        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
-        "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
-        }
-      },
-      "sellerTransactions": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
@@ -109,31 +73,11 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
-      "purchaseRequisitions": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "purchaseOrders": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "purchaseReturns": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
       "salesReturns": {
         ".read": "auth != null",
         ".write": "auth != null"
       },
       "collections": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "warehouseStocks": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "stockTransfers": {
         ".read": "auth != null",
         ".write": "auth != null"
       },
@@ -146,14 +90,6 @@
         ".write": "auth != null"
       },
       "stockCounts": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "billOfMaterials": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "productionOrders": {
         ".read": "auth != null",
         ".write": "auth != null"
       },
@@ -173,18 +109,6 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
-      "routes": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "routeVisitSchedules": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
-      "customerVisits": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      },
       "salesTargets": {
         ".read": "auth != null",
         ".write": "auth != null"
@@ -201,7 +125,11 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
-      "tasks": {
+      "tradeSalesProducts": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "dealerCategories": {
         ".read": "auth != null",
         ".write": "auth != null"
       },

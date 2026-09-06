@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -34,17 +35,27 @@ import {
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { RateCardLineItem, RateCardRecord } from '@/lib/erp/types'
-import { createId, formatDate, parsePerCtnMultiplier, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import type { RateCardLineItem, RateCardRecord, SaleType } from '@/lib/erp/types'
+import {
+  computeDiscountProductRates,
+  createId,
+  formatDate,
+  parsePerCtnMultiplier,
+  sortByCreatedAtDesc,
+  toArray,
+} from '@/lib/erp/utils'
 
-// Company letterhead used on every printed voucher — matches the client's
-// paper invoices (Moyner Mor / Mymensingh Sadar office), not the Dhaka
-// office used on the Price Quotation screen.
-const COMPANY_NAME = 'Recipe Food Products Limited'
-const COMPANY_ADDRESS = 'Moyner Mor, Mymensingh Sadar, Mymensingh'
-const COMPANY_EMAIL = 'recipeinfo2020@gmail.com'
-const COMPANY_HELPLINE = '+8801790787093'
+// Sales Reports (see /admin/reports) splits invoiced sales by this — a
+// dealer/product's numbers only ever belong to one bucket per invoice, chosen
+// here at billing time since nothing on the line items themselves says which
+// catalog/pricing chain the sale actually went through.
+const SALE_TYPE_LABELS: Record<SaleType, string> = {
+  commission: 'Commission-based',
+  others: 'Others / Direct',
+}
 
 const RATE_COLUMN_LABELS: Record<'raw' | 'manuf' | 'depot' | 'dealer', { unit: string; total: string }> = {
   raw: { unit: 'Raw M', total: 'Raw Rate' },
@@ -65,6 +76,12 @@ type LineItemForm = {
   tpRate: string
   mrpRate: string
   perCtnBgs: string
+  // Only set (non-'0') on a line picked from the Discount Product List under
+  // a commission-based sale type — see the Sale type selector in the invoice
+  // form. Display-only: the totals below already run entirely off the six
+  // rate fields above, which have the commission baked in at selection time.
+  srCommissionPercent: string
+  tpPercent: string
 }
 
 function emptyLineItem(): LineItemForm {
@@ -80,6 +97,8 @@ function emptyLineItem(): LineItemForm {
     tpRate: '0',
     mrpRate: '0',
     perCtnBgs: '',
+    srCommissionPercent: '0',
+    tpPercent: '0',
   }
 }
 
@@ -89,6 +108,7 @@ type RateCardForm = {
   date: string
   deliveryDate: string
   dealerId: string
+  saleType: SaleType
   remarks: string
   items: LineItemForm[]
 }
@@ -100,6 +120,7 @@ function emptyRateCardForm(): RateCardForm {
     date: new Date().toISOString().slice(0, 10),
     deliveryDate: new Date().toISOString().slice(0, 10),
     dealerId: '',
+    saleType: 'others',
     remarks: '',
     items: [emptyLineItem()],
   }
@@ -118,7 +139,25 @@ function toLineItemForm(item: RateCardLineItem): LineItemForm {
     tpRate: String(item.tpRate ?? 0),
     mrpRate: String(item.mrpRate ?? 0),
     perCtnBgs: item.perCtnBgs ?? '',
+    srCommissionPercent: String(item.srCommissionPercent ?? 0),
+    tpPercent: String(item.tpPercent ?? 0),
   }
+}
+
+// Company voucher's dealer column reads "SR Rate"/"SR Amount" on a
+// commission-based invoice instead of the generic Depot-chain "Del Rate" —
+// same column, just labelled for what it actually holds on this sale type.
+function dealerColumnLabel(saleType: SaleType | undefined) {
+  return saleType === 'commission' ? { unit: 'SR Rate', total: 'SR Amount' } : RATE_COLUMN_LABELS.dealer
+}
+
+// Small inline note appended to a row's product name on any of the three
+// printed vouchers, so the commission actually billed is visible on the
+// document itself — not just in the admin form.
+function commissionNote(item: RateCardLineItem) {
+  return item.srCommissionPercent
+    ? ` <span style="color:#0f766e;font-weight:600;">(SR +${item.srCommissionPercent}%)</span>`
+    : ''
 }
 
 function formatAmount(value: number) {
@@ -195,7 +234,7 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}</td>
+        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
         <td class="numeric">${item.qty}</td>
         ${columns.map((column) => `<td class="numeric">${formatAmount(rateValue(item, column))}</td>`).join('')}
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
@@ -256,7 +295,7 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
         <p class="title">${escapeHtml(COMPANY_NAME)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
-        <p class="subtitle">Company (internal) Voucher</p>
+        <p class="subtitle">Company (internal) Voucher${rateCard.saleType === 'commission' ? ' &middot; Commission-based Sale' : ''}</p>
         <table class="meta">
           <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
           <tr><td>Invoice No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
@@ -269,9 +308,9 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
               <th>SL</th>
               <th>Description of Products</th>
               <th>QTY</th>
-              ${columns.map((column) => `<th>${RATE_COLUMN_LABELS[column].unit}</th>`).join('')}
+              ${columns.map((column) => `<th>${column === 'dealer' ? dealerColumnLabel(rateCard.saleType).unit : RATE_COLUMN_LABELS[column].unit}</th>`).join('')}
               <th>Per Ctn/Bgs</th>
-              ${columns.map((column) => `<th>${RATE_COLUMN_LABELS[column].total}</th>`).join('')}
+              ${columns.map((column) => `<th>${column === 'dealer' ? dealerColumnLabel(rateCard.saleType).total : RATE_COLUMN_LABELS[column].total}</th>`).join('')}
             </tr>
           </thead>
           <tbody>${rows}${totalsRow}</tbody>
@@ -286,6 +325,7 @@ function buildRateCardHtml(rateCard: RateCardRecord) {
 const PARTY_BOX_STYLES = `
           .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
           .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
+          .subtitle { text-align: center; color: #4b5563; font-size: 13px; margin: 10px 0 0; }
           .top { display: flex; justify-content: flex-start; margin-top: 12px; }
           .meta { border: 1px solid #d1d5db; border-collapse: collapse; width: 55%; }
           .meta td { border: 1px solid #d1d5db; padding: 4px 8px; font-size: 12.5px; }
@@ -315,7 +355,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}</td>
+        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
         <td class="numeric">${item.qty}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
         <td class="numeric">${formatAmount(item.tpRate ?? 0)}</td>
@@ -343,6 +383,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
         <p class="title">${escapeHtml(COMPANY_NAME)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+        ${rateCard.saleType === 'commission' ? '<p class="subtitle">Commission-based Sale</p>' : ''}
 
         <div class="top">
           <table class="meta">
@@ -372,7 +413,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord) {
               <th>SL NO</th>
               <th>Description of Products</th>
               <th>QTY</th>
-              <th>DP</th>
+              <th>${rateCard.saleType === 'commission' ? 'SR Rate' : 'DP'}</th>
               <th>TP</th>
               <th>Per Ctn/Bgs</th>
               <th>Depot Amount</th>
@@ -406,7 +447,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord) {
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}</td>
+        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
         <td class="numeric">${item.qty}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
@@ -435,6 +476,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord) {
         <p class="title">${escapeHtml(COMPANY_NAME)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+        ${rateCard.saleType === 'commission' ? '<p class="subtitle">Commission-based Sale</p>' : ''}
 
         <div class="top">
           <table class="meta">
@@ -495,6 +537,7 @@ export default function RateCardPage() {
   const { data, saveRateCard, deleteRateCard } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
   const products = useMemo(() => toArray(data?.products), [data?.products])
+  const discountProducts = useMemo(() => toArray(data?.discountProducts), [data?.discountProducts])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const productOptions: ComboboxOption[] = useMemo(
     () =>
@@ -504,6 +547,19 @@ export default function RateCardPage() {
         sublabel: product.category,
       })),
     [products]
+  )
+  // Product picker source for a commission-based invoice — see the Sale
+  // type selector below; picking a line here (instead of from productOptions)
+  // pulls its rates through the SR Commission %/TP % chain (see
+  // computeDiscountProductRates) instead of the Product List's own rates.
+  const discountProductOptions: ComboboxOption[] = useMemo(
+    () =>
+      discountProducts.map((product) => ({
+        value: product.id,
+        label: product.name,
+        sublabel: product.category,
+      })),
+    [discountProducts]
   )
   const dealerOptions: ComboboxOption[] = useMemo(
     () =>
@@ -549,6 +605,7 @@ export default function RateCardPage() {
       date: card.date,
       deliveryDate: card.deliveryDate || card.date,
       dealerId: card.dealerId ?? '',
+      saleType: card.saleType ?? 'others',
       remarks: card.remarks ?? '',
       items: card.items.map(toLineItemForm),
     })
@@ -597,6 +654,8 @@ export default function RateCardPage() {
         tpRate: Number(item.tpRate) || 0,
         mrpRate: Number(item.mrpRate) || 0,
         perCtnBgs: item.perCtnBgs.trim() || undefined,
+        srCommissionPercent: Number(item.srCommissionPercent) || 0,
+        tpPercent: Number(item.tpPercent) || 0,
       }))
 
     if (items.length === 0) {
@@ -613,6 +672,7 @@ export default function RateCardPage() {
           date: form.date,
           deliveryDate: form.deliveryDate || undefined,
           dealerId: form.dealerId || undefined,
+          saleType: form.saleType,
           remarks: form.remarks.trim() || undefined,
           items,
         },
@@ -705,6 +765,7 @@ export default function RateCardPage() {
                     <TableHead>Invoice No</TableHead>
                     <TableHead>Dealer</TableHead>
                     <TableHead>Date</TableHead>
+                    <TableHead>Sale Type</TableHead>
                     <TableHead className="text-right">Goods Amount</TableHead>
                     <TableHead className="text-right">Depot Net Profit</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -716,6 +777,11 @@ export default function RateCardPage() {
                       <TableCell className="font-medium">{card.invoiceNo}</TableCell>
                       <TableCell>{card.recipientName}</TableCell>
                       <TableCell>{formatDate(card.date)}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-normal">
+                          {card.saleType ? SALE_TYPE_LABELS[card.saleType] : 'Unclassified'}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal)}</TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal - card.depotRateTotal)}</TableCell>
                       <TableCell className="text-right">
@@ -820,6 +886,26 @@ export default function RateCardPage() {
                   className="bg-background"
                 />
               </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Sale type</label>
+                <Select
+                  value={form.saleType}
+                  onValueChange={(value) => setForm((current) => ({ ...current, saleType: value as SaleType }))}
+                >
+                  <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(SALE_TYPE_LABELS) as SaleType[]).map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {SALE_TYPE_LABELS[type]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Commission-based switches the product lines below to the Discount Product List and feeds the
+                  Commission vs Others split in Sales Reports.
+                </p>
+              </div>
             </div>
 
             {/* Cards, not a <Table>, on purpose — the Combobox's dropdown is
@@ -843,9 +929,38 @@ export default function RateCardPage() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <Combobox
-                          options={productOptions}
+                          options={form.saleType === 'commission' ? discountProductOptions : productOptions}
                           value={item.productId}
                           onChange={(value) => {
+                            // Commission-based sale — pick from the Discount Product List
+                            // instead, and run the SR Commission %/TP % chain (see
+                            // computeDiscountProductRates) so the Dealer/TP rates below are
+                            // fully replaced with the commission-inclusive rates, not merely
+                            // prefilled once like the regular-product branch below.
+                            if (form.saleType === 'commission') {
+                              const selected = discountProducts.find((product) => product.id === value)
+                              if (!selected) return
+                              const { srRate, tpRate } = computeDiscountProductRates(
+                                selected.dealerRate,
+                                selected.srCommissionPercent,
+                                selected.tpPercent
+                              )
+                              updateItem(item.key, {
+                                productId: value,
+                                productName: selected.name,
+                                perCtnBgs: selected.perCtnBgs ?? '',
+                                rawRate: String(selected.rawRate),
+                                manufRate: String(selected.manufRate),
+                                depotRate: String(selected.depotRate),
+                                dealerRate: String(Number(srRate.toFixed(2))),
+                                tpRate: String(Number(tpRate.toFixed(2))),
+                                mrpRate: String(selected.mrpRate),
+                                srCommissionPercent: String(selected.srCommissionPercent),
+                                tpPercent: String(selected.tpPercent),
+                              })
+                              return
+                            }
+
                             const selected = products.find((product) => product.id === value)
                             updateItem(item.key, {
                               productId: value,
@@ -862,10 +977,19 @@ export default function RateCardPage() {
                               dealerRate: item.dealerRate === '0' ? String(selected?.dealerRate ?? 0) : item.dealerRate,
                               tpRate: item.tpRate === '0' ? String(selected?.tpRate ?? 0) : item.tpRate,
                               mrpRate: item.mrpRate === '0' ? String(selected?.mrpRate ?? 0) : item.mrpRate,
+                              srCommissionPercent: '0',
+                              tpPercent: '0',
                             })
                           }}
-                          placeholder="Select a product"
-                          searchPlaceholder="Search products..."
+                          placeholder={form.saleType === 'commission' ? 'Select a discount product' : 'Select a product'}
+                          searchPlaceholder={
+                            form.saleType === 'commission' ? 'Search discount products...' : 'Search products...'
+                          }
+                          emptyText={
+                            form.saleType === 'commission'
+                              ? 'No discount products found — add one in Discount Product List first.'
+                              : undefined
+                          }
                         />
                       </div>
                       <div className="hidden shrink-0 text-right sm:block">
@@ -951,7 +1075,9 @@ export default function RateCardPage() {
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-sm text-muted-foreground">Dealer</label>
+                            <label className="text-sm text-muted-foreground">
+                              {form.saleType === 'commission' ? 'SR Rate' : 'Dealer'}
+                            </label>
                             <Input
                               type="number"
                               value={item.dealerRate}
@@ -960,6 +1086,12 @@ export default function RateCardPage() {
                             />
                           </div>
                         </div>
+                        {form.saleType === 'commission' && item.srCommissionPercent !== '0' ? (
+                          <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                            Includes {item.srCommissionPercent}% SR commission over Depot S R
+                            {Number(item.tpPercent) ? ` · TP +${item.tpPercent}%` : ''}
+                          </p>
+                        ) : null}
                       </div>
 
                       <div className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4">
@@ -1003,8 +1135,9 @@ export default function RateCardPage() {
                 <Plus className="mr-2 h-4 w-4" /> Add product line
               </Button>
               <p className="text-xs text-muted-foreground">
-                Product missing from the list? Add it first from Product List. Same product twice (e.g. a
-                different bag/carton size) is fine — add a second line.
+                {form.saleType === 'commission'
+                  ? 'Products are pulled from Discount Product List — selecting one auto-fills the SR Rate/TP with the commission already applied.'
+                  : 'Product missing from the list? Add it first from Product List. Same product twice (e.g. a different bag/carton size) is fine — add a second line.'}
               </p>
             </div>
 

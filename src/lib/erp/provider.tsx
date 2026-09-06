@@ -200,6 +200,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'roles',
   'users',
   'dealers',
+  'dealerCategories',
   'products',
   'orders',
   'ledgerEntries',
@@ -4129,6 +4130,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         tpRate: Number(item.tpRate) || 0,
         mrpRate: Number(item.mrpRate) || 0,
         ...(item.perCtnBgs?.trim() ? { perCtnBgs: item.perCtnBgs.trim() } : {}),
+        ...(item.srCommissionPercent ? { srCommissionPercent: Number(item.srCommissionPercent) || 0 } : {}),
+        ...(item.tpPercent ? { tpPercent: Number(item.tpPercent) || 0 } : {}),
       }))
     if (items.length === 0) {
       throw new Error('Add at least one product line.')
@@ -4146,6 +4149,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: input.date,
       deliveryDate: input.deliveryDate?.trim() ?? '',
       dealerId: input.dealerId ?? '',
+      ...(input.saleType ? { saleType: input.saleType } : {}),
       items,
       remarks: input.remarks?.trim() ?? '',
       ...totals,

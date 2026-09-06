@@ -236,6 +236,90 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   }
 }
 
+export type DealerSalesReportRow = {
+  dealerId: string
+  dealerName: string
+  invoiceCount: number
+  totalAmount: number
+  commissionAmount: number
+  othersAmount: number
+  unclassifiedAmount: number
+}
+
+export type ProductSalesReportRow = {
+  productId: string
+  productName: string
+  lineCount: number
+  qty: number
+  totalAmount: number
+}
+
+// Sales Reports (Section — Reports/admin/reports) — built entirely off saved
+// Invoices (RateCardRecord), the only sales document actually reachable from
+// the UI today (the OrderRecord Sales Order module isn't wired up yet — see
+// the comment on ProductRecord.rawRate in types.ts). "Sale amount" throughout
+// is dealerRateTotal, i.e. the Goods Amount a dealer is actually billed —
+// same figure the Invoice list's "Total dealer sales value" card already
+// uses. commission/others/unclassified split by card.saleType, set on the
+// Invoice form (see SALE_TYPE_LABELS in the rate-card page) — invoices saved
+// before that field existed have no saleType and land in "unclassified"
+// rather than being guessed into either bucket.
+export function buildSalesReportSummary(data: ERPData | null) {
+  const rateCards = toArray(data?.rateCards)
+
+  const bySaleType = { commission: 0, others: 0, unclassified: 0 }
+  const dealerMap = new Map<string, DealerSalesReportRow>()
+  const productMap = new Map<string, ProductSalesReportRow>()
+
+  for (const card of rateCards) {
+    const amount = card.dealerRateTotal
+    const bucket = card.saleType === 'commission' ? 'commission' : card.saleType === 'others' ? 'others' : 'unclassified'
+    bySaleType[bucket] += amount
+
+    const dealerKey = card.dealerId || card.recipientName
+    const dealerRow: DealerSalesReportRow = dealerMap.get(dealerKey) ?? {
+      dealerId: dealerKey,
+      dealerName: card.recipientName,
+      invoiceCount: 0,
+      totalAmount: 0,
+      commissionAmount: 0,
+      othersAmount: 0,
+      unclassifiedAmount: 0,
+    }
+    dealerRow.invoiceCount += 1
+    dealerRow.totalAmount += amount
+    if (bucket === 'commission') dealerRow.commissionAmount += amount
+    else if (bucket === 'others') dealerRow.othersAmount += amount
+    else dealerRow.unclassifiedAmount += amount
+    dealerMap.set(dealerKey, dealerRow)
+
+    for (const item of card.items) {
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const lineAmount = pieces * item.dealerRate
+      const productKey = item.productId || item.productName
+      const productRow: ProductSalesReportRow = productMap.get(productKey) ?? {
+        productId: productKey,
+        productName: item.productName,
+        lineCount: 0,
+        qty: 0,
+        totalAmount: 0,
+      }
+      productRow.lineCount += 1
+      productRow.qty += pieces
+      productRow.totalAmount += lineAmount
+      productMap.set(productKey, productRow)
+    }
+  }
+
+  return {
+    totalInvoices: rateCards.length,
+    totalAmount: rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0),
+    bySaleType,
+    dealers: Array.from(dealerMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+    products: Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+  }
+}
+
 export function buildUserReport(data: ERPData | null) {
   const users = toArray(data?.users)
   const orders = toArray(data?.orders)
