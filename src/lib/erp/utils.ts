@@ -419,10 +419,45 @@ export async function parseSpreadsheetFile(file: File): Promise<{ headers: strin
   }
 }
 
+// jsPDF's built-in fonts (Helvetica etc.) only cover WinAnsi/Latin glyphs, so
+// any Bangla text (dealer names, product names, addresses) exported to PDF
+// renders as garbled boxes/mojibake. We lazy-load a Unicode font (Noto Sans
+// Bengali, covers both Bangla and Latin) from /public and register it with
+// jsPDF only when a PDF export actually runs, so the ~450KB font file never
+// touches the main JS bundle.
+const PDF_FONT_NAME = 'NotoSansBengali'
+const PDF_FONT_URL = '/fonts/NotoSansBengali.ttf'
+let pdfFontBase64Promise: Promise<string> | null = null
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function loadPdfFontBase64() {
+  if (!pdfFontBase64Promise) {
+    pdfFontBase64Promise = fetch(PDF_FONT_URL)
+      .then((response) => response.arrayBuffer())
+      .then(arrayBufferToBase64)
+  }
+  return pdfFontBase64Promise
+}
+
 export async function exportPdf(filename: string, title: string, headers: string[], rows: (string | number)[][]) {
   const { default: JsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
   const doc = new JsPDF({ orientation: rows.length && headers.length > 6 ? 'landscape' : 'portrait' })
+
+  const fontBase64 = await loadPdfFontBase64()
+  doc.addFileToVFS(`${PDF_FONT_NAME}.ttf`, fontBase64)
+  doc.addFont(`${PDF_FONT_NAME}.ttf`, PDF_FONT_NAME, 'normal')
+  doc.addFont(`${PDF_FONT_NAME}.ttf`, PDF_FONT_NAME, 'bold')
+  doc.setFont(PDF_FONT_NAME)
 
   doc.setFontSize(14)
   doc.text(title, 14, 16)
@@ -430,8 +465,8 @@ export async function exportPdf(filename: string, title: string, headers: string
     head: [headers],
     body: rows.map((row) => row.map((value) => String(value))),
     startY: 22,
-    styles: { fontSize: 8 },
-    headStyles: { fillColor: [30, 41, 59] },
+    styles: { font: PDF_FONT_NAME, fontSize: 8 },
+    headStyles: { fillColor: [30, 41, 59], font: PDF_FONT_NAME },
   })
 
   doc.save(filename)

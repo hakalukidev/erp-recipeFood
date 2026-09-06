@@ -6,11 +6,19 @@ import { BadgePercent, FileBarChart, Package, Receipt, Search, Store } from 'luc
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { buildSalesReportSummary, formatCurrency } from '@/lib/erp/utils'
+import type { SaleType } from '@/lib/erp/types'
+
+const SALE_TYPE_LABELS: Record<SaleType, string> = {
+  commission: 'Commission-based',
+  others: 'Others / Direct',
+}
 
 // Section — Sales Reports. Built entirely off saved Invoices (RateCardRecord,
 // see the "Invoice" screen at /admin/rate-card) — the only sales document
@@ -19,12 +27,66 @@ import { buildSalesReportSummary, formatCurrency } from '@/lib/erp/utils'
 // derived, and the "Sale type" field on the Invoice form for how a new
 // invoice gets tagged Commission-based vs Others going forward.
 export function SalesReportsScreen() {
-  const { data } = useERP()
+  const { data, classifyRateCardSaleType } = useERP()
   const currency = data?.settings.currency
   const summary = useMemo(() => buildSalesReportSummary(data), [data])
 
   const [dealerQuery, setDealerQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
+
+  // Individual invoices behind the aggregated "Unclassified" figure above —
+  // buildSalesReportSummary only rolls these up per dealer/product, so the
+  // classify-in-place list below reads straight off data.rateCards instead.
+  const unclassifiedCards = useMemo(() => {
+    return Object.values(data?.rateCards ?? {})
+      .filter((card) => card.saleType !== 'commission' && card.saleType !== 'others')
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+  }, [data?.rateCards])
+
+  const [pendingType, setPendingType] = useState<Record<string, SaleType>>({})
+  const [bulkType, setBulkType] = useState<SaleType | ''>('')
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [classifyFeedback, setClassifyFeedback] = useState<string | null>(null)
+
+  async function handleClassifyOne(rateCardId: string, invoiceNo: string) {
+    const saleType = pendingType[rateCardId]
+    if (!saleType) return
+    setClassifyFeedback(null)
+    setSavingId(rateCardId)
+    try {
+      await classifyRateCardSaleType(rateCardId, saleType)
+      setClassifyFeedback(`Invoice ${invoiceNo} classified as ${SALE_TYPE_LABELS[saleType]}.`)
+    } catch (reason) {
+      setClassifyFeedback(reason instanceof Error ? reason.message : 'Unable to classify invoice.')
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  async function handleClassifyAll() {
+    if (!bulkType || unclassifiedCards.length === 0) return
+    if (
+      !window.confirm(
+        `Mark all ${unclassifiedCards.length} unclassified invoice(s) as "${SALE_TYPE_LABELS[bulkType]}"? This cannot be undone in bulk.`
+      )
+    ) {
+      return
+    }
+    setClassifyFeedback(null)
+    setBulkSaving(true)
+    try {
+      for (const card of unclassifiedCards) {
+        await classifyRateCardSaleType(card.id, bulkType)
+      }
+      setClassifyFeedback(`${unclassifiedCards.length} invoice(s) classified as ${SALE_TYPE_LABELS[bulkType]}.`)
+      setBulkType('')
+    } catch (reason) {
+      setClassifyFeedback(reason instanceof Error ? reason.message : 'Unable to classify all invoices.')
+    } finally {
+      setBulkSaving(false)
+    }
+  }
 
   const filteredDealers = useMemo(() => {
     const normalized = dealerQuery.trim().toLowerCase()
@@ -222,10 +284,93 @@ export function SalesReportsScreen() {
         </Card>
 
         {hasUnclassified ? (
-          <p className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="outline" className="font-normal">Unclassified</Badge>
-            Invoices saved before the Sale Type field was added — edit and re-save one from the Invoice screen to classify it.
-          </p>
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Badge variant="outline" className="font-normal">Unclassified</Badge>
+                  Classify invoices
+                </CardTitle>
+                <CardDescription>
+                  {unclassifiedCards.length} invoice(s) were saved before the Sale Type field existed. Pick a type for
+                  each below, or classify all of them at once.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={bulkType || undefined} onValueChange={(value) => setBulkType(value as SaleType)}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="Classify all as…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(SALE_TYPE_LABELS) as SaleType[]).map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {SALE_TYPE_LABELS[type]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button onClick={handleClassifyAll} disabled={!bulkType || bulkSaving}>
+                  {bulkSaving ? 'Applying…' : 'Apply to all'}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {classifyFeedback ? <p className="text-sm text-muted-foreground">{classifyFeedback}</p> : null}
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Invoice</TableHead>
+                      <TableHead>Dealer</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Sale type</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unclassifiedCards.map((card) => (
+                      <TableRow key={card.id}>
+                        <TableCell className="whitespace-nowrap">{card.date}</TableCell>
+                        <TableCell className="font-medium">{card.invoiceNo}</TableCell>
+                        <TableCell>{card.recipientName}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(card.dealerRateTotal, currency)}</TableCell>
+                        <TableCell>
+                          <Select
+                            value={pendingType[card.id] ?? undefined}
+                            onValueChange={(value) =>
+                              setPendingType((current) => ({ ...current, [card.id]: value as SaleType }))
+                            }
+                          >
+                            <SelectTrigger className="w-44">
+                              <SelectValue placeholder="Select type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(Object.keys(SALE_TYPE_LABELS) as SaleType[]).map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {SALE_TYPE_LABELS[type]}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!pendingType[card.id] || savingId === card.id}
+                            onClick={() => handleClassifyOne(card.id, card.invoiceNo)}
+                          >
+                            {savingId === card.id ? 'Saving…' : 'Save'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
         ) : null}
       </div>
     </AdminShell>

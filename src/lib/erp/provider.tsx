@@ -65,6 +65,7 @@ import type {
   RateCardInput,
   RateCardLineItem,
   RateCardRecord,
+  SaleType,
   RoleInput,
   RoleRecord,
   SalesReturnInput,
@@ -169,6 +170,7 @@ type ERPContextValue = {
   recordBankTransaction: (input: BankTransactionInput) => Promise<string>
   saveRateCard: (input: RateCardInput, rateCardId?: string) => Promise<string>
   deleteRateCard: (rateCardId: string) => Promise<void>
+  classifyRateCardSaleType: (rateCardId: string, saleType: SaleType) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
 }
 
@@ -4190,6 +4192,32 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('ratecard_deleted', 'sales', `Deleted rate card ${rateCard.invoiceNo}.`)
   }
 
+  // Bulk-classify helper for the Sales Reports "Unclassified" list — sets
+  // saleType on a legacy rate card (saved before that field existed) without
+  // touching its items/rates, unlike saveRateCard which expects a full
+  // RateCardInput.
+  async function classifyRateCardSaleType(rateCardId: string, saleType: SaleType) {
+    if (!data) {
+      return
+    }
+
+    const rateCard = data.rateCards[rateCardId]
+    if (!rateCard) {
+      throw new Error('Rate card not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`rateCards/${rateCardId}/saleType`]: saleType,
+      [`rateCards/${rateCardId}/updatedAt`]: new Date().toISOString(),
+    })
+    await writeActivity(
+      'ratecard_updated',
+      'sales',
+      `Classified rate card ${rateCard.invoiceNo} as ${saleType === 'commission' ? 'Commission-based' : 'Others'}.`
+    )
+  }
+
   const value = useMemo<ERPContextValue>(
     () => ({
       data,
@@ -4253,6 +4281,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recordBankTransaction,
       saveRateCard,
       deleteRateCard,
+      classifyRateCardSaleType,
       saveSettings,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
