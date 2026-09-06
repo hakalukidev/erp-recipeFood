@@ -28,19 +28,24 @@ export function parsePerCtnMultiplier(perCtnBgs?: string) {
   return value > 0 ? value : 1
 }
 
-// Discount Product List — see DiscountProductRecord in types.ts. srRate/
-// tpRate are derived on the fly from dealerRate rather than stored, so an
-// edit to the commission or markup percentage always recomputes them:
-//   srRate = dealerRate * (1 + srCommissionPercent / 100)
-//   tpRate = srRate * (1 + tpPercent / 100)
+// Discount Product List — see DiscountProductRecord in types.ts. Every rate
+// past Depot P R is a percentage step off the one before it, so a single
+// entry point recomputes the whole chain whenever any rate/percentage
+// changes — used both for the live on-screen preview and for what actually
+// gets saved (see saveDiscountProduct in provider.tsx):
+//   dealerRate = depotRate * (1 + depotPercent / 100)      -- "Depot S R"
+//   srRate     = dealerRate * (1 + srCommissionPercent / 100)
+//   tpRate     = srRate * (1 + tpPercent / 100)
 export function computeDiscountProductRates(
-  dealerRate: number,
+  depotRate: number,
+  depotPercent: number,
   srCommissionPercent: number,
   tpPercent: number
 ) {
+  const dealerRate = depotRate * (1 + depotPercent / 100)
   const srRate = dealerRate * (1 + srCommissionPercent / 100)
   const tpRate = srRate * (1 + tpPercent / 100)
-  return { srRate, tpRate }
+  return { dealerRate, srRate, tpRate }
 }
 
 export function formatCurrency(value: number, currency = 'BDT') {

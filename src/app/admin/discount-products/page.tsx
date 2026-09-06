@@ -21,8 +21,9 @@ import type { DiscountProductInput, DiscountProductRecord } from '@/lib/erp/type
 import { computeDiscountProductRates, formatCurrency, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 
 // Discount Product List — see DiscountProductRecord in types.ts for the field
-// meanings and computeDiscountProductRates in utils.ts for how SR Rate/TP
-// Rate are derived from Dealer Rate rather than stored.
+// meanings and computeDiscountProductRates in utils.ts for how Depot S R/SR
+// Rate/TP Rate are all derived percentage steps rather than typed in
+// directly (only Depot P R and MRP are manual entries).
 type DiscountProductFormState = {
   name: string
   banglaName: string
@@ -31,7 +32,7 @@ type DiscountProductFormState = {
   rawRate: string
   manufRate: string
   depotRate: string
-  dealerRate: string
+  depotPercent: string
   srCommissionPercent: string
   tpPercent: string
   mrpRate: string
@@ -45,7 +46,7 @@ const emptyForm: DiscountProductFormState = {
   rawRate: '0',
   manufRate: '0',
   depotRate: '0',
-  dealerRate: '0',
+  depotPercent: '5',
   srCommissionPercent: '8',
   tpPercent: '0',
   mrpRate: '0',
@@ -60,7 +61,7 @@ function formFromProduct(product: DiscountProductRecord): DiscountProductFormSta
     rawRate: String(product.rawRate),
     manufRate: String(product.manufRate),
     depotRate: String(product.depotRate),
-    dealerRate: String(product.dealerRate),
+    depotPercent: String(product.depotPercent),
     srCommissionPercent: String(product.srCommissionPercent),
     tpPercent: String(product.tpPercent),
     mrpRate: String(product.mrpRate),
@@ -99,6 +100,7 @@ export default function DiscountProductsPage() {
     'Raw M',
     'Manu R',
     'Depot P R',
+    'Depot %',
     'Depot S R',
     'SR Com %',
     'SR Rate',
@@ -109,8 +111,9 @@ export default function DiscountProductsPage() {
   const exportRows = useMemo(
     () =>
       filteredProducts.map((product) => {
-        const { srRate, tpRate } = computeDiscountProductRates(
-          product.dealerRate,
+        const { dealerRate, srRate, tpRate } = computeDiscountProductRates(
+          product.depotRate,
+          product.depotPercent,
           product.srCommissionPercent,
           product.tpPercent
         )
@@ -120,7 +123,8 @@ export default function DiscountProductsPage() {
           product.rawRate,
           product.manufRate,
           product.depotRate,
-          product.dealerRate,
+          product.depotPercent,
+          Number(dealerRate.toFixed(2)),
           product.srCommissionPercent,
           Number(srRate.toFixed(2)),
           product.tpPercent,
@@ -157,7 +161,7 @@ export default function DiscountProductsPage() {
       rawRate: parseAmount(form.rawRate),
       manufRate: parseAmount(form.manufRate),
       depotRate: parseAmount(form.depotRate),
-      dealerRate: parseAmount(form.dealerRate),
+      depotPercent: parseAmount(form.depotPercent),
       srCommissionPercent: parseAmount(form.srCommissionPercent),
       tpPercent: parseAmount(form.tpPercent),
       mrpRate: parseAmount(form.mrpRate),
@@ -186,7 +190,7 @@ export default function DiscountProductsPage() {
   }
 
   return (
-    <AdminShell active="Discount Product List">
+    <AdminShell active="Discount Product List" fullWidth>
       <div className="space-y-6">
         <Card className="w-full max-w-xs border-border/70 shadow-sm">
           <CardContent className="p-5">
@@ -207,8 +211,8 @@ export default function DiscountProductsPage() {
             <div>
               <CardTitle>Discount product list</CardTitle>
               <CardDescription>
-                Products sold flat-rate/commission — Depot skipped. SR Rate and TP Rate are computed live from Dealer
-                Rate, SR commission %, and TP %.
+                Only Depot P R and MRP are typed in directly — Depot S R, SR Rate, and TP Rate are each computed live
+                as a percentage step off the rate before it.
               </CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
@@ -232,12 +236,13 @@ export default function DiscountProductsPage() {
             <div className="overflow-x-auto rounded-2xl border border-border/70">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableRow className="bg-muted/40 hover:bg-muted/40 [&>th]:whitespace-nowrap">
                     <TableHead>Description of Products</TableHead>
                     <TableHead>Per Ctn/Bgs</TableHead>
                     <TableHead className="text-right">Raw M</TableHead>
                     <TableHead className="text-right">Manu R</TableHead>
                     <TableHead className="text-right">Depot P R</TableHead>
+                    <TableHead className="text-right">Depot %</TableHead>
                     <TableHead className="text-right">Depot S R</TableHead>
                     <TableHead className="text-right">SR Com %</TableHead>
                     <TableHead className="text-right">SR Rate</TableHead>
@@ -249,8 +254,9 @@ export default function DiscountProductsPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredProducts.map((product) => {
-                    const { srRate, tpRate } = computeDiscountProductRates(
-                      product.dealerRate,
+                    const { dealerRate, srRate, tpRate } = computeDiscountProductRates(
+                      product.depotRate,
+                      product.depotPercent,
                       product.srCommissionPercent,
                       product.tpPercent
                     )
@@ -271,7 +277,8 @@ export default function DiscountProductsPage() {
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.rawRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.manufRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.depotRate)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(product.dealerRate)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{product.depotPercent}%</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(dealerRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{product.srCommissionPercent}%</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(srRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{product.tpPercent}%</TableCell>
@@ -304,7 +311,7 @@ export default function DiscountProductsPage() {
                   })}
                   {filteredProducts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={13} className="h-28 text-center text-muted-foreground">
                         No discount products found.
                       </TableCell>
                     </TableRow>
@@ -321,8 +328,8 @@ export default function DiscountProductsPage() {
           <DialogHeader>
             <DialogTitle>{editingProduct ? 'Edit discount product' : 'Add discount product'}</DialogTitle>
             <DialogDescription>
-              Raw M → Manu R → Depot P R → Depot S R (Delar Rate) is the cost chain; SR Rate and TP Rate are then
-              computed automatically from the commission and markup percentages below.
+              Only Depot P R and MRP are typed in — Depot S R, SR Rate, and TP Rate are each computed automatically
+              as a percentage step off the rate before it.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmit}>
@@ -394,12 +401,12 @@ export default function DiscountProductsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Depot S R (Delar Rate)</p>
+                <p className="text-sm font-medium text-foreground">Depot %</p>
                 <Input
                   inputMode="numeric"
-                  placeholder="0"
-                  value={form.dealerRate}
-                  onChange={(event) => setForm((current) => ({ ...current, dealerRate: event.target.value }))}
+                  placeholder="5"
+                  value={form.depotPercent}
+                  onChange={(event) => setForm((current) => ({ ...current, depotPercent: event.target.value }))}
                 />
               </div>
               <div className="space-y-2">
@@ -431,13 +438,18 @@ export default function DiscountProductsPage() {
               </div>
             </div>
             {(() => {
-              const { srRate, tpRate } = computeDiscountProductRates(
-                parseAmount(form.dealerRate),
+              const { dealerRate, srRate, tpRate } = computeDiscountProductRates(
+                parseAmount(form.depotRate),
+                parseAmount(form.depotPercent),
                 parseAmount(form.srCommissionPercent),
                 parseAmount(form.tpPercent)
               )
               return (
-                <div className="grid grid-cols-2 gap-4 rounded-xl border border-border/70 bg-muted/30 p-3 text-sm">
+                <div className="grid grid-cols-3 gap-4 rounded-xl border border-border/70 bg-muted/30 p-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Depot S R (computed)</p>
+                    <p className="font-semibold tabular-nums">{formatCurrency(dealerRate)}</p>
+                  </div>
                   <div>
                     <p className="text-muted-foreground">SR Rate (computed)</p>
                     <p className="font-semibold tabular-nums">{formatCurrency(srRate)}</p>

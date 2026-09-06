@@ -139,6 +139,7 @@ const navigationGroups: NavigationGroup[] = [
 type AdminShellProps = {
   active: string
   children: ReactNode
+  fullWidth?: boolean
 }
 
 function SidebarContent({
@@ -550,7 +551,7 @@ function GlobalSearch() {
   )
 }
 
-export function AdminShell({ active, children }: AdminShellProps) {
+export function AdminShell({ active, children, fullWidth = false }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false
@@ -663,7 +664,7 @@ export function AdminShell({ active, children }: AdminShellProps) {
           </header>
 
           <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-            <div className="mx-auto w-full max-w-7xl">
+            <div className={cn('mx-auto w-full', fullWidth ? 'max-w-full' : 'max-w-7xl')}>
               {hasPermission(currentPage.permission) ? (
                 children
               ) : (

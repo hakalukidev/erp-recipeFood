@@ -534,20 +534,23 @@ export type RateCardInput = {
 // for the flat-rate/commission-based selling chain rather than the
 // depot-invoice chain ProductRecord's six rate fields feed. Same field names
 // as ProductRecord (rawRate/manufRate/depotRate/dealerRate/mrpRate) for the
-// unit-rate columns already shared with it, plus the two percentage columns
-// unique to this flat-rate chain:
+// unit-rate columns already shared with it, plus the three percentage columns
+// that drive this flat-rate chain — only depotRate (Raw/Manuf's landing cost)
+// and mrpRate (set independently) are ever typed in directly; every other
+// rate is a percentage step off the one before it, computed and re-saved on
+// every save (see computeDiscountProductRates in utils.ts, which is also
+// what the UI calls live for the on-screen preview):
 //   rawRate              -- "Raw M" column: raw material cost per unit
 //   manufRate            -- "Manu R" column: manufacturing cost per unit
 //   depotRate            -- "Depot P R" column: what Depot pays (purchase)
-//   dealerRate           -- "Depot S R" column: what Depot charges the dealer
-//   srCommissionPercent  -- SR's cut added on top ("SR Com +N%" column)
-//   tpPercent            -- further markup to Trade Price ("TP+N%" column)
+//   depotPercent         -- Depot's own markup ("Depot +N%") ->
+//     dealerRate = depotRate * (1 + depotPercent / 100)   -- "Depot S R"
+//   srCommissionPercent  -- SR's cut added on top ("SR Com +N%" column) ->
+//     srRate = dealerRate * (1 + srCommissionPercent / 100)
+//   tpPercent            -- further markup to Trade Price ("TP+N%" column) ->
+//     tpRate = srRate * (1 + tpPercent / 100)
 //   mrpRate              -- end-consumer price, set independently — not a
-//     percentage step off tpRate the way srRate/tpRate are off each other
-// srRate and tpRate are derived, not stored — see computeDiscountProductRates
-// in utils.ts:
-//   srRate = dealerRate * (1 + srCommissionPercent / 100)
-//   tpRate = srRate * (1 + tpPercent / 100)
+//     percentage step off tpRate the way the others are off each other
 export type DiscountProductRecord = {
   id: string
   name: string
@@ -559,6 +562,10 @@ export type DiscountProductRecord = {
   rawRate: number
   manufRate: number
   depotRate: number
+  depotPercent: number
+  // Derived from depotRate/depotPercent on every save (see saveDiscountProduct
+  // in provider.tsx) — stored rather than computed purely on read so every
+  // other screen/export that reads a DiscountProductRecord sees it directly.
   dealerRate: number
   srCommissionPercent: number
   tpPercent: number
@@ -576,7 +583,7 @@ export type DiscountProductInput = {
   rawRate?: number
   manufRate?: number
   depotRate?: number
-  dealerRate: number
+  depotPercent?: number
   srCommissionPercent?: number
   tpPercent?: number
   mrpRate?: number

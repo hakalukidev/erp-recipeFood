@@ -82,6 +82,7 @@ import {
   STANDARD_CHART_OF_ACCOUNTS,
 } from '@/lib/erp/standardChartOfAccounts'
 import {
+  computeDiscountProductRates,
   createId,
   getPermissions,
   getProductStatus,
@@ -360,6 +361,7 @@ function normalizeDiscountProductRecord(product: DiscountProductRecord): Discoun
     rawRate: Number(product.rawRate ?? 0),
     manufRate: Number(product.manufRate ?? 0),
     depotRate: Number(product.depotRate ?? 0),
+    depotPercent: Number(product.depotPercent ?? 5),
     dealerRate: Number(product.dealerRate ?? 0),
     srCommissionPercent: Number(product.srCommissionPercent ?? 8),
     tpPercent: Number(product.tpPercent ?? 0),
@@ -870,7 +872,7 @@ function normalizeDiscountProductInput(input: DiscountProductInput) {
     rawRate: Math.max(input.rawRate ?? 0, 0),
     manufRate: Math.max(input.manufRate ?? 0, 0),
     depotRate: Math.max(input.depotRate ?? 0, 0),
-    dealerRate: Math.max(input.dealerRate ?? 0, 0),
+    depotPercent: Math.max(input.depotPercent ?? 5, 0),
     srCommissionPercent: Math.max(input.srCommissionPercent ?? 8, 0),
     tpPercent: Math.max(input.tpPercent ?? 0, 0),
     mrpRate: Math.max(input.mrpRate ?? 0, 0),
@@ -1721,9 +1723,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const existingProduct = productId ? data.discountProducts[productId] : null
     const id = existingProduct?.id ?? createId('discount_product')
     const now = new Date().toISOString()
+    // Depot S R (dealerRate) is never typed in directly — it's Depot's own
+    // markup over what it paid, same as SR Rate/TP Rate one step further
+    // down the chain (see computeDiscountProductRates in utils.ts).
+    const { dealerRate } = computeDiscountProductRates(
+      normalized.depotRate,
+      normalized.depotPercent,
+      normalized.srCommissionPercent,
+      normalized.tpPercent
+    )
     const product: DiscountProductRecord = {
       id,
       ...normalized,
+      dealerRate,
       createdAt: existingProduct?.createdAt ?? now,
       updatedAt: now,
     }
