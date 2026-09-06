@@ -28,24 +28,22 @@ export function parsePerCtnMultiplier(perCtnBgs?: string) {
   return value > 0 ? value : 1
 }
 
-// Discount Product List — see DiscountProductRecord in types.ts. Every rate
-// past Depot P R is a percentage step off the one before it, so a single
-// entry point recomputes the whole chain whenever any rate/percentage
-// changes — used both for the live on-screen preview and for what actually
-// gets saved (see saveDiscountProduct in provider.tsx):
-//   dealerRate = depotRate * (1 + depotPercent / 100)      -- "Depot S R"
-//   srRate     = dealerRate * (1 + srCommissionPercent / 100)
-//   tpRate     = srRate * (1 + tpPercent / 100)
+// Discount Product List — see DiscountProductRecord in types.ts. Depot S R
+// (dealerRate) is typed in by hand; SR Rate and TP Rate are each a percentage
+// step off the rate before them, so a single entry point recomputes that part
+// of the chain whenever dealerRate/either percentage changes — used both for
+// the live on-screen preview and for what actually gets saved (see
+// saveDiscountProduct in provider.tsx):
+//   srRate = dealerRate * (1 + srCommissionPercent / 100)
+//   tpRate = srRate * (1 + tpPercent / 100)
 export function computeDiscountProductRates(
-  depotRate: number,
-  depotPercent: number,
+  dealerRate: number,
   srCommissionPercent: number,
   tpPercent: number
 ) {
-  const dealerRate = depotRate * (1 + depotPercent / 100)
   const srRate = dealerRate * (1 + srCommissionPercent / 100)
   const tpRate = srRate * (1 + tpPercent / 100)
-  return { dealerRate, srRate, tpRate }
+  return { srRate, tpRate }
 }
 
 export function formatCurrency(value: number, currency = 'BDT') {
