@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Store,
   Tags,
+  Undo2,
   Users,
   X,
 } from 'lucide-react'
@@ -114,6 +115,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Raw material → manufacturing → depot → dealer rate cascade with profit margins, and Company/Depot/Dealer vouchers',
         href: '/admin/rate-card',
         icon: Calculator,
+        permission: 'products:view',
+      },
+      {
+        label: 'Product Return',
+        description: 'Return goods against an invoice — reduces dealer, depot and company profit, and generates combined + individual return vouchers',
+        href: '/admin/product-returns',
+        icon: Undo2,
         permission: 'products:view',
       },
       {

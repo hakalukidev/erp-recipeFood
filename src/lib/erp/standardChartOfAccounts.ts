@@ -62,6 +62,7 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
 export const EXPENSE_CATEGORIES = [
   'Office Expense',
   'Factory Expense',
+  'Raw Material',
   'Transport',
   'Fuel',
   'Marketing',
@@ -90,6 +91,7 @@ export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   office: 'office_expense',
   'factory expense': 'factory_expense',
   factory: 'factory_expense',
+  'raw material': 'cogs',
   'bank charge': 'bank_charge',
   'bank charges': 'bank_charge',
   depreciation: 'depreciation',

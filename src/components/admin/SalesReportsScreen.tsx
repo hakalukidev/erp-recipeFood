@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { BadgePercent, FileBarChart, Package, Receipt, Search, Store } from 'lucide-react'
+import { BadgePercent, FileBarChart, Package, Printer, Receipt, Search, Store, Tags } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
@@ -11,13 +11,120 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { buildSalesReportSummary, formatCurrency } from '@/lib/erp/utils'
+import { buildCategorySalesReportSummary, buildSalesReportSummary, formatCurrency, type CategorySalesReportRow } from '@/lib/erp/utils'
 import type { SaleType } from '@/lib/erp/types'
 
 const SALE_TYPE_LABELS: Record<SaleType, string> = {
   commission: 'Commission-based',
   others: 'Others / Direct',
+}
+
+function formatAmount(value: number) {
+  return value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function openPrintWindow(html: string) {
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) return
+  printWindow.document.write(html)
+  printWindow.document.close()
+}
+
+// Total Sales Invoice, grouped by Category — same layout family as the
+// Company Voucher on the Invoice page (buildRateCardHtml), one row per
+// category instead of per line item, with the Depot's and the Company's
+// profit for that category shown the same way the Company Voucher highlights
+// Usable money / Depot Net Profit.
+function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
+  const totals = categories.reduce(
+    (sum, row) => ({
+      qty: sum.qty + row.qty,
+      dealerRateTotal: sum.dealerRateTotal + row.dealerRateTotal,
+      companyProfit: sum.companyProfit + row.companyProfit,
+      depotProfit: sum.depotProfit + row.depotProfit,
+    }),
+    { qty: 0, dealerRateTotal: 0, companyProfit: 0, depotProfit: 0 }
+  )
+
+  const rows = categories
+    .map(
+      (row, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(row.category)}</td>
+        <td class="numeric">${row.qty.toLocaleString('en-BD')}</td>
+        <td class="numeric">${formatAmount(row.dealerRateTotal)}</td>
+        <td class="numeric hl">${formatAmount(row.depotProfit)}</td>
+        <td class="numeric hl">${formatAmount(row.companyProfit)}</td>
+      </tr>
+    `
+    )
+    .join('')
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Total Sales Invoice — by Category</title>
+        <style>
+          * { box-sizing: border-box; }
+          @page { margin: 12mm 16mm; size: A4; }
+          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 0; }
+          .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
+          .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
+          .subtitle { text-align: center; color: #4b5563; font-size: 13px; margin: 10px 0 16px; }
+          .hl { background: #fef9c3; font-weight: 700; }
+          table.doc { border-collapse: collapse; width: 100%; }
+          table.doc th, table.doc td { border: 1px solid #d1d5db; padding: 5px 7px; font-size: 12.5px; }
+          table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 11px; }
+          .numeric { text-align: right; white-space: nowrap; }
+          tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
+          @media print { button { display: none; } }
+        </style>
+      </head>
+      <body>
+        <p class="title">${escapeHtml(COMPANY_NAME)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+        <p class="subtitle">Total Sales Invoice — by Category</p>
+        <table class="doc">
+          <thead>
+            <tr>
+              <th>SL</th>
+              <th>Category</th>
+              <th>QTY (pcs)</th>
+              <th>Total Sales (Depot Amount)</th>
+              <th>Depot Profit</th>
+              <th>Company Profit</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+            <tr class="totals">
+              <td colspan="2">Grand Total</td>
+              <td class="numeric">${totals.qty.toLocaleString('en-BD')}</td>
+              <td class="numeric">${formatAmount(totals.dealerRateTotal)}</td>
+              <td class="numeric">${formatAmount(totals.depotProfit)}</td>
+              <td class="numeric">${formatAmount(totals.companyProfit)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
+      </body>
+    </html>
+  `
 }
 
 // Section — Sales Reports. Built entirely off saved Invoices (RateCardRecord,
@@ -30,9 +137,11 @@ export function SalesReportsScreen() {
   const { data, classifyRateCardSaleType } = useERP()
   const currency = data?.settings.currency
   const summary = useMemo(() => buildSalesReportSummary(data), [data])
+  const categorySummary = useMemo(() => buildCategorySalesReportSummary(data), [data])
 
   const [dealerQuery, setDealerQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
+  const [categoryQuery, setCategoryQuery] = useState('')
 
   // Individual invoices behind the aggregated "Unclassified" figure above —
   // buildSalesReportSummary only rolls these up per dealer/product, so the
@@ -99,6 +208,12 @@ export function SalesReportsScreen() {
     if (!normalized) return summary.products
     return summary.products.filter((row) => row.productName.toLowerCase().includes(normalized))
   }, [summary.products, productQuery])
+
+  const filteredCategories = useMemo(() => {
+    const normalized = categoryQuery.trim().toLowerCase()
+    if (!normalized) return categorySummary.categories
+    return categorySummary.categories.filter((row) => row.category.toLowerCase().includes(normalized))
+  }, [categorySummary.categories, categoryQuery])
 
   const hasUnclassified = summary.bySaleType.unclassified > 0
 
@@ -278,6 +393,104 @@ export function SalesReportsScreen() {
                     </TableRow>
                   ) : null}
                 </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <CardTitle>Category-wise sales report</CardTitle>
+              <CardDescription>
+                Total Sales Invoice by product category — Depot and Company profit shown the same way as the Company
+                Voucher on the Invoice page, net of any product returns.
+              </CardDescription>
+            </div>
+            <div className="flex gap-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={categoryQuery}
+                  onChange={(event) => setCategoryQuery(event.target.value)}
+                  className="pl-9"
+                  placeholder="Search category"
+                />
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => openPrintWindow(buildCategoryInvoiceHtml(filteredCategories))}
+                disabled={filteredCategories.length === 0}
+              >
+                <Printer className="mr-2 h-4 w-4" />
+                Print invoice
+              </Button>
+              <ExportMenu
+                filenameBase="category-sales-report"
+                title="Category-wise Sales Report"
+                headers={['Category', 'Quantity sold (pcs)', 'Total sale amount', 'Depot profit', 'Company profit']}
+                rows={filteredCategories.map((row) => [
+                  row.category,
+                  row.qty,
+                  row.dealerRateTotal.toFixed(2),
+                  row.depotProfit.toFixed(2),
+                  row.companyProfit.toFixed(2),
+                ])}
+              />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Category</TableHead>
+                    <TableHead className="text-right">Quantity sold (pcs)</TableHead>
+                    <TableHead className="text-right">Total sale amount</TableHead>
+                    <TableHead className="text-right">Depot profit</TableHead>
+                    <TableHead className="text-right">Company profit</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredCategories.map((row) => (
+                    <TableRow key={row.category}>
+                      <TableCell className="font-medium">{row.category}</TableCell>
+                      <TableCell className="text-right">{row.qty.toLocaleString('en-BD')}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatCurrency(row.dealerRateTotal, currency)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.depotProfit, currency)}</TableCell>
+                      <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(row.companyProfit, currency)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {filteredCategories.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                        <Tags className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                        {categorySummary.categories.length === 0 ? 'No invoiced sales yet.' : 'No category matches this search.'}
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+                {filteredCategories.length > 0 ? (
+                  <TableBody>
+                    <TableRow className="border-t-2 border-border">
+                      <TableCell className="font-semibold">Grand total</TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {filteredCategories.reduce((sum, row) => sum + row.qty, 0).toLocaleString('en-BD')}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatCurrency(filteredCategories.reduce((sum, row) => sum + row.dealerRateTotal, 0), currency)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {formatCurrency(filteredCategories.reduce((sum, row) => sum + row.depotProfit, 0), currency)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(filteredCategories.reduce((sum, row) => sum + row.companyProfit, 0), currency)}
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                ) : null}
               </Table>
             </div>
           </CardContent>

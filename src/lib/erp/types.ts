@@ -658,6 +658,92 @@ export type TradeSalesProductInput = {
   isActive?: boolean
 }
 
+// ---- Product Return against an Invoice (Rate Card) ------------------------
+// A separate return flow from Sales Return above (that one only ever applies
+// to the currently-unreachable OrderRecord Sales Order module). This return
+// is recorded against an actual Invoice (RateCardRecord) — the document the
+// app really issues — and reverses that shipment's margin at every stage of
+// the Company → Depot → Dealer chain: Dealer profit, Depot profit and
+// Company profit are each pulled down by the returned line(s)' share, using
+// the same cascade formulas the printed vouchers already derive (see
+// buildDepotInvoiceHtml/buildDealerInvoiceHtml's depotNetProfit/dealerMargin
+// comments on the Invoice page, and computeProductReturnTotals in
+// provider.tsx which reuses computeRateCardTotals' math). Company Earnings'
+// "Total earning" (buildCompanyEarningsSummary in utils.ts) nets every
+// ProductReturnRecord's companyProfit off the rate cards' usableMoney, so a
+// return pulls the company's gross profit down the moment it's recorded —
+// exactly the way the original shipment pulled it up.
+//
+// Rates are never re-typed on a return — only how much (`qty`) came back;
+// the six rate columns are copied from the matching line on the original
+// invoice (see createProductReturn in provider.tsx) so a return can never
+// silently disagree with what was actually billed.
+//
+// On top of the margin cascade above, a return also writes off the sunk cost
+// of the returned goods themselves: the full manufacturing cost is posted as
+// a "Factory Expense" (that labour/overhead is a total loss once the goods
+// are back) and 10% of the raw material cost is posted as a "Raw Material"
+// expense (the other 90% is assumed recoverable/re-usable) — both ordinary
+// ExpenseRecords (see createProductReturn in provider.tsx), so they flow
+// through the normal approval + ledger + Company Earnings expense pipeline
+// just like any manually-recorded expense.
+export type ProductReturnItem = {
+  productId?: string
+  productName: string
+  qty: number
+  rawRate: number
+  manufRate: number
+  depotRate: number
+  dealerRate: number
+  tpRate?: number
+  mrpRate?: number
+  perCtnBgs?: string
+}
+
+export type ProductReturnRecord = {
+  id: string
+  returnNumber: string
+  rateCardId: string
+  invoiceNo: string
+  recipientName: string
+  dealerId?: string
+  date: string
+  items: ProductReturnItem[]
+  reason: string
+  rawRateTotal: number
+  manufRateTotal: number
+  depotRateTotal: number
+  dealerRateTotal: number
+  tpRateTotal: number
+  mrpRateTotal: number
+  // Amount taken OFF each party's profit for this return — same derived
+  // formulas as the three printed Invoice vouchers use:
+  companyProfit: number // usableMoney = depotRateTotal - manufRateTotal
+  depotProfit: number   // dealerRateTotal - depotRateTotal
+  dealerProfit: number  // tpRateTotal - dealerRateTotal
+  // Sunk-cost write-off (see ProductReturnItem comment above) — the linked
+  // ExpenseRecord ids let deleteProductReturn reverse them along with the
+  // return itself; the amounts are snapshotted here so the printed voucher
+  // and the returns list never have to re-derive them from `items`.
+  manufacturingExpenseId?: string
+  manufacturingExpenseAmount: number // = manufRateTotal, posted as Factory Expense
+  rawMaterialExpenseId?: string
+  rawMaterialExpenseAmount: number // = 10% of rawRateTotal, posted as Raw Material expense
+  processedBy: string
+  processedByName: string
+  createdAt: string
+}
+
+export type ProductReturnInput = {
+  rateCardId: string
+  date?: string
+  // Only productId/productName + how much came back — rates are always
+  // copied from the original invoice line, never re-entered (see the
+  // ProductReturnRecord comment above).
+  items: Array<{ productId?: string; productName: string; qty: number }>
+  reason?: string
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module — the detailed lab-test parameters. Production
 // (completeProduction) is the only source that creates these today; 'purchase'
@@ -1007,6 +1093,7 @@ export type ERPData = {
   stockAdjustments: Record<string, StockAdjustmentRecord>
   stockCounts: Record<string, StockCountRecord>
   rateCards: Record<string, RateCardRecord>
+  productReturns: Record<string, ProductReturnRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   notifications: Record<string, NotificationRecord>

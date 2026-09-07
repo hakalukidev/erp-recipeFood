@@ -59,6 +59,8 @@ import type {
   OrderRecord,
   ProductInput,
   ProductRecord,
+  ProductReturnInput,
+  ProductReturnRecord,
   QcHoldRecord,
   QualityCheckInput,
   QualityCheckRecord,
@@ -171,6 +173,8 @@ type ERPContextValue = {
   saveRateCard: (input: RateCardInput, rateCardId?: string) => Promise<string>
   deleteRateCard: (rateCardId: string) => Promise<void>
   classifyRateCardSaleType: (rateCardId: string, saleType: SaleType) => Promise<void>
+  createProductReturn: (input: ProductReturnInput) => Promise<string>
+  deleteProductReturn: (productReturnId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
 }
 
@@ -216,6 +220,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'stockAdjustments',
   'stockCounts',
   'rateCards',
+  'productReturns',
   'qualityChecks',
   'qcHolds',
   'notifications',
@@ -792,6 +797,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     stockAdjustments: source.stockAdjustments ?? {},
     stockCounts: source.stockCounts ?? {},
     rateCards: source.rateCards ?? {},
+    productReturns: source.productReturns ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     notifications: source.notifications ?? {},
@@ -4218,6 +4224,199 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  // ---- Product Return (against an Invoice / Rate Card) -------------------
+  // Same cascade math as computeRateCardTotals, plus the three derived
+  // margins (Dealer/Depot/Company profit) that a return actually pulls
+  // down — see the ProductReturnRecord comment in types.ts.
+  function computeProductReturnTotals(items: ProductReturnRecord['items']) {
+    const totals = computeRateCardTotals(items)
+    return {
+      ...totals,
+      companyProfit: totals.usableMoney,
+      depotProfit: totals.dealerRateTotal - totals.depotRateTotal,
+      dealerProfit: totals.tpRateTotal - totals.dealerRateTotal,
+    }
+  }
+
+  async function createProductReturn(input: ProductReturnInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a product return.')
+    }
+
+    const rateCard = data.rateCards[input.rateCardId]
+    if (!rateCard) {
+      throw new Error('Invoice not found.')
+    }
+    if (!input.items.length) {
+      throw new Error('Add at least one product to return.')
+    }
+
+    // How much of each line has already come back on a prior return against
+    // this same invoice, so a second (or third) return can never exceed what
+    // was actually shipped — same guard createSalesReturn uses.
+    const alreadyReturned = new Map<string, number>()
+    Object.values(data.productReturns)
+      .filter((entry) => entry.rateCardId === rateCard.id)
+      .forEach((entry) => {
+        entry.items.forEach((item) => {
+          const key = item.productId || item.productName
+          alreadyReturned.set(key, (alreadyReturned.get(key) ?? 0) + item.qty)
+        })
+      })
+
+    const items: ProductReturnRecord['items'] = input.items.map((requested) => {
+      const key = requested.productId || requested.productName
+      const line = rateCard.items.find((item) => (item.productId || item.productName) === key)
+      if (!line) {
+        throw new Error(`${requested.productName} was not part of invoice ${rateCard.invoiceNo}.`)
+      }
+      const qty = Number(requested.qty) || 0
+      if (qty <= 0) {
+        throw new Error(`Return quantity for ${line.productName} must be greater than zero.`)
+      }
+      const returnedSoFar = alreadyReturned.get(key) ?? 0
+      if (returnedSoFar + qty > line.qty) {
+        throw new Error(`Cannot return more than what was invoiced for ${line.productName}.`)
+      }
+
+      return {
+        ...(line.productId ? { productId: line.productId } : {}),
+        productName: line.productName,
+        qty,
+        rawRate: line.rawRate,
+        manufRate: line.manufRate,
+        depotRate: line.depotRate,
+        dealerRate: line.dealerRate,
+        tpRate: line.tpRate ?? 0,
+        mrpRate: line.mrpRate ?? 0,
+        ...(line.perCtnBgs ? { perCtnBgs: line.perCtnBgs } : {}),
+      }
+    })
+
+    const db = getDatabaseOrThrow()
+    const id = createId('prtn')
+    const now = new Date().toISOString()
+    const returnDate = input.date?.trim() || now.slice(0, 10)
+    const returnNumber = `PRTN-${Date.now().toString().slice(-8)}`
+    const totals = computeProductReturnTotals(items)
+
+    const updates: Record<string, unknown> = {}
+    const postedExpenses: ExpenseRecord[] = []
+
+    // Sunk-cost write-off (see ProductReturnItem comment in types.ts): the
+    // full manufacturing cost of the returned goods is a total loss, and 10%
+    // of their raw material cost is assumed unrecoverable — both post as
+    // ordinary ExpenseRecords (same shape saveExpense writes) so they flow
+    // through the normal ledger + Company Earnings expense pipeline.
+    function postWriteOffExpense(category: string, amount: number): string | undefined {
+      if (amount <= 0) {
+        return undefined
+      }
+      const expenseId = createId('expense')
+      const expense: ExpenseRecord = {
+        id: expenseId,
+        category,
+        amount,
+        note: `${category} write-off for product return ${returnNumber} (invoice ${rateCard.invoiceNo}).`,
+        date: returnDate,
+        paymentMethod: 'cash',
+        approvalStatus: 'pending',
+        approvedBy: '',
+        approvedByName: '',
+        approvedAt: '',
+        createdBy: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+      }
+      updates[`expenses/${expenseId}`] = expense
+      postedExpenses.push(expense)
+      Object.values(
+        buildExpenseLedgerEntries({ expenseId, date: returnDate, category, amount, paymentMethod: 'cash' })
+      ).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+      return expenseId
+    }
+
+    const manufacturingExpenseId = postWriteOffExpense('Factory Expense', totals.manufRateTotal)
+    const rawMaterialExpenseAmount = totals.rawRateTotal * 0.1
+    const rawMaterialExpenseId = postWriteOffExpense('Raw Material', rawMaterialExpenseAmount)
+
+    const productReturn: ProductReturnRecord = {
+      id,
+      returnNumber,
+      rateCardId: rateCard.id,
+      invoiceNo: rateCard.invoiceNo,
+      recipientName: rateCard.recipientName,
+      ...(rateCard.dealerId ? { dealerId: rateCard.dealerId } : {}),
+      date: returnDate,
+      items,
+      reason: input.reason?.trim() ?? '',
+      ...totals,
+      ...(manufacturingExpenseId ? { manufacturingExpenseId } : {}),
+      manufacturingExpenseAmount: totals.manufRateTotal,
+      ...(rawMaterialExpenseId ? { rawMaterialExpenseId } : {}),
+      rawMaterialExpenseAmount,
+      processedBy: currentUser.id,
+      processedByName: currentUser.name,
+      createdAt: now,
+    }
+    updates[`productReturns/${id}`] = productReturn
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'product_return_created',
+      'sales',
+      `Recorded product return ${returnNumber} against invoice ${rateCard.invoiceNo} (${rateCard.recipientName}) — company profit down ${totals.companyProfit.toFixed(2)}, manufacturing cost ${totals.manufRateTotal.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
+    )
+
+    // Section 37: re-check the write-off categories' budget(s) now that
+    // these expenses are folded in — same call saveExpense makes.
+    if (postedExpenses.length) {
+      const expensesAfterWrite = { ...data.expenses }
+      postedExpenses.forEach((expense) => {
+        expensesAfterWrite[expense.id] = expense
+      })
+      for (const expense of postedExpenses) {
+        await checkBudgetOverrun(data.budgets, expensesAfterWrite, writeNotification, expense.category, expense.date)
+      }
+    }
+
+    return id
+  }
+
+  async function deleteProductReturn(productReturnId: string) {
+    if (!data) {
+      return
+    }
+
+    const productReturn = data.productReturns[productReturnId]
+    if (!productReturn) {
+      throw new Error('Product return not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = { [`productReturns/${productReturnId}`]: null }
+
+    // Undo the manufacturing/raw-material write-off expenses this return
+    // posted (see createProductReturn) — same reverse-and-delete shape
+    // deleteExpense uses, so the ledger keeps a clean audit trail.
+    ;[productReturn.manufacturingExpenseId, productReturn.rawMaterialExpenseId].forEach((expenseId) => {
+      if (!expenseId || !data.expenses[expenseId]) {
+        return
+      }
+      updates[`expenses/${expenseId}`] = null
+      const active = getActiveLedgerEntries(data.ledgerEntries, expenseId)
+      Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+    })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('product_return_deleted', 'sales', `Deleted product return ${productReturn.returnNumber}.`)
+  }
+
   const value = useMemo<ERPContextValue>(
     () => ({
       data,
@@ -4282,6 +4481,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveRateCard,
       deleteRateCard,
       classifyRateCardSaleType,
+      createProductReturn,
+      deleteProductReturn,
       saveSettings,
     }),
     [currentPermissions, currentUser, data, error, loading, users]

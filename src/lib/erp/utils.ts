@@ -169,12 +169,18 @@ export function buildOperationsOverview(data: ERPData | null) {
 // is specifically the company's own margin from selling through the Depot
 // channel — usableMoney (= depotRateTotal − manufRateTotal) on every saved
 // rate card, the same figure the Company voucher prints — not general order
-// revenue. "Expense" is every non-rejected ExpenseRecord.
+// revenue, net of every ProductReturnRecord's companyProfit (a Product
+// Return pulls the company's gross profit back down the same way the
+// original invoice pushed it up — see the type's comment in types.ts).
+// "Expense" is every non-rejected ExpenseRecord.
 export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   const rateCards = toArray(data?.rateCards)
+  const productReturns = toArray(data?.productReturns)
   const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
 
-  const totalEarning = rateCards.reduce((sum, card) => sum + card.usableMoney, 0)
+  const totalEarning =
+    rateCards.reduce((sum, card) => sum + card.usableMoney, 0) -
+    productReturns.reduce((sum, item) => sum + item.companyProfit, 0)
   const totalExpense = expenses.reduce((sum, expense) => sum + expense.amount, 0)
 
   const monthly = Array.from({ length: months }).map((_, index) => {
@@ -184,12 +190,19 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
     const key = `${date.getFullYear()}-${date.getMonth()}`
     const label = date.toLocaleDateString('en-BD', { month: 'short', year: '2-digit' })
 
-    const earning = rateCards
-      .filter((card) => {
-        const cardDate = new Date(card.date)
-        return `${cardDate.getFullYear()}-${cardDate.getMonth()}` === key
-      })
-      .reduce((sum, card) => sum + card.usableMoney, 0)
+    const earning =
+      rateCards
+        .filter((card) => {
+          const cardDate = new Date(card.date)
+          return `${cardDate.getFullYear()}-${cardDate.getMonth()}` === key
+        })
+        .reduce((sum, card) => sum + card.usableMoney, 0) -
+      productReturns
+        .filter((item) => {
+          const returnDate = new Date(item.date)
+          return `${returnDate.getFullYear()}-${returnDate.getMonth()}` === key
+        })
+        .reduce((sum, item) => sum + item.companyProfit, 0)
 
     const expense = expenses
       .filter((item) => {
@@ -201,13 +214,14 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
     return { month: label, earning, expense, net: earning - expense }
   })
 
-  // Every calendar year that has at least one rate card or expense, oldest
-  // first — unlike `monthly` this isn't a fixed trailing window, since a
-  // year-over-year view should show the company's whole history, not just
-  // the current year.
+  // Every calendar year that has at least one rate card, product return or
+  // expense, oldest first — unlike `monthly` this isn't a fixed trailing
+  // window, since a year-over-year view should show the company's whole
+  // history, not just the current year.
   const years = Array.from(
     new Set([
       ...rateCards.map((card) => new Date(card.date).getFullYear()),
+      ...productReturns.map((item) => new Date(item.date).getFullYear()),
       ...expenses.map((expense) => new Date(expense.date).getFullYear()),
     ])
   ).sort((left, right) => left - right)
@@ -216,9 +230,13 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   }
 
   const yearly = years.map((year) => {
-    const earning = rateCards
-      .filter((card) => new Date(card.date).getFullYear() === year)
-      .reduce((sum, card) => sum + card.usableMoney, 0)
+    const earning =
+      rateCards
+        .filter((card) => new Date(card.date).getFullYear() === year)
+        .reduce((sum, card) => sum + card.usableMoney, 0) -
+      productReturns
+        .filter((item) => new Date(item.date).getFullYear() === year)
+        .reduce((sum, item) => sum + item.companyProfit, 0)
 
     const expense = expenses
       .filter((item) => new Date(item.date).getFullYear() === year)
@@ -230,6 +248,7 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   return {
     totalEarning,
     totalExpense,
+    totalReturns: productReturns.reduce((sum, item) => sum + item.companyProfit, 0),
     netProfit: totalEarning - totalExpense,
     monthly,
     yearly,
@@ -317,6 +336,109 @@ export function buildSalesReportSummary(data: ERPData | null) {
     bySaleType,
     dealers: Array.from(dealerMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
     products: Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+  }
+}
+
+export type CategorySalesReportRow = {
+  category: string
+  invoiceLines: number
+  qty: number
+  rawRateTotal: number
+  manufRateTotal: number
+  depotRateTotal: number
+  dealerRateTotal: number
+  tpRateTotal: number
+  mrpRateTotal: number
+  // Same derived formulas as the Company/Depot vouchers on the Invoice page
+  // (see RateCardRecord's comment in types.ts): companyProfit is the
+  // company's own margin up to the Depot, depotProfit is the Depot's margin
+  // reselling to the Dealer. Both are net of every ProductReturnRecord line
+  // that falls in this category, the same way buildCompanyEarningsSummary
+  // nets returns off the company's total earning.
+  companyProfit: number
+  depotProfit: number
+}
+
+// Category-wise Sales Invoice (Reports section) — the same Invoices
+// (RateCardRecord) behind buildSalesReportSummary above, rolled up by each
+// line's Product category instead of by dealer/product, so a "Total Sales
+// Invoice by Category" can show — like the Company Voucher on the Invoice
+// page — the Depot's and the Company's profit for every category at a
+// glance. A line whose product was deleted, or that was never linked to a
+// Product record at all (productId absent), falls into "Uncategorized"
+// rather than being dropped.
+export function buildCategorySalesReportSummary(data: ERPData | null) {
+  const rateCards = toArray(data?.rateCards)
+  const productReturns = toArray(data?.productReturns)
+  const categoryByProductId = new Map(toArray(data?.products).map((product) => [product.id, product.category]))
+
+  function categoryFor(item: { productId?: string }) {
+    return (item.productId && categoryByProductId.get(item.productId)) || 'Uncategorized'
+  }
+
+  const rows = new Map<string, CategorySalesReportRow>()
+  function rowFor(category: string) {
+    let row = rows.get(category)
+    if (!row) {
+      row = {
+        category,
+        invoiceLines: 0,
+        qty: 0,
+        rawRateTotal: 0,
+        manufRateTotal: 0,
+        depotRateTotal: 0,
+        dealerRateTotal: 0,
+        tpRateTotal: 0,
+        mrpRateTotal: 0,
+        companyProfit: 0,
+        depotProfit: 0,
+      }
+      rows.set(category, row)
+    }
+    return row
+  }
+
+  for (const card of rateCards) {
+    for (const item of card.items) {
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const row = rowFor(categoryFor(item))
+      row.invoiceLines += 1
+      row.qty += pieces
+      row.rawRateTotal += pieces * item.rawRate
+      row.manufRateTotal += pieces * item.manufRate
+      row.depotRateTotal += pieces * item.depotRate
+      row.dealerRateTotal += pieces * item.dealerRate
+      row.tpRateTotal += pieces * (item.tpRate ?? 0)
+      row.mrpRateTotal += pieces * (item.mrpRate ?? 0)
+    }
+  }
+
+  for (const entry of productReturns) {
+    for (const item of entry.items) {
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const row = rowFor(categoryFor(item))
+      row.qty -= pieces
+      row.rawRateTotal -= pieces * item.rawRate
+      row.manufRateTotal -= pieces * item.manufRate
+      row.depotRateTotal -= pieces * item.depotRate
+      row.dealerRateTotal -= pieces * item.dealerRate
+      row.tpRateTotal -= pieces * (item.tpRate ?? 0)
+      row.mrpRateTotal -= pieces * (item.mrpRate ?? 0)
+    }
+  }
+
+  for (const row of rows.values()) {
+    row.companyProfit = row.depotRateTotal - row.manufRateTotal
+    row.depotProfit = row.dealerRateTotal - row.depotRateTotal
+  }
+
+  const list = Array.from(rows.values()).sort((a, b) => b.dealerRateTotal - a.dealerRateTotal)
+
+  return {
+    categories: list,
+    totalAmount: list.reduce((sum, row) => sum + row.dealerRateTotal, 0),
+    totalCompanyProfit: list.reduce((sum, row) => sum + row.companyProfit, 0),
+    totalDepotProfit: list.reduce((sum, row) => sum + row.depotProfit, 0),
   }
 }
 
