@@ -1,11 +1,42 @@
 import type {
   ActivityRecord,
+  DealerCategoryRecord,
   ERPData,
   OrderRecord,
-  PackagingConversionRecord,
   ProductRecord,
+  SaleType,
   UserRecord,
 } from '@/lib/erp/types'
+
+// Legacy fixed Sale type labels — still the fallback for an invoice whose
+// saleType is one of these two literals (pre-dealer-category invoices, or one
+// classified from the Sales Reports "Unclassified" list) rather than a
+// DealerCategoryRecord id. See isCommissionSaleType/saleTypeLabel below.
+const LEGACY_SALE_TYPE_LABELS: Record<string, string> = {
+  commission: 'Commission-based',
+  others: 'Others / Direct',
+}
+
+// A dealer category counts as the "commission" pricing chain (Discount
+// Product List, SR Commission %, SR Rate columns — see rate-card/page.tsx)
+// when its name mentions "commission"; every other category behaves like the
+// old "Others / Direct" option.
+export function isCommissionSaleType(saleType: SaleType | undefined, dealerCategories: DealerCategoryRecord[]) {
+  if (!saleType) return false
+  if (saleType === 'commission') return true
+  if (saleType === 'others') return false
+  const category = dealerCategories.find((item) => item.id === saleType)
+  return category ? category.name.toLowerCase().includes('commission') : false
+}
+
+// Display label for a saved saleType value — the linked dealer category's
+// name, the legacy literal's fixed label, or undefined for an invoice with no
+// saleType at all (reported as "Unclassified").
+export function saleTypeLabel(saleType: SaleType | undefined, dealerCategories: DealerCategoryRecord[]) {
+  if (!saleType) return undefined
+  const category = dealerCategories.find((item) => item.id === saleType)
+  return category?.name ?? LEGACY_SALE_TYPE_LABELS[saleType]
+}
 
 export function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[]) {
   return [...items].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -280,12 +311,14 @@ export type ProductSalesReportRow = {
 // the comment on ProductRecord.rawRate in types.ts). "Sale amount" throughout
 // is dealerRateTotal, i.e. the Goods Amount a dealer is actually billed —
 // same figure the Invoice list's "Total dealer sales value" card already
-// uses. commission/others/unclassified split by card.saleType, set on the
-// Invoice form (see SALE_TYPE_LABELS in the rate-card page) — invoices saved
-// before that field existed have no saleType and land in "unclassified"
-// rather than being guessed into either bucket.
+// uses. commission/others/unclassified split by card.saleType (see
+// isCommissionSaleType above), set on the Invoice form's Sale type selector
+// (rate-card/page.tsx) — invoices saved before that field existed have no
+// saleType and land in "unclassified" rather than being guessed into either
+// bucket.
 export function buildSalesReportSummary(data: ERPData | null) {
   const rateCards = toArray(data?.rateCards)
+  const dealerCategories = toArray(data?.dealerCategories)
 
   const bySaleType = { commission: 0, others: 0, unclassified: 0 }
   const dealerMap = new Map<string, DealerSalesReportRow>()
@@ -293,7 +326,7 @@ export function buildSalesReportSummary(data: ERPData | null) {
 
   for (const card of rateCards) {
     const amount = card.dealerRateTotal
-    const bucket = card.saleType === 'commission' ? 'commission' : card.saleType === 'others' ? 'others' : 'unclassified'
+    const bucket = !card.saleType ? 'unclassified' : isCommissionSaleType(card.saleType, dealerCategories) ? 'commission' : 'others'
     bySaleType[bucket] += amount
 
     const dealerKey = card.dealerId || card.recipientName
@@ -372,9 +405,16 @@ export function buildCategorySalesReportSummary(data: ERPData | null) {
   const rateCards = toArray(data?.rateCards)
   const productReturns = toArray(data?.productReturns)
   const categoryByProductId = new Map(toArray(data?.products).map((product) => [product.id, product.category]))
+  // A Product Return's productId now points at a Trade Sales Product List
+  // entry, not a Product List one (see ProductReturnItem in types.ts) — fall
+  // back to that list's own category when the id isn't a known Product.
+  const categoryByTradeSalesProductId = new Map(
+    toArray(data?.tradeSalesProducts).map((product) => [product.id, product.category || ''])
+  )
 
   function categoryFor(item: { productId?: string }) {
-    return (item.productId && categoryByProductId.get(item.productId)) || 'Uncategorized'
+    if (!item.productId) return 'Uncategorized'
+    return categoryByProductId.get(item.productId) || categoryByTradeSalesProductId.get(item.productId) || 'Uncategorized'
   }
 
   const rows = new Map<string, CategorySalesReportRow>()
@@ -416,7 +456,10 @@ export function buildCategorySalesReportSummary(data: ERPData | null) {
 
   for (const entry of productReturns) {
     for (const item of entry.items) {
-      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      // A return's qty is used as-is against the rate (Pcs/Kg, no
+      // per-carton/bag conversion) — see computeProductReturnTotals in
+      // provider.tsx.
+      const pieces = item.qty
       const row = rowFor(categoryFor(item))
       row.qty -= pieces
       row.rawRateTotal -= pieces * item.rawRate
@@ -500,29 +543,10 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
     .reduce((sum, order) => sum + order.due, 0)
 }
 
-// ---- Purchase Department --------------------------------------------------
-// A vendor's running totals — purchased quantity/amount from every
-// PurchaseRecord against them, and how much of that has actually been paid
-// (whatever was handed over at purchase time, plus every later
-// VendorPaymentRecord). `due` can go negative if a vendor has been overpaid
-// (a credit balance) — never clamped to zero, so that stays visible.
-export function computeVendorTotals(data: ERPData | null, vendorId: string) {
-  const purchases = toArray(data?.purchases).filter((purchase) => purchase.vendorId === vendorId)
-  const totalQuantity = purchases.reduce((sum, purchase) => sum + purchase.quantity, 0)
-  const totalAmount = purchases.reduce((sum, purchase) => sum + purchase.amount, 0)
-  const paidAtPurchase = purchases.reduce((sum, purchase) => sum + purchase.paid, 0)
-  const paidLater = toArray(data?.vendorPayments)
-    .filter((payment) => payment.vendorId === vendorId)
-    .reduce((sum, payment) => sum + payment.amount, 0)
-  const totalPaid = paidAtPurchase + paidLater
-  return { totalQuantity, totalAmount, totalPaid, due: totalAmount - totalPaid }
-}
-
 // ---- Loan Management --------------------------------------------------
 // A loan member's running balance owed — every 'withdrawal' raises it, every
 // 'repayment' lowers it, never clamped (so an overpayment stays visible as a
-// negative balance, same as computeVendorTotals' due). Reaches zero once
-// fully repaid, per the Loan Chart spec.
+// negative balance). Reaches zero once fully repaid, per the Loan Chart spec.
 export function computeLoanBalance(data: ERPData | null, loanAccountId: string) {
   const transactions = toArray(data?.loanTransactions).filter((entry) => entry.loanAccountId === loanAccountId)
   const totalWithdrawn = transactions
@@ -556,27 +580,6 @@ export function computeEmployeeSalaryTotals(data: ERPData | null) {
       }
     })
   return Array.from(rows.values()).sort((left, right) => right.total - left.total)
-}
-
-// Total quantity ever purchased for a given product, across every vendor —
-// the input side of the Packaging/HK Conversion capacity report below.
-export function computeVendorPurchasedQty(data: ERPData | null, productId: string) {
-  return toArray(data?.purchases)
-    .filter((purchase) => purchase.productId === productId)
-    .reduce((sum, purchase) => sum + purchase.quantity, 0)
-}
-
-// The Purchase Department's packet/carton conversion example: a purchased
-// quantity in kg, at `packetWeightGrams` per packet, converts to
-// (quantityKg * 1000) / packetWeightGrams packets, and `unitsPerCarton`
-// packets make one carton/sack/bottle case.
-export function computePackagingConversion(
-  quantityKg: number,
-  config: Pick<PackagingConversionRecord, 'packetWeightGrams' | 'unitsPerCarton'>
-) {
-  const pieces = config.packetWeightGrams > 0 ? (quantityKg * 1000) / config.packetWeightGrams : 0
-  const cartons = config.unitsPerCarton > 0 ? pieces / config.unitsPerCarton : 0
-  return { pieces, cartons }
 }
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {

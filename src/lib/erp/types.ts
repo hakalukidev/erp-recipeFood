@@ -63,6 +63,13 @@ export type DealerRecord = {
   address: string
   phone: string
   categoryId?: string
+  // Which Depot this dealer is served through — links to a DepotRecord below.
+  // Optional (older dealers, or a dealer served directly by the company, have
+  // none); lets an invoice's "From" party show the actual depot that issues
+  // it instead of the generic placeholder text "Depot", so two dealers under
+  // different depots print visibly different vouchers. See depotId in
+  // buildDealerInvoiceHtml in app/admin/rate-card/page.tsx.
+  depotId?: string
   createdAt: string
   updatedAt: string
 }
@@ -76,121 +83,20 @@ export type DealerCategoryRecord = {
   updatedAt: string
 }
 
-// ---- Purchase Department (Vendors, Purchase Entries, Payments) -----------
-// A vendor supplies raw material/packaging material bought in bulk (usually
-// by weight, e.g. kg) — mirrors DealerRecord's shape (name/address/phone
-// only, nothing derived stored on it). A vendor's running due is never
-// stored here; it's always the live sum of every PurchaseRecord.due for that
-// vendor minus every VendorPaymentRecord.amount recorded against them since
-// (see computeVendorTotals in utils.ts) — same "derive, don't store" rule
-// DealerRecord's balance follows.
-export type VendorRecord = {
+// A depot is the middle party in the Company → Depot → Dealer chain — same
+// shape as DealerRecord (business name, an optional proprietor name, phone,
+// address) since it's printed on invoices the same way. A dealer links to
+// the depot that serves it via DealerRecord.depotId; the Dealer voucher's
+// "From" party box then prints this depot's own name/address/phone instead
+// of a hardcoded "Depot" label.
+export type DepotRecord = {
   id: string
   name: string
+  proprietorName: string
   address: string
   phone: string
   createdAt: string
   updatedAt: string
-}
-
-export type VendorInput = {
-  name: string
-  address: string
-  phone: string
-}
-
-// One purchase of a product (typically a raw/packaging material, though any
-// product can be picked) from a vendor — `quantity` in whatever unit that
-// product is bought by (usually kg), at `rate` per unit, so amount =
-// quantity * rate. `paid` is whatever was handed over at the time of
-// receiving (often 0, a running payable); `due` = amount - paid is
-// snapshotted here at save time and only changes if the purchase itself is
-// edited — further money handed over later is recorded separately as a
-// VendorPaymentRecord instead of mutating this record (see computeVendorTotals
-// in utils.ts, which sums both sides for a vendor's live outstanding due).
-// This module keeps its own quantities entirely separate from
-// ProductRecord.stockQty — a purchase here is a payable/ledger entry, not a
-// stock movement; actual sellable stock still only ever changes through
-// Section 19's Stock Adjustment (see StockAdjustmentRecord).
-export type PurchaseRecord = {
-  id: string
-  purchaseNumber: string
-  vendorId: string
-  vendorName: string
-  productId: string
-  productName: string
-  unit?: string
-  date: string
-  quantity: number
-  rate: number
-  amount: number
-  paid: number
-  due: number
-  remarks?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type PurchaseInput = {
-  vendorId: string
-  productId: string
-  quantity: number
-  rate: number
-  date?: string
-  paid?: number
-  remarks?: string
-}
-
-// A payment made against a vendor's running due, independent of any single
-// purchase (e.g. a lump-sum settlement) — see computeVendorTotals in utils.ts.
-export type VendorPaymentRecord = {
-  id: string
-  vendorId: string
-  vendorName: string
-  amount: number
-  date: string
-  method?: string
-  remarks?: string
-  createdAt: string
-}
-
-export type VendorPaymentInput = {
-  vendorId: string
-  amount: number
-  date?: string
-  method?: string
-  remarks?: string
-}
-
-// ---- Packaging / HK Conversion --------------------------------------------
-// One row per product describing how a purchased raw-material quantity (in
-// kg) converts into sellable packets and cartons/sacks/bottles of that
-// product — the Purchase Department's own worked example: a 40g product
-// packed 3g to a packet means 100kg of raw material converts to
-// (100,000g / 3g) = 33,333 packets, and if 500 packets make one sack, that's
-// 66.67 sacks; as those sacks are consumed in production, "HK" (available
-// packet stock) is understood to be falling by that same ratio. Purely a
-// planning/capacity report over how much has been purchased to date for a
-// product (see computeVendorPurchasedQty/computePackagingConversion in
-// utils.ts) — it doesn't move stock or link to any specific PurchaseRecord.
-export type PackagingConversionRecord = {
-  id: string
-  productId: string
-  productName: string
-  packetWeightGrams: number
-  unitsPerCarton: number
-  // Free text for what that bigger unit is actually called — "Carton",
-  // "Sack", "Bottle case", etc. — since it varies by product.
-  cartonLabel: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type PackagingConversionInput = {
-  productId: string
-  packetWeightGrams: number
-  unitsPerCarton?: number
-  cartonLabel?: string
 }
 
 export type ProductStatus = 'active' | 'low-stock' | 'out-of-stock'
@@ -629,11 +535,19 @@ export type RateCardLineItem = {
 }
 
 // Which pricing chain this invoice was billed under — chosen on the invoice
-// form and used to split the Sales Reports section (see buildSalesReportSummary
-// in utils.ts) into "Commission-based" vs "Others" totals. Invoices saved
-// before this field existed have no saleType at all and are reported as
-// "Unclassified" rather than silently bucketed into either side.
-export type SaleType = 'commission' | 'others'
+// form (see the Sale type selector in rate-card/page.tsx) and used to split
+// the Sales Reports section (see buildSalesReportSummary in utils.ts) into
+// "Commission-based" vs "Others" totals. The Sale type selector lists the
+// live Dealer Category list (DealerCategoryRecord) instead of a fixed pair of
+// options, so this now holds a dealer category id — plus, for invoices saved
+// before that switch (or classified later from the Sales Reports
+// "Unclassified" list), the legacy 'commission' | 'others' literal. Use
+// isCommissionSaleType()/saleTypeLabel() in utils.ts rather than comparing
+// against 'commission' directly — a dealer category counts as commission-style
+// when its name contains "commission" (case-insensitive). Invoices with no
+// saleType at all are reported as "Unclassified" rather than silently
+// bucketed into either side.
+export type SaleType = string
 
 export type RateCardRecord = {
   id: string
@@ -778,43 +692,65 @@ export type TradeSalesProductInput = {
   isActive?: boolean
 }
 
-// ---- Product Return against an Invoice (Rate Card) ------------------------
-// A separate return flow from Sales Return above (that one only ever applies
-// to the currently-unreachable OrderRecord Sales Order module). This return
-// is recorded against an actual Invoice (RateCardRecord) — the document the
-// app really issues — and reverses that shipment's margin at every stage of
-// the Company → Depot → Dealer chain: Dealer profit, Depot profit and
-// Company profit are each pulled down by the returned line(s)' share, using
-// the same cascade formulas the printed vouchers already derive (see
-// buildDepotInvoiceHtml/buildDealerInvoiceHtml's depotNetProfit/dealerMargin
-// comments on the Invoice page, and computeProductReturnTotals in
-// provider.tsx which reuses computeRateCardTotals' math). Company Earnings'
-// "Total earning" (buildCompanyEarningsSummary in utils.ts) nets every
-// ProductReturnRecord's companyProfit off the rate cards' usableMoney, so a
-// return pulls the company's gross profit down the moment it's recorded —
-// exactly the way the original shipment pulled it up.
+// ---- Product Return (Damage/Return against the Trade Sales Product List) --
+// Independent of any invoice — a damaged or returned product is often old
+// stock (2, 5+ years) that was never billed on a recent Rate Card, so this
+// no longer requires (or looks up) a RateCardRecord. Each line is picked
+// straight off the Trade Sales Product List (TradeSalesProductRecord) by
+// name; qty is entered in whichever unit actually came back (Pcs or Kg),
+// used as-is against the rate — no per-carton/bag conversion the way a Rate
+// Card line applies (see parsePerCtnMultiplier).
 //
-// Rates are never re-typed on a return — only how much (`qty`) came back;
-// the six rate columns are copied from the matching line on the original
-// invoice (see createProductReturn in provider.tsx) so a return can never
-// silently disagree with what was actually billed.
+// `returnParty` says who physically returned the goods — only Depot or
+// Dealer are ever offered, never a third "raw material/manufacturing" stage
+// (the invoice side of the app never had one either — the Company → Depot →
+// Dealer chain is always just those two hops):
+//   'depot'  — goods came back straight to the Company from the Depot. Only
+//              the Company<->Depot leg unwinds: companyProfit is pulled
+//              down using the Depot Purchase Price ("Depot P R" /
+//              depotRate) already on file for that product — never re-typed.
+//   'dealer' — goods came back from the Dealer to the Depot, which in turn
+//              unwinds its own purchase from the Company, so BOTH legs move:
+//              companyProfit as above, plus depotProfit using the Depot
+//              Sales Price ("Depot S R" / dealerRate — the dealer's own
+//              buying price). This is the "both Depot's and Dealer's return
+//              value get calculated automatically" requirement — both rates
+//              already live on the Trade Sales Product List, so picking the
+//              product and typing the qty is all that's needed.
+// See computeProductReturnTotals in provider.tsx for the exact formulas.
 //
-// On top of the margin cascade above, a return also writes off the sunk cost
-// of the returned goods themselves: the full manufacturing cost is posted as
-// a "Factory Expense" (that labour/overhead is a total loss once the goods
-// are back) and 10% of the raw material cost is posted as a "Raw Material"
-// expense (the other 90% is assumed recoverable/re-usable) — both ordinary
-// ExpenseRecords (see createProductReturn in provider.tsx), so they flow
-// through the normal approval + ledger + Company Earnings expense pipeline
-// just like any manually-recorded expense.
+// Rates are never re-typed on a return — they're copied from the matching
+// Trade Sales Product List entry at the moment of return (see
+// createProductReturn in provider.tsx) so a return can never silently
+// disagree with the price list.
+//
+// Same sunk-cost write-off as before this chunk: the full manufacturing cost
+// of the returned goods is posted as a "Factory Expense" (a total loss once
+// they're back) and 10% of the raw material cost is posted as a "Raw
+// Material" expense (the other 90% is assumed recoverable/re-usable) — both
+// ordinary ExpenseRecords (see createProductReturn in provider.tsx), so they
+// flow through the normal approval + ledger + Company Earnings expense
+// pipeline just like any manually-recorded expense.
+//
+// rateCardId/invoiceNo are kept only so a return recorded before this chunk
+// (against an actual invoice) still type-checks and prints correctly — a
+// new return never sets them.
+export type ProductReturnParty = 'depot' | 'dealer'
+export type ProductReturnUnit = 'pcs' | 'kg'
+
 export type ProductReturnItem = {
+  // Links back to the Trade Sales Product List line this was returned
+  // against (TradeSalesProductRecord.id) — kept as `productId` for
+  // consistency with RateCardLineItem/reports that key off this field, even
+  // though it no longer points at a ProductRecord.
   productId?: string
   productName: string
   qty: number
+  unit: ProductReturnUnit
   rawRate: number
   manufRate: number
-  depotRate: number
-  dealerRate: number
+  depotRate: number // Depot Purchase Price ("Depot P R")
+  dealerRate: number // Depot Sales Price ("Depot S R") — the dealer's buying price
   tpRate?: number
   mrpRate?: number
   perCtnBgs?: string
@@ -823,10 +759,17 @@ export type ProductReturnItem = {
 export type ProductReturnRecord = {
   id: string
   returnNumber: string
-  rateCardId: string
-  invoiceNo: string
-  recipientName: string
+  rateCardId?: string
+  invoiceNo?: string
+  returnParty: ProductReturnParty
+  // The Depot or Dealer this return is against, per `returnParty` — links to
+  // DepotRecord/DealerRecord so the printed voucher shows the real party
+  // instead of free text. recipientName is that party's name, copied in at
+  // save time the same way every other voucher on this app does (falls back
+  // to a typed name when neither list has the right entry on file).
+  depotId?: string
   dealerId?: string
+  recipientName: string
   date: string
   items: ProductReturnItem[]
   reason: string
@@ -836,11 +779,9 @@ export type ProductReturnRecord = {
   dealerRateTotal: number
   tpRateTotal: number
   mrpRateTotal: number
-  // Amount taken OFF each party's profit for this return — same derived
-  // formulas as the three printed Invoice vouchers use:
-  companyProfit: number // usableMoney = depotRateTotal - manufRateTotal
-  depotProfit: number   // dealerRateTotal - depotRateTotal
-  dealerProfit: number  // tpRateTotal - dealerRateTotal
+  companyProfit: number // depotRateTotal - manufRateTotal, always computed
+  depotProfit: number   // dealerRateTotal - depotRateTotal, only when returnParty === 'dealer'
+  dealerProfit: number  // kept at 0 going forward (no "customer return" tier in this flow); retained only so old records/reports keep type-checking
   // Sunk-cost write-off (see ProductReturnItem comment above) — the linked
   // ExpenseRecord ids let deleteProductReturn reverse them along with the
   // return itself; the amounts are snapshotted here so the printed voucher
@@ -855,12 +796,16 @@ export type ProductReturnRecord = {
 }
 
 export type ProductReturnInput = {
-  rateCardId: string
+  returnParty: ProductReturnParty
+  depotId?: string
+  dealerId?: string
+  // Fallback label only used when neither depotId nor dealerId is picked.
+  recipientName?: string
   date?: string
-  // Only productId/productName + how much came back — rates are always
-  // copied from the original invoice line, never re-entered (see the
-  // ProductReturnRecord comment above).
-  items: Array<{ productId?: string; productName: string; qty: number }>
+  // Only productId (a TradeSalesProductRecord id)/productName + qty/unit —
+  // rates are always copied from the Trade Sales Product List, never
+  // re-entered (see the ProductReturnRecord comment above).
+  items: Array<{ productId?: string; productName: string; qty: number; unit: ProductReturnUnit }>
   reason?: string
 }
 
@@ -1070,11 +1015,10 @@ export type ExpenseRecord = {
 // ---- Loan Management (Loan Chart) -----------------------------------------
 // Money the company borrows from a member/lender (an individual, cooperative
 // member, investor, etc.) and repays over time — a LoanAccountRecord is just
-// who the loan is with, mirroring VendorRecord's plain name/phone/address
+// who the loan is with, mirroring DealerRecord's plain name/phone/address
 // shape. The running balance owed is never stored on it — always the live
 // sum of every LoanTransactionRecord against it (a 'withdrawal' raises the
-// balance, a 'repayment' lowers it, same "derive, don't store" rule
-// VendorRecord's due follows via computeVendorTotals) — see
+// balance, a 'repayment' lowers it, "derive, don't store") — see
 // computeLoanBalance in utils.ts. Falls to zero once fully repaid.
 export type LoanAccountRecord = {
   id: string
@@ -1290,10 +1234,7 @@ export type ERPData = {
   users: Record<string, UserRecord>
   dealers: Record<string, DealerRecord>
   dealerCategories: Record<string, DealerCategoryRecord>
-  vendors: Record<string, VendorRecord>
-  purchases: Record<string, PurchaseRecord>
-  vendorPayments: Record<string, VendorPaymentRecord>
-  packagingConversions: Record<string, PackagingConversionRecord>
+  depots: Record<string, DepotRecord>
   products: Record<string, ProductRecord>
   discountProducts: Record<string, DiscountProductRecord>
   tradeSalesProducts: Record<string, TradeSalesProductRecord>
@@ -1390,10 +1331,18 @@ export type DealerInput = {
   address?: string
   phone: string
   categoryId?: string
+  depotId?: string
 }
 
 export type DealerCategoryInput = {
   name: string
+}
+
+export type DepotInput = {
+  name: string
+  proprietorName?: string
+  address?: string
+  phone?: string
 }
 
 export type OrderInput = {

@@ -42,6 +42,8 @@ import type {
   DealerCategoryRecord,
   DealerInput,
   DealerRecord,
+  DepotInput,
+  DepotRecord,
   DiscountProductInput,
   DiscountProductRecord,
   ERPData,
@@ -63,14 +65,10 @@ import type {
   OrderItem,
   OrderItemBatchAllocation,
   OrderRecord,
-  PackagingConversionInput,
-  PackagingConversionRecord,
   ProductInput,
   ProductRecord,
   ProductReturnInput,
   ProductReturnRecord,
-  PurchaseInput,
-  PurchaseRecord,
   QcHoldRecord,
   QualityCheckInput,
   QualityCheckRecord,
@@ -93,10 +91,6 @@ import type {
   TradeSalesProductRecord,
   UserInput,
   UserRecord,
-  VendorInput,
-  VendorPaymentInput,
-  VendorPaymentRecord,
-  VendorRecord,
 } from '@/lib/erp/types'
 import {
   DIRECT_EXPENSE_CATEGORY,
@@ -110,6 +104,7 @@ import {
   getProductStatus,
   hasPermission as hasPermissionCheck,
   parsePerCtnMultiplier,
+  saleTypeLabel,
   toArray,
 } from '@/lib/erp/utils'
 import {
@@ -142,14 +137,8 @@ type ERPContextValue = {
   deleteDealer: (dealerId: string) => Promise<void>
   saveDealerCategory: (input: DealerCategoryInput, categoryId?: string) => Promise<string>
   deleteDealerCategory: (categoryId: string) => Promise<void>
-  saveVendor: (input: VendorInput, vendorId?: string) => Promise<string>
-  deleteVendor: (vendorId: string) => Promise<void>
-  savePurchase: (input: PurchaseInput, purchaseId?: string) => Promise<string>
-  deletePurchase: (purchaseId: string) => Promise<void>
-  saveVendorPayment: (input: VendorPaymentInput, paymentId?: string) => Promise<string>
-  deleteVendorPayment: (paymentId: string) => Promise<void>
-  savePackagingConversion: (input: PackagingConversionInput, recordId?: string) => Promise<string>
-  deletePackagingConversion: (recordId: string) => Promise<void>
+  saveDepot: (input: DepotInput, depotId?: string) => Promise<string>
+  deleteDepot: (depotId: string) => Promise<void>
   saveLoanAccount: (input: LoanAccountInput, loanAccountId?: string) => Promise<string>
   deleteLoanAccount: (loanAccountId: string) => Promise<void>
   saveLoanTransaction: (input: LoanTransactionInput, transactionId?: string) => Promise<string>
@@ -237,10 +226,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'users',
   'dealers',
   'dealerCategories',
-  'vendors',
-  'purchases',
-  'vendorPayments',
-  'packagingConversions',
   'products',
   'orders',
   'ledgerEntries',
@@ -393,6 +378,7 @@ function normalizeDealerRecord(dealer: DealerRecord): DealerRecord {
     proprietorName: dealer.proprietorName || '',
     address: dealer.address || '',
     categoryId: dealer.categoryId || '',
+    depotId: dealer.depotId || '',
     createdAt: dealer.createdAt || now,
     updatedAt: dealer.updatedAt || dealer.createdAt || now,
   }
@@ -418,6 +404,25 @@ function normalizeDealerCategoryRecord(category: DealerCategoryRecord): DealerCa
 function normalizeDealerCategoryMap(categories?: Record<string, DealerCategoryRecord> | null) {
   return Object.fromEntries(
     Object.entries(categories ?? {}).map(([id, category]) => [id, normalizeDealerCategoryRecord(category)])
+  )
+}
+
+function normalizeDepotRecord(depot: DepotRecord): DepotRecord {
+  const now = new Date().toISOString()
+
+  return {
+    ...depot,
+    phone: depot.phone || '',
+    proprietorName: depot.proprietorName || '',
+    address: depot.address || '',
+    createdAt: depot.createdAt || now,
+    updatedAt: depot.updatedAt || depot.createdAt || now,
+  }
+}
+
+function normalizeDepotMap(depots?: Record<string, DepotRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(depots ?? {}).map(([id, depot]) => [id, normalizeDepotRecord(depot)])
   )
 }
 
@@ -471,6 +476,24 @@ function normalizeTradeSalesProductRecord(product: TradeSalesProductRecord): Tra
 function normalizeTradeSalesProductMap(products?: Record<string, TradeSalesProductRecord> | null) {
   return Object.fromEntries(
     Object.entries(products ?? {}).map(([id, product]) => [id, normalizeTradeSalesProductRecord(product)])
+  )
+}
+
+// Fills in returnParty/item.unit for a ProductReturnRecord saved before this
+// chunk (against an invoice, with no such fields) so it still renders
+// correctly — a record with dealerId set cascaded through the Dealer leg,
+// everything else defaults to the Depot leg.
+function normalizeProductReturnRecord(entry: ProductReturnRecord): ProductReturnRecord {
+  return {
+    ...entry,
+    returnParty: entry.returnParty ?? (entry.dealerId ? 'dealer' : 'depot'),
+    items: entry.items.map((item) => ({ ...item, unit: item.unit ?? 'pcs' })),
+  }
+}
+
+function normalizeProductReturnMap(entries?: Record<string, ProductReturnRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(entries ?? {}).map(([id, entry]) => [id, normalizeProductReturnRecord(entry)])
   )
 }
 
@@ -820,10 +843,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     users: source.users ?? {},
     dealers: normalizeDealerMap(source.dealers),
     dealerCategories: normalizeDealerCategoryMap(source.dealerCategories),
-    vendors: source.vendors ?? {},
-    purchases: source.purchases ?? {},
-    vendorPayments: source.vendorPayments ?? {},
-    packagingConversions: source.packagingConversions ?? {},
+    depots: normalizeDepotMap(source.depots),
     products: normalizeProductMap(source.products),
     discountProducts: normalizeDiscountProductMap(source.discountProducts),
     tradeSalesProducts: normalizeTradeSalesProductMap(source.tradeSalesProducts),
@@ -839,7 +859,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     stockAdjustments: source.stockAdjustments ?? {},
     stockCounts: source.stockCounts ?? {},
     rateCards: source.rateCards ?? {},
-    productReturns: source.productReturns ?? {},
+    productReturns: normalizeProductReturnMap(source.productReturns),
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     notifications: source.notifications ?? {},
@@ -967,6 +987,7 @@ function normalizeDealerInput(input: DealerInput) {
     address: input.address?.trim() ?? '',
     phone: input.phone.trim(),
     categoryId: input.categoryId?.trim() ?? '',
+    depotId: input.depotId?.trim() ?? '',
   }
 }
 
@@ -976,30 +997,12 @@ function normalizeDealerCategoryInput(input: DealerCategoryInput) {
   }
 }
 
-function normalizeVendorInput(input: VendorInput) {
+function normalizeDepotInput(input: DepotInput) {
   return {
     name: input.name.trim(),
+    proprietorName: input.proprietorName?.trim() ?? '',
     address: input.address?.trim() ?? '',
-    phone: input.phone.trim(),
-  }
-}
-
-function normalizeVendorPaymentInput(input: VendorPaymentInput) {
-  return {
-    vendorId: input.vendorId.trim(),
-    amount: Math.max(input.amount ?? 0, 0),
-    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
-    method: input.method?.trim() ?? '',
-    remarks: input.remarks?.trim() ?? '',
-  }
-}
-
-function normalizePackagingConversionInput(input: PackagingConversionInput) {
-  return {
-    productId: input.productId.trim(),
-    packetWeightGrams: Math.max(input.packetWeightGrams ?? 0, 0),
-    unitsPerCarton: Math.max(input.unitsPerCarton ?? 1, 1),
-    cartonLabel: input.cartonLabel?.trim() || 'Carton',
+    phone: input.phone?.trim() ?? '',
   }
 }
 
@@ -1948,283 +1951,69 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('dealer_category_deleted', 'dealers', `Deleted dealer category ${category.name}.`)
   }
 
-  // ---- Purchase Department (Vendors, Purchase Entries, Payments) ---------
-  async function saveVendor(input: VendorInput, vendorId?: string) {
+  // A depot is the middle party in the Company → Depot → Dealer chain —
+  // mirrors saveDealer/deleteDealer above. Deleting one is blocked while any
+  // dealer still links to it (see deleteDepot below), the same guard
+  // deleteDealer uses against a dealer's own order history.
+  async function saveDepot(input: DepotInput, depotId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
 
-    const existingVendor = vendorId ? data.vendors[vendorId] : null
-    const normalized = normalizeVendorInput(input)
+    const existingDepot = depotId ? data.depots[depotId] : null
+    const normalized = normalizeDepotInput(input)
 
     if (!normalized.name) {
-      throw new Error('Vendor name is required.')
+      throw new Error('Depot name is required.')
     }
 
-    if (!normalized.phone) {
-      throw new Error('Vendor phone number is required.')
-    }
-
+    // Phone is not required here (unlike saveDealer) — the Dealer edit
+    // dialog lets someone type a brand-new depot name inline with nothing
+    // else on hand; phone/address can be filled in later from Depot List.
     const db = getDatabaseOrThrow()
-    const id = existingVendor?.id ?? createId('vendor')
+    const id = existingDepot?.id ?? createId('depot')
     const now = new Date().toISOString()
-    const vendor: VendorRecord = {
+    const depot = {
       id,
       ...normalized,
-      createdAt: existingVendor?.createdAt ?? now,
+      createdAt: existingDepot?.createdAt ?? now,
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/vendors'), { [id]: vendor })
+    await update(ref(db, 'erp/depots'), { [id]: depot })
     await writeActivity(
-      existingVendor ? 'vendor_updated' : 'vendor_created',
-      'purchases',
-      existingVendor ? `Updated ${vendor.name} vendor details.` : `Added vendor ${vendor.name}.`
+      existingDepot ? 'depot_updated' : 'depot_created',
+      'dealers',
+      existingDepot ? `Updated ${depot.name} depot details.` : `Added depot ${depot.name}.`
     )
 
     return id
   }
 
-  async function deleteVendor(vendorId: string) {
+  async function deleteDepot(depotId: string) {
     if (!data) {
       return
     }
 
-    const vendor = data.vendors[vendorId]
-    if (!vendor) {
-      throw new Error('Vendor not found.')
+    const depot = data.depots[depotId]
+    if (!depot) {
+      throw new Error('Depot not found.')
     }
 
-    const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.vendorId === vendorId)
-    if (hasPurchases) {
-      throw new Error('Vendors with purchase history cannot be deleted.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`vendors/${vendorId}`]: null,
-    })
-    await writeActivity('vendor_deleted', 'purchases', `Deleted vendor ${vendor.name}.`)
-  }
-
-  // A purchase's own quantities are kept entirely separate from
-  // ProductRecord.stockQty — see the PurchaseRecord comment in types.ts —
-  // so this never touches the product beyond reading its name/unit.
-  async function savePurchase(input: PurchaseInput, purchaseId?: string) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before recording a purchase.')
-    }
-
-    const existingPurchase = purchaseId ? data.purchases[purchaseId] : null
-    const vendor = data.vendors[input.vendorId]
-    if (!vendor) {
-      throw new Error('Pick a vendor for this purchase.')
-    }
-
-    const product = data.products[input.productId]
-    if (!product) {
-      throw new Error('Pick a product for this purchase.')
-    }
-
-    const quantity = Number(input.quantity) || 0
-    if (quantity <= 0) {
-      throw new Error('Purchase quantity must be greater than zero.')
-    }
-
-    const rate = Math.max(Number(input.rate) || 0, 0)
-    const amount = quantity * rate
-    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), amount)
-
-    const db = getDatabaseOrThrow()
-    const id = existingPurchase?.id ?? createId('purchase')
-    const now = new Date().toISOString()
-    const date = input.date?.trim() || existingPurchase?.date || now.slice(0, 10)
-    const purchaseNumber = existingPurchase?.purchaseNumber ?? `PUR-${Date.now().toString().slice(-8)}`
-
-    const purchase: PurchaseRecord = {
-      id,
-      purchaseNumber,
-      vendorId: vendor.id,
-      vendorName: vendor.name,
-      productId: product.id,
-      productName: product.name,
-      ...(product.unit ? { unit: product.unit } : {}),
-      date,
-      quantity,
-      rate,
-      amount,
-      paid,
-      due: amount - paid,
-      remarks: input.remarks?.trim() ?? '',
-      createdAt: existingPurchase?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/purchases'), { [id]: purchase })
-    await writeActivity(
-      existingPurchase ? 'purchase_updated' : 'purchase_created',
-      'purchases',
-      existingPurchase
-        ? `Updated purchase ${purchaseNumber} — ${quantity} ${product.unit ?? ''} of ${product.name} from ${vendor.name}.`
-        : `Recorded purchase ${purchaseNumber} — ${quantity} ${product.unit ?? ''} of ${product.name} from ${vendor.name} at ${rate}/unit.`
-    )
-
-    return id
-  }
-
-  async function deletePurchase(purchaseId: string) {
-    if (!data) {
-      return
-    }
-
-    const purchase = data.purchases[purchaseId]
-    if (!purchase) {
-      throw new Error('Purchase not found.')
+    const hasDealers = Object.values(data.dealers).some((dealer) => dealer.depotId === depotId)
+    if (hasDealers) {
+      throw new Error('Depots with dealers linked to them cannot be deleted.')
     }
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
-      [`purchases/${purchaseId}`]: null,
+      [`depots/${depotId}`]: null,
     })
-    await writeActivity(
-      'purchase_deleted',
-      'purchases',
-      `Deleted purchase ${purchase.purchaseNumber} (${purchase.vendorName}).`
-    )
-  }
-
-  async function saveVendorPayment(input: VendorPaymentInput, paymentId?: string) {
-    if (!data || !currentUser) {
-      throw new Error('You need to log in before recording a vendor payment.')
-    }
-
-    const existingPayment = paymentId ? data.vendorPayments[paymentId] : null
-    const normalized = normalizeVendorPaymentInput(input)
-    const vendor = data.vendors[normalized.vendorId]
-    if (!vendor) {
-      throw new Error('Pick a vendor for this payment.')
-    }
-
-    if (normalized.amount <= 0) {
-      throw new Error('Payment amount must be greater than zero.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const id = existingPayment?.id ?? createId('vendor_payment')
-    const now = new Date().toISOString()
-    const payment: VendorPaymentRecord = {
-      id,
-      vendorId: vendor.id,
-      vendorName: vendor.name,
-      amount: normalized.amount,
-      date: normalized.date,
-      ...(normalized.method ? { method: normalized.method } : {}),
-      ...(normalized.remarks ? { remarks: normalized.remarks } : {}),
-      createdAt: existingPayment?.createdAt ?? now,
-    }
-
-    await update(ref(db, 'erp/vendorPayments'), { [id]: payment })
-    await writeActivity(
-      existingPayment ? 'vendor_payment_updated' : 'vendor_payment_created',
-      'purchases',
-      `Recorded payment of ${normalized.amount} to vendor ${vendor.name}.`
-    )
-
-    return id
-  }
-
-  async function deleteVendorPayment(paymentId: string) {
-    if (!data) {
-      return
-    }
-
-    const payment = data.vendorPayments[paymentId]
-    if (!payment) {
-      throw new Error('Vendor payment not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`vendorPayments/${paymentId}`]: null,
-    })
-    await writeActivity(
-      'vendor_payment_deleted',
-      'purchases',
-      `Deleted payment of ${payment.amount} to vendor ${payment.vendorName}.`
-    )
-  }
-
-  // Section 3 of the Purchase Department spec — packet/carton conversion
-  // config, one row per product (see PackagingConversionRecord in types.ts).
-  async function savePackagingConversion(input: PackagingConversionInput, recordId?: string) {
-    if (!data) {
-      throw new Error('ERP data not loaded yet.')
-    }
-
-    const existingRecord = recordId ? data.packagingConversions[recordId] : null
-    const normalized = normalizePackagingConversionInput(input)
-    const product = data.products[normalized.productId]
-    if (!product) {
-      throw new Error('Pick a product for this packaging conversion.')
-    }
-
-    if (normalized.packetWeightGrams <= 0) {
-      throw new Error('Packet weight (grams) must be greater than zero.')
-    }
-
-    // One conversion row per product — editing re-saves the same id instead
-    // of creating a duplicate row for a product that already has one.
-    const existingForProduct =
-      existingRecord ??
-      Object.values(data.packagingConversions).find((entry) => entry.productId === normalized.productId)
-
-    const db = getDatabaseOrThrow()
-    const id = existingForProduct?.id ?? createId('packaging_conversion')
-    const now = new Date().toISOString()
-    const record: PackagingConversionRecord = {
-      id,
-      productId: product.id,
-      productName: product.name,
-      packetWeightGrams: normalized.packetWeightGrams,
-      unitsPerCarton: normalized.unitsPerCarton,
-      cartonLabel: normalized.cartonLabel,
-      createdAt: existingForProduct?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/packagingConversions'), { [id]: record })
-    await writeActivity(
-      existingForProduct ? 'packaging_conversion_updated' : 'packaging_conversion_created',
-      'purchases',
-      `Set packaging conversion for ${product.name}: ${normalized.packetWeightGrams}g/packet, ${normalized.unitsPerCarton} packets per ${normalized.cartonLabel}.`
-    )
-
-    return id
-  }
-
-  async function deletePackagingConversion(recordId: string) {
-    if (!data) {
-      return
-    }
-
-    const record = data.packagingConversions[recordId]
-    if (!record) {
-      throw new Error('Packaging conversion not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`packagingConversions/${recordId}`]: null,
-    })
-    await writeActivity(
-      'packaging_conversion_deleted',
-      'purchases',
-      `Deleted packaging conversion for ${record.productName}.`
-    )
+    await writeActivity('depot_deleted', 'dealers', `Deleted depot ${depot.name}.`)
   }
 
   // ---- Loan Management (Loan Chart) ---------------------------------------
-  // A loan account is who the loan is with — mirrors saveVendor above; the
+  // A loan account is who the loan is with — mirrors saveDealer above; the
   // running balance is never stored here, only ever derived live from its
   // transactions (see computeLoanBalance in utils.ts).
   async function saveLoanAccount(input: LoanAccountInput, loanAccountId?: string) {
@@ -4794,21 +4583,35 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'ratecard_updated',
       'sales',
-      `Classified rate card ${rateCard.invoiceNo} as ${saleType === 'commission' ? 'Commission-based' : 'Others'}.`
+      `Classified rate card ${rateCard.invoiceNo} as ${saleTypeLabel(saleType, toArray(data.dealerCategories)) ?? saleType}.`
     )
   }
 
-  // ---- Product Return (against an Invoice / Rate Card) -------------------
-  // Same cascade math as computeRateCardTotals, plus the three derived
-  // margins (Dealer/Depot/Company profit) that a return actually pulls
-  // down — see the ProductReturnRecord comment in types.ts.
-  function computeProductReturnTotals(items: ProductReturnRecord['items']) {
-    const totals = computeRateCardTotals(items)
+  // ---- Product Return (Damage/Return against the Trade Sales Product List) --
+  // Straight qty x rate, no per-carton/bag conversion — a return is entered
+  // directly in whichever unit (Pcs/Kg) came back. See the returnParty
+  // comment on ProductReturnRecord in types.ts for what each leg means.
+  function computeProductReturnTotals(
+    items: ProductReturnRecord['items'],
+    returnParty: ProductReturnRecord['returnParty']
+  ) {
+    const rawRateTotal = items.reduce((sum, item) => sum + item.qty * item.rawRate, 0)
+    const manufRateTotal = items.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
+    const depotRateTotal = items.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
+    const dealerRateTotal = items.reduce((sum, item) => sum + item.qty * item.dealerRate, 0)
+    const tpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.tpRate ?? 0), 0)
+    const mrpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.mrpRate ?? 0), 0)
+
     return {
-      ...totals,
-      companyProfit: totals.usableMoney,
-      depotProfit: totals.dealerRateTotal - totals.depotRateTotal,
-      dealerProfit: totals.tpRateTotal - totals.dealerRateTotal,
+      rawRateTotal,
+      manufRateTotal,
+      depotRateTotal,
+      dealerRateTotal,
+      tpRateTotal,
+      mrpRateTotal,
+      companyProfit: depotRateTotal - manufRateTotal,
+      depotProfit: returnParty === 'dealer' ? dealerRateTotal - depotRateTotal : 0,
+      dealerProfit: 0,
     }
   }
 
@@ -4816,54 +4619,49 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a product return.')
     }
-
-    const rateCard = data.rateCards[input.rateCardId]
-    if (!rateCard) {
-      throw new Error('Invoice not found.')
-    }
     if (!input.items.length) {
       throw new Error('Add at least one product to return.')
     }
 
-    // How much of each line has already come back on a prior return against
-    // this same invoice, so a second (or third) return can never exceed what
-    // was actually shipped — same guard createSalesReturn uses.
-    const alreadyReturned = new Map<string, number>()
-    Object.values(data.productReturns)
-      .filter((entry) => entry.rateCardId === rateCard.id)
-      .forEach((entry) => {
-        entry.items.forEach((item) => {
-          const key = item.productId || item.productName
-          alreadyReturned.set(key, (alreadyReturned.get(key) ?? 0) + item.qty)
-        })
-      })
+    const depot = input.depotId ? data.depots[input.depotId] : undefined
+    if (input.depotId && !depot) {
+      throw new Error('Depot not found.')
+    }
+    const dealer = input.dealerId ? data.dealers[input.dealerId] : undefined
+    if (input.dealerId && !dealer) {
+      throw new Error('Dealer not found.')
+    }
+    const recipientName = (depot?.name || dealer?.name || input.recipientName?.trim() || '').trim()
+    if (!recipientName) {
+      throw new Error(
+        input.returnParty === 'depot' ? 'Pick the depot this return is against.' : 'Pick the dealer this return is against.'
+      )
+    }
 
     const items: ProductReturnRecord['items'] = input.items.map((requested) => {
-      const key = requested.productId || requested.productName
-      const line = rateCard.items.find((item) => (item.productId || item.productName) === key)
-      if (!line) {
-        throw new Error(`${requested.productName} was not part of invoice ${rateCard.invoiceNo}.`)
+      const name = requested.productName.trim()
+      if (!name) {
+        throw new Error('Every return line needs a product.')
       }
       const qty = Number(requested.qty) || 0
       if (qty <= 0) {
-        throw new Error(`Return quantity for ${line.productName} must be greater than zero.`)
+        throw new Error(`Return quantity for ${name} must be greater than zero.`)
       }
-      const returnedSoFar = alreadyReturned.get(key) ?? 0
-      if (returnedSoFar + qty > line.qty) {
-        throw new Error(`Cannot return more than what was invoiced for ${line.productName}.`)
-      }
-
+      // Rates always come from the Trade Sales Product List entry, never
+      // re-typed — see the ProductReturnRecord comment in types.ts.
+      const product = requested.productId ? data.tradeSalesProducts[requested.productId] : undefined
       return {
-        ...(line.productId ? { productId: line.productId } : {}),
-        productName: line.productName,
+        ...(requested.productId ? { productId: requested.productId } : {}),
+        productName: product?.name ?? name,
         qty,
-        rawRate: line.rawRate,
-        manufRate: line.manufRate,
-        depotRate: line.depotRate,
-        dealerRate: line.dealerRate,
-        tpRate: line.tpRate ?? 0,
-        mrpRate: line.mrpRate ?? 0,
-        ...(line.perCtnBgs ? { perCtnBgs: line.perCtnBgs } : {}),
+        unit: requested.unit,
+        rawRate: product?.rawRate ?? 0,
+        manufRate: product?.manufRate ?? 0,
+        depotRate: product?.depotRate ?? 0,
+        dealerRate: product?.dealerRate ?? 0,
+        tpRate: product?.tpRate ?? 0,
+        mrpRate: product?.mrpRate ?? 0,
+        ...(product?.perCtnBgs ? { perCtnBgs: product.perCtnBgs } : {}),
       }
     })
 
@@ -4872,7 +4670,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const returnDate = input.date?.trim() || now.slice(0, 10)
     const returnNumber = `PRTN-${Date.now().toString().slice(-8)}`
-    const totals = computeProductReturnTotals(items)
+    const totals = computeProductReturnTotals(items, input.returnParty)
 
     const updates: Record<string, unknown> = {}
     const postedExpenses: ExpenseRecord[] = []
@@ -4891,7 +4689,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         id: expenseId,
         category,
         amount,
-        note: `${category} write-off for product return ${returnNumber} (invoice ${rateCard.invoiceNo}).`,
+        note: `${category} write-off for product return ${returnNumber} (${recipientName}).`,
         date: returnDate,
         paymentMethod: 'cash',
         approvalStatus: 'pending',
@@ -4919,10 +4717,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const productReturn: ProductReturnRecord = {
       id,
       returnNumber,
-      rateCardId: rateCard.id,
-      invoiceNo: rateCard.invoiceNo,
-      recipientName: rateCard.recipientName,
-      ...(rateCard.dealerId ? { dealerId: rateCard.dealerId } : {}),
+      returnParty: input.returnParty,
+      ...(depot ? { depotId: depot.id } : {}),
+      ...(dealer ? { dealerId: dealer.id } : {}),
+      recipientName,
       date: returnDate,
       items,
       reason: input.reason?.trim() ?? '',
@@ -4941,7 +4739,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'product_return_created',
       'sales',
-      `Recorded product return ${returnNumber} against invoice ${rateCard.invoiceNo} (${rateCard.recipientName}) — company profit down ${totals.companyProfit.toFixed(2)}, manufacturing cost ${totals.manufRateTotal.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
+      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — company profit down ${totals.companyProfit.toFixed(2)}${
+        input.returnParty === 'dealer' ? `, depot profit down ${totals.depotProfit.toFixed(2)}` : ''
+      }, manufacturing cost ${totals.manufRateTotal.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
     )
 
     // Section 37: re-check the write-off categories' budget(s) now that
@@ -5022,14 +4822,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteDealer,
       saveDealerCategory,
       deleteDealerCategory,
-      saveVendor,
-      deleteVendor,
-      savePurchase,
-      deletePurchase,
-      saveVendorPayment,
-      deleteVendorPayment,
-      savePackagingConversion,
-      deletePackagingConversion,
+      saveDepot,
+      deleteDepot,
       saveLoanAccount,
       deleteLoanAccount,
       saveLoanTransaction,

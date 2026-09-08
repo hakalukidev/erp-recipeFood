@@ -21,12 +21,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { ProductReturnRecord, RateCardRecord } from '@/lib/erp/types'
-import { formatDate, parsePerCtnMultiplier, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import type { ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
+import { createId, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 
 function formatAmount(value: number) {
   return value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -41,79 +42,60 @@ function escapeHtml(value: string) {
     .replaceAll("'", '&#039;')
 }
 
-// One row in the return-lines editor — sourced from the picked invoice's own
-// line items, so only `returnQty` is ever typed in; every rate column is
-// copied straight off the invoice, same as the provider (createProductReturn)
-// re-derives it server-side.
+const UNIT_LABEL: Record<ProductReturnUnit, string> = { pcs: 'Pcs', kg: 'Kg' }
+
+// One row in the return-lines editor — the product is picked straight off
+// the Trade Sales Product List (not an invoice), so rawRate/manufRate/
+// depotRate/dealerRate are auto-filled the moment a product is chosen and
+// never re-typed; only qty + unit are ever entered by hand. See
+// createProductReturn in provider.tsx, which re-derives the same rates
+// server-side from the same list.
 type ReturnLineDraft = {
+  key: string
   productId?: string
   productName: string
-  invoicedQty: number
-  alreadyReturnedQty: number
-  returnQty: string
+  qty: string
+  unit: ProductReturnUnit
   rawRate: number
   manufRate: number
   depotRate: number
   dealerRate: number
-  tpRate: number
-  mrpRate: number
   perCtnBgs?: string
 }
 
-function buildDraftLines(rateCard: RateCardRecord, existingReturns: ProductReturnRecord[]): ReturnLineDraft[] {
-  const returnedByProduct = new Map<string, number>()
-  existingReturns
-    .filter((entry) => entry.rateCardId === rateCard.id)
-    .forEach((entry) => {
-      entry.items.forEach((item) => {
-        const key = item.productId || item.productName
-        returnedByProduct.set(key, (returnedByProduct.get(key) ?? 0) + item.qty)
-      })
-    })
-
-  return rateCard.items.map((line) => {
-    const key = line.productId || line.productName
-    return {
-      productId: line.productId,
-      productName: line.productName,
-      invoicedQty: line.qty,
-      alreadyReturnedQty: returnedByProduct.get(key) ?? 0,
-      returnQty: '0',
-      rawRate: line.rawRate,
-      manufRate: line.manufRate,
-      depotRate: line.depotRate,
-      dealerRate: line.dealerRate,
-      tpRate: line.tpRate ?? 0,
-      mrpRate: line.mrpRate ?? 0,
-      perCtnBgs: line.perCtnBgs,
-    }
-  })
+function emptyLine(): ReturnLineDraft {
+  return {
+    key: createId('line'),
+    productName: '',
+    qty: '0',
+    unit: 'pcs',
+    rawRate: 0,
+    manufRate: 0,
+    depotRate: 0,
+    dealerRate: 0,
+  }
 }
 
-// Same cascade math as computeProductReturnTotals in provider.tsx — kept in
-// sync by hand since this is a live preview over uncommitted form state.
-function computePreviewTotals(lines: ReturnLineDraft[]) {
-  const active = lines.filter((line) => (Number(line.returnQty) || 0) > 0)
-  const pieces = (line: ReturnLineDraft) => (Number(line.returnQty) || 0) * parsePerCtnMultiplier(line.perCtnBgs)
+// Same math as computeProductReturnTotals in provider.tsx — kept in sync by
+// hand since this is a live preview over uncommitted form state. Qty is used
+// as-is against the rate (Pcs/Kg, no per-carton/bag conversion).
+function computePreviewTotals(lines: ReturnLineDraft[], returnParty: ProductReturnParty) {
+  const active = lines.filter((line) => (Number(line.qty) || 0) > 0)
+  const qtyOf = (line: ReturnLineDraft) => Number(line.qty) || 0
 
-  const rawRateTotal = active.reduce((sum, line) => sum + pieces(line) * line.rawRate, 0)
-  const manufRateTotal = active.reduce((sum, line) => sum + pieces(line) * line.manufRate, 0)
-  const depotRateTotal = active.reduce((sum, line) => sum + pieces(line) * line.depotRate, 0)
-  const dealerRateTotal = active.reduce((sum, line) => sum + pieces(line) * line.dealerRate, 0)
-  const tpRateTotal = active.reduce((sum, line) => sum + pieces(line) * line.tpRate, 0)
+  const rawRateTotal = active.reduce((sum, line) => sum + qtyOf(line) * line.rawRate, 0)
+  const manufRateTotal = active.reduce((sum, line) => sum + qtyOf(line) * line.manufRate, 0)
+  const depotRateTotal = active.reduce((sum, line) => sum + qtyOf(line) * line.depotRate, 0)
+  const dealerRateTotal = active.reduce((sum, line) => sum + qtyOf(line) * line.dealerRate, 0)
 
   return {
     rawRateTotal,
     manufRateTotal,
     depotRateTotal,
     dealerRateTotal,
-    tpRateTotal,
     companyProfit: depotRateTotal - manufRateTotal,
-    depotProfit: dealerRateTotal - depotRateTotal,
-    dealerProfit: tpRateTotal - dealerRateTotal,
-    // Sunk-cost write-off — kept in sync with createProductReturn's
-    // postWriteOffExpense in provider.tsx: full manufacturing cost, plus 10%
-    // of raw material cost, posted as expense entries.
+    depotProfit: returnParty === 'dealer' ? dealerRateTotal - depotRateTotal : 0,
+    returnValue: returnParty === 'depot' ? depotRateTotal : dealerRateTotal,
     manufacturingExpenseAmount: manufRateTotal,
     rawMaterialExpenseAmount: rawRateTotal * 0.1,
   }
@@ -148,9 +130,14 @@ function printHeader(subtitle: string) {
   `
 }
 
-// Combined (Company-side) return voucher — every rate column plus all three
-// profit reductions (Dealer/Depot/Company), mirroring buildRateCardHtml's
-// Company voucher but for goods coming back instead of going out.
+function partyLabel(entry: ProductReturnRecord) {
+  return entry.returnParty === 'depot' ? 'Depot' : 'Dealer'
+}
+
+// Combined (Company-side) return voucher — every rate column plus both
+// derived profit reductions this return actually pulls down (Company always,
+// Depot only when returnParty is 'dealer' — see the ProductReturnRecord
+// comment in types.ts).
 function buildCombinedReturnHtml(entry: ProductReturnRecord) {
   const rows = entry.items
     .map(
@@ -158,8 +145,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
       <tr>
         <td>${index + 1}</td>
         <td>${escapeHtml(item.productName)}</td>
-        <td class="numeric">${item.qty}</td>
-        <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
+        <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.rawRate)}</td>
         <td class="numeric">${formatAmount(item.manufRate)}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
@@ -181,12 +167,12 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
         ${printHeader('Product Return Voucher (Combined — Company)')}
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
-          <tr><td>Against Invoice No:</td><td>${escapeHtml(entry.invoiceNo)}</td></tr>
-          <tr><td>Dealer / Recipient:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          <tr><td>Returned From:</td><td>${escapeHtml(partyLabel(entry))}</td></tr>
+          <tr><td>Depot / Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
+          <tr><td>Return Value (refunded):</td><td class="numeric hl">${formatAmount(entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal)}</td></tr>
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
-          <tr><td>Depot Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.depotProfit)}</td></tr>
-          <tr><td>Dealer Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.dealerProfit)}</td></tr>
+          ${entry.returnParty === 'dealer' ? `<tr><td>Depot Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.depotProfit)}</td></tr>` : ''}
           <tr><td>Manufacturing Cost (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
           <tr><td>Raw Material 10% (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
         </table>
@@ -196,7 +182,6 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
               <th>SL</th>
               <th>Description of Products</th>
               <th>Return QTY</th>
-              <th>Per Ctn/Bgs</th>
               <th>Raw M</th>
               <th>Mnu Ra</th>
               <th>Dep Rate</th>
@@ -212,8 +197,9 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
   `
 }
 
-// Depot's own copy — Depot P P / Depot S P for the returned qty and how much
-// comes off its own margin (mirrors buildDepotInvoiceHtml's Depot Net Profit).
+// Depot's own copy — Depot P P / Depot S P for the returned qty. Relevant
+// whichever party actually returned the goods, since a Dealer return
+// cascades up through the Depot's own purchase from the Company too.
 function buildDepotReturnHtml(entry: ProductReturnRecord) {
   const rows = entry.items
     .map(
@@ -221,8 +207,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
       <tr>
         <td>${index + 1}</td>
         <td>${escapeHtml(item.productName)}</td>
-        <td class="numeric">${item.qty}</td>
-        <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
+        <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
       </tr>
@@ -242,7 +227,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
         ${printHeader('Product Return Invoice — Depot copy')}
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
-          <tr><td>Against Invoice No:</td><td>${escapeHtml(entry.invoiceNo)}</td></tr>
+          <tr><td>Returned From:</td><td>${escapeHtml(partyLabel(entry))}</td></tr>
           <tr><td>Depot / Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Depot Sales Price (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
@@ -255,7 +240,6 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
               <th>SL</th>
               <th>Description of Products</th>
               <th>Return QTY</th>
-              <th>Per Ctn/Bgs</th>
               <th>Depot P P</th>
               <th>Depot S P</th>
             </tr>
@@ -269,8 +253,9 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
   `
 }
 
-// Dealer's own copy — DP/TP for the returned qty and the dealer's own margin
-// given back (mirrors buildDealerInvoiceHtml's Dealer Margin).
+// Dealer's own copy — only printed when returnParty is 'dealer' (the goods
+// actually came back from a dealer, so this is the only voucher where the
+// Depot Sales Price is an active refund rather than a reference figure).
 function buildDealerReturnHtml(entry: ProductReturnRecord) {
   const rows = entry.items
     .map(
@@ -278,10 +263,8 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
       <tr>
         <td>${index + 1}</td>
         <td>${escapeHtml(item.productName)}</td>
-        <td class="numeric">${item.qty}</td>
-        <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
+        <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td class="numeric">${formatAmount(item.tpRate ?? 0)}</td>
       </tr>
     `
     )
@@ -299,11 +282,9 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
         ${printHeader('Product Return Invoice — Dealer copy')}
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
-          <tr><td>Against Invoice No:</td><td>${escapeHtml(entry.invoiceNo)}</td></tr>
           <tr><td>Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Goods Amount (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
-          <tr><td>Dealer Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.dealerProfit)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -311,9 +292,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
               <th>SL</th>
               <th>Description of Products</th>
               <th>Return QTY</th>
-              <th>Per Ctn/Bgs</th>
-              <th>DP</th>
-              <th>TP</th>
+              <th>Depot S P (DP)</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -327,98 +306,125 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
 
 export default function ProductReturnsPage() {
   const { data, createProductReturn, deleteProductReturn } = useERP()
-  const rateCards = useMemo(() => toArray(data?.rateCards), [data?.rateCards])
+  const tradeSalesProducts = useMemo(() => toArray(data?.tradeSalesProducts), [data?.tradeSalesProducts])
+  const depots = useMemo(() => toArray(data?.depots), [data?.depots])
+  const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const productReturns = useMemo(() => sortByCreatedAtDesc(toArray(data?.productReturns)), [data?.productReturns])
 
-  const invoiceOptions: ComboboxOption[] = useMemo(
+  const productOptions: ComboboxOption[] = useMemo(
     () =>
-      rateCards.map((card) => ({
-        value: card.id,
-        label: card.invoiceNo,
-        sublabel: card.recipientName,
+      tradeSalesProducts.map((product) => ({
+        value: product.id,
+        label: product.name,
+        sublabel: product.category,
       })),
-    [rateCards]
+    [tradeSalesProducts]
+  )
+  const depotOptions: ComboboxOption[] = useMemo(
+    () => depots.map((depot) => ({ value: depot.id, label: depot.name, sublabel: depot.address })),
+    [depots]
+  )
+  const dealerOptions: ComboboxOption[] = useMemo(
+    () => dealers.map((dealer) => ({ value: dealer.id, label: dealer.name, sublabel: dealer.address })),
+    [dealers]
   )
 
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [rateCardId, setRateCardId] = useState('')
-  const [lines, setLines] = useState<ReturnLineDraft[]>([])
+  const [returnParty, setReturnParty] = useState<ProductReturnParty>('depot')
+  const [depotId, setDepotId] = useState('')
+  const [dealerId, setDealerId] = useState('')
+  const [lines, setLines] = useState<ReturnLineDraft[]>([emptyLine()])
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
 
-  const selectedRateCard = rateCards.find((card) => card.id === rateCardId) ?? null
-  const previewTotals = useMemo(() => computePreviewTotals(lines), [lines])
+  const previewTotals = useMemo(() => computePreviewTotals(lines, returnParty), [lines, returnParty])
 
   const filteredReturns = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return productReturns
     return productReturns.filter((entry) =>
-      [entry.returnNumber, entry.invoiceNo, entry.recipientName].join(' ').toLowerCase().includes(normalized)
+      [entry.returnNumber, entry.recipientName].join(' ').toLowerCase().includes(normalized)
     )
   }, [productReturns, query])
 
   function openCreateDialog() {
-    setRateCardId('')
-    setLines([])
+    setReturnParty('depot')
+    setDepotId('')
+    setDealerId('')
+    setLines([emptyLine()])
     setDate(new Date().toISOString().slice(0, 10))
     setReason('')
     setFormError(null)
     setDialogOpen(true)
   }
 
-  function selectInvoice(id: string) {
-    setRateCardId(id)
-    const card = rateCards.find((item) => item.id === id)
-    setLines(card ? buildDraftLines(card, productReturns) : [])
+  function updateLine(key: string, patch: Partial<ReturnLineDraft>) {
+    setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
   }
 
-  function updateLineQty(index: number, value: string) {
-    setLines((current) => current.map((line, idx) => (idx === index ? { ...line, returnQty: value } : line)))
+  function selectLineProduct(key: string, productId: string) {
+    const product = tradeSalesProducts.find((item) => item.id === productId)
+    updateLine(key, {
+      productId,
+      productName: product?.name ?? '',
+      rawRate: product?.rawRate ?? 0,
+      manufRate: product?.manufRate ?? 0,
+      depotRate: product?.depotRate ?? 0,
+      dealerRate: product?.dealerRate ?? 0,
+      perCtnBgs: product?.perCtnBgs,
+    })
+  }
+
+  function addLine() {
+    setLines((current) => [...current, emptyLine()])
+  }
+
+  function removeLine(key: string) {
+    setLines((current) => (current.length > 1 ? current.filter((line) => line.key !== key) : current))
   }
 
   async function handleSave() {
     setFormError(null)
 
-    if (!selectedRateCard) {
-      setFormError('Pick the invoice this return is against.')
+    if (returnParty === 'depot' && !depotId) {
+      setFormError('Pick the depot this return is against.')
+      return
+    }
+    if (returnParty === 'dealer' && !dealerId) {
+      setFormError('Pick the dealer this return is against.')
       return
     }
 
     const items = lines
-      .filter((line) => (Number(line.returnQty) || 0) > 0)
+      .filter((line) => line.productId && (Number(line.qty) || 0) > 0)
       .map((line) => ({
         productId: line.productId,
         productName: line.productName,
-        qty: Number(line.returnQty) || 0,
+        qty: Number(line.qty) || 0,
+        unit: line.unit,
       }))
 
     if (items.length === 0) {
-      setFormError('Enter a return quantity for at least one product.')
-      return
-    }
-
-    const overLine = lines.find(
-      (line) => (Number(line.returnQty) || 0) + line.alreadyReturnedQty > line.invoicedQty
-    )
-    if (overLine) {
-      setFormError(`Cannot return more than what was invoiced for ${overLine.productName}.`)
+      setFormError('Pick at least one product and enter a return quantity.')
       return
     }
 
     setSaving(true)
     try {
       await createProductReturn({
-        rateCardId: selectedRateCard.id,
+        returnParty,
+        depotId: returnParty === 'depot' ? depotId : undefined,
+        dealerId: returnParty === 'dealer' ? dealerId : undefined,
         date,
         reason: reason.trim() || undefined,
         items,
       })
       setDialogOpen(false)
-      setFeedback('Product return recorded — print the combined or individual voucher from the row actions.')
+      setFeedback('Product return recorded — print the combined or party voucher from the row actions.')
     } catch (reason_) {
       setFormError(reason_ instanceof Error ? reason_.message : 'Unable to record product return.')
     } finally {
@@ -445,7 +451,10 @@ export default function ProductReturnsPage() {
 
   const totalCompanyImpact = productReturns.reduce((sum, entry) => sum + entry.companyProfit, 0)
   const totalDepotImpact = productReturns.reduce((sum, entry) => sum + entry.depotProfit, 0)
-  const totalDealerImpact = productReturns.reduce((sum, entry) => sum + entry.dealerProfit, 0)
+  const totalReturnValue = productReturns.reduce(
+    (sum, entry) => sum + (entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal),
+    0
+  )
   const totalWriteOffImpact = productReturns.reduce(
     (sum, entry) => sum + entry.manufacturingExpenseAmount + entry.rawMaterialExpenseAmount,
     0
@@ -459,7 +468,14 @@ export default function ProductReturnsPage() {
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight">{productReturns.length.toLocaleString('en-BD')}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Each prints as a Combined, Depot &amp; Dealer voucher</p>
+              <p className="mt-1 text-xs text-muted-foreground">Picked from the Trade Sale Product List, no invoice needed</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Total return value refunded</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalReturnValue)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Depot Purchase Price or Depot Sales Price, per return</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -473,12 +489,7 @@ export default function ProductReturnsPage() {
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Depot profit given back</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalDepotImpact)}</p>
-            </CardContent>
-          </Card>
-          <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Dealer profit given back</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalDealerImpact)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Only when the return came from a Dealer</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -501,8 +512,9 @@ export default function ProductReturnsPage() {
             <div>
               <CardTitle>Product Return</CardTitle>
               <CardDescription>
-                Return goods against a previously saved invoice — dealer, depot and company profit on that shipment
-                are all reduced, and the company's gross profit drops by the same amount.
+                Damage or return entry, independent of any invoice — pick any product off the Trade Sale Product List
+                (however old), enter how much came back in Pcs or Kg, and the Depot/Dealer return value is calculated
+                automatically off that list's Depot Purchase Price and Depot Sales Price.
               </CardDescription>
             </div>
             <div className="flex gap-3">
@@ -512,7 +524,7 @@ export default function ProductReturnsPage() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="pl-9"
-                  placeholder="Search return no or invoice"
+                  placeholder="Search return no or party"
                 />
               </div>
               <Button onClick={openCreateDialog}>
@@ -527,12 +539,12 @@ export default function ProductReturnsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Return No</TableHead>
-                    <TableHead>Invoice No</TableHead>
-                    <TableHead>Dealer</TableHead>
+                    <TableHead>Returned From</TableHead>
+                    <TableHead>Depot / Dealer</TableHead>
                     <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Return Value</TableHead>
                     <TableHead className="text-right">Company Profit</TableHead>
                     <TableHead className="text-right">Depot Profit</TableHead>
-                    <TableHead className="text-right">Dealer Profit</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -540,12 +552,16 @@ export default function ProductReturnsPage() {
                   {filteredReturns.map((entry) => (
                     <TableRow key={entry.id}>
                       <TableCell className="font-medium">{entry.returnNumber}</TableCell>
-                      <TableCell>{entry.invoiceNo}</TableCell>
+                      <TableCell>{partyLabel(entry)}</TableCell>
                       <TableCell>{entry.recipientName}</TableCell>
                       <TableCell>{formatDate(entry.date)}</TableCell>
+                      <TableCell className="text-right text-destructive">
+                        -{formatAmount(entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal)}
+                      </TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.companyProfit)}</TableCell>
-                      <TableCell className="text-right text-destructive">-{formatAmount(entry.depotProfit)}</TableCell>
-                      <TableCell className="text-right text-destructive">-{formatAmount(entry.dealerProfit)}</TableCell>
+                      <TableCell className="text-right text-destructive">
+                        {entry.returnParty === 'dealer' ? `-${formatAmount(entry.depotProfit)}` : '—'}
+                      </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -560,9 +576,11 @@ export default function ProductReturnsPage() {
                             <DropdownMenuItem onClick={() => openPrintWindow(buildDepotReturnHtml(entry))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDealerReturnHtml(entry))}>
-                              <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
-                            </DropdownMenuItem>
+                            {entry.returnParty === 'dealer' ? (
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildDealerReturnHtml(entry))}>
+                                <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(entry)}>
                               <Trash2 className="mr-2 h-4 w-4" /> Delete
                             </DropdownMenuItem>
@@ -595,7 +613,9 @@ export default function ProductReturnsPage() {
               </span>
               <div>
                 <DialogTitle>New product return</DialogTitle>
-                <DialogDescription>Pick the invoice, then enter how much of each line came back.</DialogDescription>
+                <DialogDescription>
+                  Pick who returned it, then add products from the Trade Sale Product List with the qty that came back.
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
@@ -603,104 +623,183 @@ export default function ProductReturnsPage() {
           <div className="space-y-5 px-6 pb-6">
             <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Against Invoice</label>
-                <Combobox
-                  options={invoiceOptions}
-                  value={rateCardId}
-                  onChange={selectInvoice}
-                  placeholder="Select invoice no"
-                  searchPlaceholder="Search invoice no or dealer"
-                />
+                <label className="text-xs font-medium text-muted-foreground">Returned From</label>
+                <Select
+                  value={returnParty}
+                  onValueChange={(value) => {
+                    setReturnParty(value as ProductReturnParty)
+                    setDepotId('')
+                    setDealerId('')
+                  }}
+                >
+                  <SelectTrigger className="bg-background">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="depot">Depot</SelectItem>
+                    <SelectItem value="dealer">Dealer</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Return Date</label>
                 <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="bg-background" />
               </div>
+              <div className="space-y-1 sm:col-span-2">
+                <label className="text-xs font-medium text-muted-foreground">
+                  {returnParty === 'depot' ? 'Depot' : 'Dealer'}
+                </label>
+                {returnParty === 'depot' ? (
+                  <Combobox
+                    options={depotOptions}
+                    value={depotId}
+                    onChange={setDepotId}
+                    placeholder="Select a depot"
+                    searchPlaceholder="Search depots..."
+                    emptyText="No depots found — add one in Depot List first."
+                  />
+                ) : (
+                  <Combobox
+                    options={dealerOptions}
+                    value={dealerId}
+                    onChange={setDealerId}
+                    placeholder="Select a dealer"
+                    searchPlaceholder="Search dealers..."
+                    emptyText="No dealers found — add one in Dealer List first."
+                  />
+                )}
+              </div>
             </div>
 
-            {selectedRateCard ? (
-              <div className="space-y-3">
-                <div className="overflow-x-auto rounded-xl border border-border/60">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Invoiced Qty</TableHead>
-                        <TableHead className="text-right">Already Returned</TableHead>
-                        <TableHead className="text-right">Return Qty</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {lines.map((line, index) => {
-                        const remaining = line.invoicedQty - line.alreadyReturnedQty
-                        return (
-                          <TableRow key={line.productId ?? line.productName}>
-                            <TableCell className="font-medium">{line.productName}</TableCell>
-                            <TableCell className="text-right">{line.invoicedQty}</TableCell>
-                            <TableCell className="text-right">{line.alreadyReturnedQty}</TableCell>
-                            <TableCell className="text-right">
-                              <Input
-                                type="number"
-                                min={0}
-                                max={remaining}
-                                value={line.returnQty}
-                                onChange={(event) => updateLineQty(index, event.target.value)}
-                                className="ml-auto w-24 bg-background text-right"
-                              />
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
+            {/* Cards, not a <Table>, on purpose — the Combobox's dropdown is
+                absolutely positioned relative to this row, and a horizontally
+                scrolling table (overflow-x-auto) clips that popover to a tiny
+                sliver instead of letting it float over the rest of the row.
+                See the same note in rate-card/page.tsx. */}
+            <div className="space-y-3">
+              {lines.map((line, index) => (
+                <div
+                  key={line.key}
+                  className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <Combobox
+                        options={productOptions}
+                        value={line.productId ?? ''}
+                        onChange={(value) => selectLineProduct(line.key, value)}
+                        placeholder="Select product"
+                        searchPlaceholder="Search trade sale products..."
+                        emptyText="No products found — add one in Trade Sales Product List first."
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeLine(line.key)}
+                      aria-label="Remove line"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
 
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-3">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Company Profit (deducted)</p>
-                    <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.companyProfit)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Depot Profit (deducted)</p>
-                    <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.depotProfit)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Dealer Profit (deducted)</p>
-                    <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.dealerProfit)}</p>
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Qty</label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={line.qty}
+                        onChange={(event) => updateLine(line.key, { qty: event.target.value })}
+                        className="bg-background"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Unit</label>
+                      <Select value={line.unit} onValueChange={(value) => updateLine(line.key, { unit: value as ProductReturnUnit })}>
+                        <SelectTrigger className="bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pcs">Pcs</SelectItem>
+                          <SelectItem value="kg">Kg</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Depot P R</label>
+                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm tabular-nums text-muted-foreground">
+                        {formatAmount(line.depotRate)}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-muted-foreground">Depot S R</label>
+                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm tabular-nums text-muted-foreground">
+                        {formatAmount(line.dealerRate)}
+                      </p>
+                    </div>
                   </div>
                 </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={addLine}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add product line
+              </Button>
 
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Manufacturing cost (posted as expense)</p>
-                    <p className="text-lg font-semibold text-destructive">
-                      -{formatAmount(previewTotals.manufacturingExpenseAmount)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Raw material 10% (posted as expense)</p>
-                    <p className="text-lg font-semibold text-destructive">
-                      -{formatAmount(previewTotals.rawMaterialExpenseAmount)}
-                    </p>
-                  </div>
+              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Return Value (refunded)</p>
+                  <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.returnValue)}</p>
                 </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Reason (optional)</label>
-                  <Textarea
-                    value={reason}
-                    onChange={(event) => setReason(event.target.value)}
-                    placeholder="Why is this being returned?"
-                    className="bg-background"
-                  />
+                <div>
+                  <p className="text-xs text-muted-foreground">Company Profit (deducted)</p>
+                  <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.companyProfit)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Depot Profit (deducted)</p>
+                  <p className="text-lg font-semibold text-destructive">
+                    {returnParty === 'dealer' ? `-${formatAmount(previewTotals.depotProfit)}` : '— (not returned via Dealer)'}
+                  </p>
                 </div>
               </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+
+              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Manufacturing cost (posted as expense)</p>
+                  <p className="text-lg font-semibold text-destructive">
+                    -{formatAmount(previewTotals.manufacturingExpenseAmount)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Raw material 10% (posted as expense)</p>
+                  <p className="text-lg font-semibold text-destructive">
+                    -{formatAmount(previewTotals.rawMaterialExpenseAmount)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Reason (optional)</label>
+                <Textarea
+                  value={reason}
+                  onChange={(event) => setReason(event.target.value)}
+                  placeholder="Why is this being returned?"
+                  className="bg-background"
+                />
+              </div>
+            </div>
+
+            {tradeSalesProducts.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
                 <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                Select an invoice above to load its line items.
+                The Trade Sale Product List is empty — add products there first.
               </div>
-            )}
+            ) : null}
 
             {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
 

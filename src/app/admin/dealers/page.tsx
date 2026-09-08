@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import {
   Dialog,
   DialogContent,
@@ -29,9 +30,17 @@ type DealerFormState = {
   phone: string
   address: string
   categoryId: string
+  depotId: string
 }
 
-const emptyDealerForm: DealerFormState = { name: '', proprietorName: '', phone: '', address: '', categoryId: '' }
+const emptyDealerForm: DealerFormState = {
+  name: '',
+  proprietorName: '',
+  phone: '',
+  address: '',
+  categoryId: '',
+  depotId: '',
+}
 
 function formFromDealer(dealer: DealerRecord): DealerFormState {
   return {
@@ -40,11 +49,12 @@ function formFromDealer(dealer: DealerRecord): DealerFormState {
     phone: dealer.phone,
     address: dealer.address,
     categoryId: dealer.categoryId ?? '',
+    depotId: dealer.depotId ?? '',
   }
 }
 
 export default function DealersPage() {
-  const { data, saveDealer, deleteDealer } = useERP()
+  const { data, saveDealer, deleteDealer, saveDepot } = useERP()
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
   const categories = useMemo(
@@ -55,6 +65,20 @@ export default function DealersPage() {
     const map = new Map(categories.map((category) => [category.id, category.name]))
     return (categoryId?: string) => (categoryId ? map.get(categoryId) : undefined)
   }, [categories])
+  const depots = useMemo(() => sortByCreatedAtDesc(toArray(data?.depots)), [data?.depots])
+  const depotName = useMemo(() => {
+    const map = new Map(depots.map((depot) => [depot.id, depot.name]))
+    return (depotId?: string) => (depotId ? map.get(depotId) : undefined)
+  }, [depots])
+  // Pick an existing depot or type a new name on the fly — see
+  // handleCreateDepot below. '' is the "No depot" sentinel option.
+  const depotOptions: ComboboxOption[] = useMemo(
+    () => [
+      { value: '', label: 'No depot' },
+      ...depots.map((depot) => ({ value: depot.id, label: depot.name, sublabel: depot.phone || depot.address })),
+    ],
+    [depots]
+  )
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingDealer, setEditingDealer] = useState<DealerRecord | null>(null)
@@ -71,14 +95,21 @@ export default function DealersPage() {
     if (!normalizedQuery) return dealers
 
     return dealers.filter((dealer) =>
-      [dealer.name, dealer.proprietorName, dealer.phone, dealer.address, categoryName(dealer.categoryId) ?? '']
+      [
+        dealer.name,
+        dealer.proprietorName,
+        dealer.phone,
+        dealer.address,
+        categoryName(dealer.categoryId) ?? '',
+        depotName(dealer.depotId) ?? '',
+      ]
         .join(' ')
         .toLowerCase()
         .includes(normalizedQuery)
     )
-  }, [dealers, query, categoryName])
+  }, [dealers, query, categoryName, depotName])
 
-  const exportHeaders = ['Business Name', 'Proprietor Name', 'Phone', 'Address', 'Category']
+  const exportHeaders = ['Business Name', 'Proprietor Name', 'Phone', 'Address', 'Category', 'Depot']
   const exportRows = useMemo(
     () =>
       filteredDealers.map((dealer) => [
@@ -87,8 +118,9 @@ export default function DealersPage() {
         dealer.phone,
         dealer.address,
         categoryName(dealer.categoryId) ?? '',
+        depotName(dealer.depotId) ?? '',
       ]),
-    [filteredDealers, categoryName]
+    [filteredDealers, categoryName, depotName]
   )
 
   function openCreateDialog() {
@@ -115,6 +147,7 @@ export default function DealersPage() {
       phone: dealerForm.phone,
       address: dealerForm.address,
       categoryId: dealerForm.categoryId || undefined,
+      depotId: dealerForm.depotId || undefined,
     }
 
     try {
@@ -125,6 +158,21 @@ export default function DealersPage() {
       setFeedback(editingDealer ? 'Dealer details updated.' : 'New dealer added.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to save dealer.')
+    }
+  }
+
+  // Typing a name that doesn't match an existing depot creates it on the fly
+  // (phone/address can be filled in later from Depot List) and links it to
+  // this dealer immediately.
+  async function handleCreateDepot(typedText: string) {
+    const name = typedText.trim()
+    if (!name) return
+
+    try {
+      const depotId = await saveDepot({ name, phone: '' })
+      setDealerForm((current) => ({ ...current, depotId }))
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to add depot.')
     }
   }
 
@@ -189,6 +237,7 @@ export default function DealersPage() {
                     <TableHead>Mobile</TableHead>
                     <TableHead>Address</TableHead>
                     <TableHead>Category</TableHead>
+                    <TableHead>Depot</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -230,6 +279,13 @@ export default function DealersPage() {
                           <span className="text-muted-foreground">Uncategorized</span>
                         )}
                       </TableCell>
+                      <TableCell className="min-w-32">
+                        {depotName(dealer.depotId) ? (
+                          <Badge variant="secondary">{depotName(dealer.depotId)}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">No depot</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(dealer)} aria-label={`Edit ${dealer.name}`}>
@@ -251,7 +307,7 @@ export default function DealersPage() {
                   ))}
                   {filteredDealers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
                         No dealers found.
                       </TableCell>
                     </TableRow>
@@ -339,6 +395,25 @@ export default function DealersPage() {
                   No categories yet — add one from Dealer Category first.
                 </p>
               ) : null}
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                Depot <span className="font-normal text-muted-foreground">(optional)</span>
+              </p>
+              <Combobox
+                options={depotOptions}
+                value={dealerForm.depotId}
+                onChange={(value) => setDealerForm((current) => ({ ...current, depotId: value }))}
+                placeholder="Select or type a depot name"
+                searchPlaceholder="Search or type a new depot name"
+                emptyText="No matching depot."
+                onCreateNew={handleCreateDepot}
+                createNewLabel="Add depot"
+              />
+              <p className="text-xs text-muted-foreground">
+                Type a name that doesn&apos;t exist yet to add it. Linking a depot here lets the Dealer voucher
+                print its own name and address instead of just &quot;Depot&quot;.
+              </p>
             </div>
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setDialogOpen(false)}>

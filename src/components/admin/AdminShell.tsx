@@ -25,9 +25,9 @@ import {
   ShieldCheck,
   Store,
   Tags,
-  Truck,
   Undo2,
   Users,
+  Warehouse,
   X,
 } from 'lucide-react'
 
@@ -106,18 +106,18 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'dealers:view',
       },
       {
+        label: 'Depot List',
+        description: 'Depot directory — name, address, and phone, linked to dealers to tell depots apart on invoices',
+        href: '/admin/depots',
+        icon: Warehouse,
+        permission: 'dealers:view',
+      },
+      {
         label: 'Dealer Category',
         description: 'Manage the category names used to group dealers (e.g. Wholesaler, Retailer, Distributor)',
         href: '/admin/dealer-categories',
         icon: Tags,
         permission: 'dealers:view',
-      },
-      {
-        label: 'Purchase',
-        description: 'Vendors, purchase entries and dues, and the packet/carton conversion (HK) report',
-        href: '/admin/purchases',
-        icon: Truck,
-        permission: 'purchases:view',
       },
       {
         label: 'Invoice',
@@ -464,6 +464,16 @@ function useGlobalSearchResults(query: string): SearchResult[] {
     )
     dealers.slice(0, limit).forEach((dealer) =>
       results.push({ id: dealer.id, category: 'Dealer', title: dealer.name, subtitle: dealer.phone, href: '/admin/dealers' })
+    )
+
+    const depots = toArray(data.depots).filter(
+      (depot) =>
+        depot.name.toLowerCase().includes(term) ||
+        depot.proprietorName.toLowerCase().includes(term) ||
+        depot.phone.toLowerCase().includes(term)
+    )
+    depots.slice(0, limit).forEach((depot) =>
+      results.push({ id: depot.id, category: 'Depot', title: depot.name, subtitle: depot.phone, href: '/admin/depots' })
     )
 
     const products = toArray(data.products).filter(
