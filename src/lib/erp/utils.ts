@@ -88,17 +88,26 @@ export function formatCurrency(value: number, currency = 'BDT') {
   }).format(value)
 }
 
+// A missing/malformed `value` (undefined, '', a bad record written before a
+// field was required) turns `new Date(value)` into an Invalid Date — feeding
+// that to Intl.DateTimeFormat throws an uncaught RangeError that crashes the
+// whole page (usually from inside a table/export useMemo), so guard it here
+// once rather than at every call site.
 export function formatDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
   return new Intl.DateTimeFormat('en-BD', {
     dateStyle: 'medium',
-  }).format(new Date(value))
+  }).format(date)
 }
 
 export function formatDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
   return new Intl.DateTimeFormat('en-BD', {
     dateStyle: 'medium',
     timeStyle: 'short',
-  }).format(new Date(value))
+  }).format(date)
 }
 
 export function isSameCalendarDay(value: string, target = new Date()) {

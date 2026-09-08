@@ -564,6 +564,34 @@ function normalizeOrderMap(orders?: Record<string, OrderRecord> | null) {
   )
 }
 
+// A stray record from the earlier, differently-shaped Purchase Department
+// (deleted before this version existed — see the Purchase Section comment
+// below) can still sit in the live DB missing fields this shape requires,
+// e.g. no `items` array or no `date` — left ungarded that crashes the whole
+// page the moment page.tsx does `purchase.items.map(...)` or
+// `formatDate(purchase.date)`. Sanitize once here instead of guarding every
+// call site.
+function normalizePurchaseRecord(purchase: PurchaseRecord): PurchaseRecord {
+  const now = new Date().toISOString()
+
+  return {
+    ...purchase,
+    vendorName: purchase.vendorName || '',
+    date: purchase.date || purchase.createdAt || now,
+    items: Array.isArray(purchase.items) ? purchase.items : [],
+    totalAmount: Number(purchase.totalAmount ?? 0),
+    paid: Number(purchase.paid ?? 0),
+    due: Number(purchase.due ?? 0),
+    createdAt: purchase.createdAt || now,
+  }
+}
+
+function normalizePurchaseMap(purchases?: Record<string, PurchaseRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(purchases ?? {}).map(([id, purchase]) => [id, normalizePurchaseRecord(purchase)])
+  )
+}
+
 // Section 36 — mirrors normalizeOrderRecord above: expenses recorded before
 // the Expense Approval Workflow existed default to "approved" so they don't
 // retroactively show up as awaiting approval.
@@ -888,7 +916,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     productReturns: normalizeProductReturnMap(source.productReturns),
     vendors: source.vendors ?? {},
     purchaseMaterials: source.purchaseMaterials ?? {},
-    purchases: source.purchases ?? {},
+    purchases: normalizePurchaseMap(source.purchases),
     vendorPayments: source.vendorPayments ?? {},
     materialUsages: source.materialUsages ?? {},
     qualityChecks: source.qualityChecks ?? {},
