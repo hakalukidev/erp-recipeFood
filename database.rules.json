@@ -119,6 +119,10 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
+      "productReturns": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
       "collections": {
         ".read": "auth != null",
         ".write": "auth != null"
