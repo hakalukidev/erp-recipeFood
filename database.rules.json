@@ -159,6 +159,26 @@
         ".read": "auth != null",
         ".write": "auth != null"
       },
+      "vendors": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "purchaseMaterials": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "purchases": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "vendorPayments": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "materialUsages": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
       "notifications": {
         ".read": "auth != null",
         ".write": "auth != null"

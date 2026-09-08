@@ -809,6 +809,190 @@ export type ProductReturnInput = {
   reason?: string
 }
 
+// ---- Purchase Section (procurement from vendors) --------------------------
+// The পারচেজ বিভাগ chunk: buying raw material and packaging material from
+// vendors, and tracking two things live off that:
+//   1) Vendor ledger — daily how much (kg/pcs) was bought from a vendor, at
+//      what rate, how much was deposited against it, and the running amount
+//      still owed to them (see computeVendorDue in utils.ts — mirrors
+//      computeDealerDue's "always derive from the transaction record" shape,
+//      never stored on the vendor itself).
+//   2) Material stock — raw material (bought/tracked in Kg) and packaging
+//      material (Packet/Pouch/Carton/Bottle/Sack/Sticker — bought in Kg or
+//      Pcs depending on the item) both live in one PurchaseMaterialRecord
+//      list. A purchase (PurchaseRecord) adds to stock; a MaterialUsageRecord
+//      (production consuming it, or stock going out to Depot/Dealer) takes
+//      it back down — so the Materials & Stock report always shows current
+//      stock without anyone re-typing a running total, and flags what needs
+//      buying next (stockQty <= minStock).
+//
+// Deliberately NOT posted to the ledger/Automatic Accounting Engine — same
+// simplification as CashMaintenanceRecord's "goods/packaging purchase"
+// category (see the comment there): this is a standalone procurement +
+// stock log, not a Chart-of-Accounts-integrated module.
+export type VendorRecord = {
+  id: string
+  name: string
+  proprietorName?: string
+  address: string
+  phone: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type VendorInput = {
+  name: string
+  proprietorName?: string
+  address?: string
+  phone?: string
+}
+
+// 'raw_material' is what gets converted into packaged finished goods (e.g.
+// tea leaf, bought and tracked in Kg); 'packaging_material' is what wraps it
+// (Packet/Pouch/Carton/Bottle/Sack/Sticker) — bought either by weight (a roll
+// of pouch film, tracked in Kg) or by count (a sack/carton, tracked in Pcs).
+export type PurchaseMaterialCategory = 'raw_material' | 'packaging_material'
+export type PackagingType = 'Packet' | 'Pouch' | 'Carton' | 'Bottle' | 'Sack' | 'Sticker' | 'Other'
+export type PurchaseMaterialUnit = 'kg' | 'pcs'
+
+// One material/packaging item on the master list — stockQty is the running
+// balance a Purchase (in) and a Material Usage (out) move, never re-typed
+// directly except to correct an opening balance.
+//
+// The spec's conversion example: a 40g tea-leaf pouch made of 3g of pouch
+// film — 100kg of pouch film in stock becomes 100,000g / 3g = 33,333 pieces
+// (see unitWeightGrams below). A sack bought/tracked by the piece instead
+// (20 sacks in stock, each holding 500 finished pieces) shows 20 x 500 =
+// 10,000 pieces of packing capacity instead (see capacityPerUnit below).
+// Only one of the two is ever set on a given material — whichever matches
+// how it's actually bought/tracked (`unit`). See
+// computeMaterialAvailablePieces in utils.ts for the derived number the
+// Materials & Stock report shows.
+export type PurchaseMaterialRecord = {
+  id: string
+  name: string
+  category: PurchaseMaterialCategory
+  // Only meaningful when category is 'packaging_material'.
+  packagingType?: PackagingType
+  unit: PurchaseMaterialUnit
+  // Grams of this material used per finished piece — set when `unit` is
+  // 'kg' (e.g. pouch film, bottle cap plastic) so a weight-based stock can
+  // still be read off as "pieces available".
+  unitWeightGrams?: number
+  // Finished pieces one unit of this material can pack — set when `unit`
+  // is 'pcs' (e.g. a sack/carton bought and counted individually).
+  capacityPerUnit?: number
+  stockQty: number
+  minStock: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type PurchaseMaterialInput = {
+  name: string
+  category: PurchaseMaterialCategory
+  packagingType?: PackagingType
+  unit: PurchaseMaterialUnit
+  unitWeightGrams?: number
+  capacityPerUnit?: number
+  stockQty?: number
+  minStock?: number
+}
+
+// One line of a purchase — qty/rate are always in the material's own unit
+// (Kg or Pcs); category/unit are copied from the material at save time (like
+// ProductReturnItem copies its rates) so a report never has to re-look the
+// material up to know how to read a historical line.
+export type PurchaseItem = {
+  materialId?: string
+  materialName: string
+  category: PurchaseMaterialCategory
+  unit: PurchaseMaterialUnit
+  qty: number
+  rate: number
+  amount: number
+}
+
+// One procurement transaction from a vendor — paid/due follow the same
+// pattern as OrderRecord (paid entered at save time, due = totalAmount -
+// paid, further paydowns tracked as VendorPaymentRecord the way
+// CollectionRecord tracks a dealer paydown against an OrderRecord).
+export type PurchaseRecord = {
+  id: string
+  purchaseNumber: string
+  vendorId?: string
+  vendorName: string
+  date: string
+  items: PurchaseItem[]
+  totalAmount: number
+  paid: number
+  due: number
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type PurchaseInput = {
+  vendorId?: string
+  vendorName?: string
+  date?: string
+  items: Array<{ materialId?: string; materialName: string; qty: number; rate: number }>
+  paid?: number
+  note?: string
+}
+
+// A paydown against one purchase's outstanding due — same role as
+// CollectionRecord against an OrderRecord (see recordCollection in
+// provider.tsx), just on the payable side instead of the receivable side.
+export type VendorPaymentRecord = {
+  id: string
+  receiptNumber: string
+  purchaseId: string
+  purchaseNumber: string
+  vendorId?: string
+  vendorName: string
+  amount: number
+  date: string
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type VendorPaymentInput = {
+  purchaseId: string
+  amount: number
+  date?: string
+  note?: string
+}
+
+// Stock going back out — production consuming raw/packaging material, or
+// stock issued to a Depot/Dealer — the "then it'll be minus'd" half of the
+// spec (points 2 and 3). Freeform `note` records why (e.g. "Packed into
+// Batch #12", "Issued to Mymensingh Depot") since there's no production/BOM
+// module yet for this to link to automatically.
+export type MaterialUsageRecord = {
+  id: string
+  materialId: string
+  materialName: string
+  category: PurchaseMaterialCategory
+  unit: PurchaseMaterialUnit
+  qty: number
+  date: string
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type MaterialUsageInput = {
+  materialId: string
+  qty: number
+  date?: string
+  note?: string
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module — the detailed lab-test parameters. Production
 // (completeProduction) is the only source that creates these today; 'purchase'
@@ -1251,6 +1435,11 @@ export type ERPData = {
   stockCounts: Record<string, StockCountRecord>
   rateCards: Record<string, RateCardRecord>
   productReturns: Record<string, ProductReturnRecord>
+  vendors: Record<string, VendorRecord>
+  purchaseMaterials: Record<string, PurchaseMaterialRecord>
+  purchases: Record<string, PurchaseRecord>
+  vendorPayments: Record<string, VendorPaymentRecord>
+  materialUsages: Record<string, MaterialUsageRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   notifications: Record<string, NotificationRecord>

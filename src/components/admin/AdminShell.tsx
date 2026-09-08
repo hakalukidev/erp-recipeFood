@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Store,
   Tags,
+  Truck,
   Undo2,
   Users,
   Warehouse,
@@ -118,6 +119,13 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/dealer-categories',
         icon: Tags,
         permission: 'dealers:view',
+      },
+      {
+        label: 'Purchase',
+        description: 'Vendor list, raw/packaging material stock, and daily purchase entries with vendor due tracking',
+        href: '/admin/purchase',
+        icon: Truck,
+        permission: 'purchase:view',
       },
       {
         label: 'Invoice',
@@ -507,6 +515,13 @@ function useGlobalSearchResults(query: string): SearchResult[] {
         subtitle: `Dealer Rate ${product.dealerRate}`,
         href: '/admin/trade-sales-products',
       })
+    )
+
+    const vendors = toArray(data.vendors).filter(
+      (vendor) => vendor.name.toLowerCase().includes(term) || vendor.phone.toLowerCase().includes(term)
+    )
+    vendors.slice(0, limit).forEach((vendor) =>
+      results.push({ id: vendor.id, category: 'Vendor', title: vendor.name, subtitle: vendor.phone, href: '/admin/purchase' })
     )
 
     const batches = toArray(data.batches).filter(

@@ -106,10 +106,10 @@ export function Combobox({
         onClick={() => setOpen((current) => !current)}
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm font-normal shadow-sm disabled:cursor-not-allowed disabled:opacity-50",
-          !selected && "text-muted-foreground"
+          !selected && !value && "text-muted-foreground"
         )}
       >
-        <span className="truncate">{selected ? selected.label : placeholder}</span>
+        <span className="truncate">{selected ? selected.label : value || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>
 

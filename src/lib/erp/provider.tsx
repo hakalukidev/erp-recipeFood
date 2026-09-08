@@ -69,6 +69,11 @@ import type {
   ProductRecord,
   ProductReturnInput,
   ProductReturnRecord,
+  PurchaseInput,
+  PurchaseItem,
+  PurchaseMaterialInput,
+  PurchaseMaterialRecord,
+  PurchaseRecord,
   QcHoldRecord,
   QualityCheckInput,
   QualityCheckRecord,
@@ -91,6 +96,12 @@ import type {
   TradeSalesProductRecord,
   UserInput,
   UserRecord,
+  VendorInput,
+  VendorPaymentInput,
+  VendorPaymentRecord,
+  VendorRecord,
+  MaterialUsageInput,
+  MaterialUsageRecord,
 } from '@/lib/erp/types'
 import {
   DIRECT_EXPENSE_CATEGORY,
@@ -194,6 +205,15 @@ type ERPContextValue = {
   classifyRateCardSaleType: (rateCardId: string, saleType: SaleType) => Promise<void>
   createProductReturn: (input: ProductReturnInput) => Promise<string>
   deleteProductReturn: (productReturnId: string) => Promise<void>
+  saveVendor: (input: VendorInput, vendorId?: string) => Promise<string>
+  deleteVendor: (vendorId: string) => Promise<void>
+  savePurchaseMaterial: (input: PurchaseMaterialInput, materialId?: string) => Promise<string>
+  deletePurchaseMaterial: (materialId: string) => Promise<void>
+  createPurchase: (input: PurchaseInput) => Promise<string>
+  deletePurchase: (purchaseId: string) => Promise<void>
+  recordVendorPayment: (input: VendorPaymentInput) => Promise<string>
+  createMaterialUsage: (input: MaterialUsageInput) => Promise<string>
+  deleteMaterialUsage: (materialUsageId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
 }
 
@@ -226,6 +246,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'users',
   'dealers',
   'dealerCategories',
+  'depots',
   'products',
   'orders',
   'ledgerEntries',
@@ -256,6 +277,11 @@ const ERP_TOP_LEVEL_KEYS = [
   'investors',
   'discountProducts',
   'tradeSalesProducts',
+  'vendors',
+  'purchaseMaterials',
+  'purchases',
+  'vendorPayments',
+  'materialUsages',
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
@@ -860,6 +886,11 @@ function normalizeERPData(data: ERPData | null): ERPData {
     stockCounts: source.stockCounts ?? {},
     rateCards: source.rateCards ?? {},
     productReturns: normalizeProductReturnMap(source.productReturns),
+    vendors: source.vendors ?? {},
+    purchaseMaterials: source.purchaseMaterials ?? {},
+    purchases: source.purchases ?? {},
+    vendorPayments: source.vendorPayments ?? {},
+    materialUsages: source.materialUsages ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     notifications: source.notifications ?? {},
@@ -998,6 +1029,15 @@ function normalizeDealerCategoryInput(input: DealerCategoryInput) {
 }
 
 function normalizeDepotInput(input: DepotInput) {
+  return {
+    name: input.name.trim(),
+    proprietorName: input.proprietorName?.trim() ?? '',
+    address: input.address?.trim() ?? '',
+    phone: input.phone?.trim() ?? '',
+  }
+}
+
+function normalizeVendorInput(input: VendorInput) {
   return {
     name: input.name.trim(),
     proprietorName: input.proprietorName?.trim() ?? '',
@@ -2010,6 +2050,422 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`depots/${depotId}`]: null,
     })
     await writeActivity('depot_deleted', 'dealers', `Deleted depot ${depot.name}.`)
+  }
+
+  // ---- Purchase Section (procurement from vendors) ------------------------
+  // A vendor is who materials are bought from — mirrors saveDealer/saveDepot
+  // above. Deleting one is blocked while any purchase is on file against it,
+  // same guard deleteDepot uses against a linked dealer.
+  async function saveVendor(input: VendorInput, vendorId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existingVendor = vendorId ? data.vendors[vendorId] : null
+    const normalized = normalizeVendorInput(input)
+
+    if (!normalized.name) {
+      throw new Error('Vendor name is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingVendor?.id ?? createId('vendor')
+    const now = new Date().toISOString()
+    const vendor = {
+      id,
+      ...normalized,
+      createdAt: existingVendor?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/vendors'), { [id]: vendor })
+    await writeActivity(
+      existingVendor ? 'vendor_updated' : 'vendor_created',
+      'purchase',
+      existingVendor ? `Updated ${vendor.name} vendor details.` : `Added vendor ${vendor.name}.`
+    )
+
+    return id
+  }
+
+  async function deleteVendor(vendorId: string) {
+    if (!data) {
+      return
+    }
+
+    const vendor = data.vendors[vendorId]
+    if (!vendor) {
+      throw new Error('Vendor not found.')
+    }
+
+    const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.vendorId === vendorId)
+    if (hasPurchases) {
+      throw new Error('Vendors with purchases on file cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`vendors/${vendorId}`]: null,
+    })
+    await writeActivity('vendor_deleted', 'purchase', `Deleted vendor ${vendor.name}.`)
+  }
+
+  // A material/packaging item on the Purchase stock master list — see
+  // PurchaseMaterialRecord in types.ts. Deleting one is blocked once it has
+  // any purchase or usage history, same reasoning as deleteVendor above.
+  async function savePurchaseMaterial(input: PurchaseMaterialInput, materialId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existing = materialId ? data.purchaseMaterials[materialId] : null
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Material name is required.')
+    }
+
+    const unitWeightGrams = Number(input.unitWeightGrams)
+    const capacityPerUnit = Number(input.capacityPerUnit)
+
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('material')
+    const now = new Date().toISOString()
+    const material: PurchaseMaterialRecord = {
+      id,
+      name,
+      category: input.category,
+      unit: input.unit,
+      stockQty: Number(input.stockQty) || 0,
+      minStock: Number(input.minStock) || 0,
+      ...(input.category === 'packaging_material' && input.packagingType ? { packagingType: input.packagingType } : {}),
+      ...(input.unit === 'kg' && unitWeightGrams > 0 ? { unitWeightGrams } : {}),
+      ...(input.unit === 'pcs' && capacityPerUnit > 0 ? { capacityPerUnit } : {}),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/purchaseMaterials'), { [id]: material })
+    await writeActivity(
+      existing ? 'purchase_material_updated' : 'purchase_material_created',
+      'purchase',
+      existing ? `Updated material ${material.name}.` : `Added material ${material.name} to Purchase stock.`
+    )
+
+    if (material.stockQty <= material.minStock) {
+      await writeNotification(
+        'Material low stock alert',
+        `${material.name} is at or below its minimum stock (${material.stockQty} ${material.unit}/${material.minStock} ${material.unit}) — consider purchasing more.`,
+        'warning',
+        ['super_admin', 'manager', 'warehouse_manager', 'production_manager']
+      )
+    }
+
+    return id
+  }
+
+  async function deletePurchaseMaterial(materialId: string) {
+    if (!data) {
+      return
+    }
+
+    const material = data.purchaseMaterials[materialId]
+    if (!material) {
+      throw new Error('Material not found.')
+    }
+
+    const isReferenced =
+      Object.values(data.purchases).some((purchase) => purchase.items.some((item) => item.materialId === materialId)) ||
+      Object.values(data.materialUsages).some((usage) => usage.materialId === materialId)
+    if (isReferenced) {
+      throw new Error('Materials with purchase or usage history cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`purchaseMaterials/${materialId}`]: null,
+    })
+    await writeActivity('purchase_material_deleted', 'purchase', `Deleted material ${material.name}.`)
+  }
+
+  // One procurement transaction — adds to each line's material stock and
+  // opens (or fully settles) that much due against the vendor. See the
+  // PurchaseRecord comment in types.ts for why this never touches the
+  // ledger/Automatic Accounting Engine.
+  async function createPurchase(input: PurchaseInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a purchase.')
+    }
+    if (!input.items.length) {
+      throw new Error('Add at least one material to the purchase.')
+    }
+
+    const vendor = input.vendorId ? data.vendors[input.vendorId] : undefined
+    if (input.vendorId && !vendor) {
+      throw new Error('Vendor not found.')
+    }
+    const vendorName = (vendor?.name || input.vendorName?.trim() || '').trim()
+    if (!vendorName) {
+      throw new Error('Pick or type the vendor this purchase is from.')
+    }
+
+    const items: PurchaseItem[] = input.items.map((requested) => {
+      const name = requested.materialName.trim()
+      if (!name) {
+        throw new Error('Every purchase line needs a material.')
+      }
+      const qty = Number(requested.qty) || 0
+      if (qty <= 0) {
+        throw new Error(`Quantity for ${name} must be greater than zero.`)
+      }
+      const rate = Number(requested.rate) || 0
+      if (rate < 0) {
+        throw new Error(`Rate for ${name} cannot be negative.`)
+      }
+      const material = requested.materialId ? data.purchaseMaterials[requested.materialId] : undefined
+      return {
+        ...(requested.materialId ? { materialId: requested.materialId } : {}),
+        materialName: material?.name ?? name,
+        category: material?.category ?? 'raw_material',
+        unit: material?.unit ?? 'kg',
+        qty,
+        rate,
+        amount: qty * rate,
+      }
+    })
+
+    const totalAmount = items.reduce((sum, item) => sum + item.amount, 0)
+    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), totalAmount)
+    const due = totalAmount - paid
+
+    const db = getDatabaseOrThrow()
+    const id = createId('purchase')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || now.slice(0, 10)
+    const purchaseNumber = `PUR-${Date.now().toString().slice(-8)}`
+
+    const purchase: PurchaseRecord = {
+      id,
+      purchaseNumber,
+      ...(vendor ? { vendorId: vendor.id } : {}),
+      vendorName,
+      date,
+      items,
+      totalAmount,
+      paid,
+      due,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+
+    const updates: Record<string, unknown> = { [`purchases/${id}`]: purchase }
+
+    // Purchased qty adds straight onto each material's running stock — a
+    // material can appear on more than one line (unlikely but not
+    // disallowed), so deltas are summed before writing.
+    const stockDeltas = new Map<string, number>()
+    items.forEach((item) => {
+      if (!item.materialId) return
+      stockDeltas.set(item.materialId, (stockDeltas.get(item.materialId) ?? 0) + item.qty)
+    })
+    stockDeltas.forEach((delta, materialId) => {
+      const material = data.purchaseMaterials[materialId]
+      if (!material) return
+      updates[`purchaseMaterials/${materialId}/stockQty`] = material.stockQty + delta
+      updates[`purchaseMaterials/${materialId}/updatedAt`] = now
+    })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'purchase_created',
+      'purchase',
+      `Recorded purchase ${purchaseNumber} from ${vendorName} — ${totalAmount.toFixed(2)} total, ${paid.toFixed(2)} paid, ${due.toFixed(2)} due.`
+    )
+
+    return id
+  }
+
+  async function deletePurchase(purchaseId: string) {
+    if (!data) {
+      return
+    }
+
+    const purchase = data.purchases[purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = { [`purchases/${purchaseId}`]: null }
+
+    // Reverse the stock this purchase added, same as it was added.
+    const stockDeltas = new Map<string, number>()
+    purchase.items.forEach((item) => {
+      if (!item.materialId) return
+      stockDeltas.set(item.materialId, (stockDeltas.get(item.materialId) ?? 0) + item.qty)
+    })
+    stockDeltas.forEach((delta, materialId) => {
+      const material = data.purchaseMaterials[materialId]
+      if (!material) return
+      updates[`purchaseMaterials/${materialId}/stockQty`] = material.stockQty - delta
+      updates[`purchaseMaterials/${materialId}/updatedAt`] = now
+    })
+
+    // A purchase with payments already recorded against it takes those down
+    // with it too, same cascade-delete shape used elsewhere in this file.
+    Object.values(data.vendorPayments)
+      .filter((payment) => payment.purchaseId === purchaseId)
+      .forEach((payment) => {
+        updates[`vendorPayments/${payment.id}`] = null
+      })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('purchase_deleted', 'purchase', `Deleted purchase ${purchase.purchaseNumber}.`)
+  }
+
+  // A paydown against one purchase's due — mirrors recordCollection above,
+  // just on the payable side.
+  async function recordVendorPayment(input: VendorPaymentInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a vendor payment.')
+    }
+
+    const purchase = data.purchases[input.purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
+    }
+
+    const amount = Number(input.amount) || 0
+    if (amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.')
+    }
+    if (amount > purchase.due) {
+      throw new Error('Payment amount cannot exceed the outstanding due.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('vendorpay')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || now.slice(0, 10)
+    const receiptNumber = `VPAY-${Date.now().toString().slice(-8)}`
+    const nextDue = purchase.due - amount
+    const nextPaid = purchase.paid + amount
+
+    const payment: VendorPaymentRecord = {
+      id,
+      receiptNumber,
+      purchaseId: purchase.id,
+      purchaseNumber: purchase.purchaseNumber,
+      ...(purchase.vendorId ? { vendorId: purchase.vendorId } : {}),
+      vendorName: purchase.vendorName,
+      amount,
+      date,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+
+    await update(ref(db, 'erp'), {
+      [`vendorPayments/${id}`]: payment,
+      [`purchases/${purchase.id}/paid`]: nextPaid,
+      [`purchases/${purchase.id}/due`]: nextDue,
+    })
+    await writeActivity(
+      'vendor_payment_recorded',
+      'purchase',
+      `Paid ${amount.toFixed(2)} to ${purchase.vendorName} against purchase ${purchase.purchaseNumber} — ${nextDue.toFixed(2)} still due.`
+    )
+
+    return id
+  }
+
+  // Stock going back out — production consuming material, or stock issued
+  // out (spec points 2 & 3). Allowed to take stockQty negative rather than
+  // block the entry — the point is to surface the shortage on the Materials
+  // & Stock report, not to get in the way of logging what actually happened.
+  async function createMaterialUsage(input: MaterialUsageInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before logging material usage.')
+    }
+
+    const material = data.purchaseMaterials[input.materialId]
+    if (!material) {
+      throw new Error('Material not found.')
+    }
+
+    const qty = Number(input.qty) || 0
+    if (qty <= 0) {
+      throw new Error('Usage quantity must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('usage')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || now.slice(0, 10)
+    const nextStock = material.stockQty - qty
+
+    const usage: MaterialUsageRecord = {
+      id,
+      materialId: material.id,
+      materialName: material.name,
+      category: material.category,
+      unit: material.unit,
+      qty,
+      date,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+
+    await update(ref(db, 'erp'), {
+      [`materialUsages/${id}`]: usage,
+      [`purchaseMaterials/${material.id}/stockQty`]: nextStock,
+      [`purchaseMaterials/${material.id}/updatedAt`]: now,
+    })
+    await writeActivity(
+      'material_usage_recorded',
+      'purchase',
+      `Logged ${qty} ${material.unit} of ${material.name} used — ${nextStock} ${material.unit} left in stock.`
+    )
+
+    if (nextStock <= material.minStock) {
+      await writeNotification(
+        'Material low stock alert',
+        `${material.name} is at or below its minimum stock (${nextStock} ${material.unit}/${material.minStock} ${material.unit}) — consider purchasing more.`,
+        'warning',
+        ['super_admin', 'manager', 'warehouse_manager', 'production_manager']
+      )
+    }
+
+    return id
+  }
+
+  async function deleteMaterialUsage(materialUsageId: string) {
+    if (!data) {
+      return
+    }
+
+    const usage = data.materialUsages[materialUsageId]
+    if (!usage) {
+      throw new Error('Material usage entry not found.')
+    }
+
+    const material = data.purchaseMaterials[usage.materialId]
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = { [`materialUsages/${materialUsageId}`]: null }
+
+    if (material) {
+      updates[`purchaseMaterials/${material.id}/stockQty`] = material.stockQty + usage.qty
+      updates[`purchaseMaterials/${material.id}/updatedAt`] = now
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('material_usage_deleted', 'purchase', `Deleted material usage entry for ${usage.materialName}.`)
   }
 
   // ---- Loan Management (Loan Chart) ---------------------------------------
@@ -4865,6 +5321,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       classifyRateCardSaleType,
       createProductReturn,
       deleteProductReturn,
+      saveVendor,
+      deleteVendor,
+      savePurchaseMaterial,
+      deletePurchaseMaterial,
+      createPurchase,
+      deletePurchase,
+      recordVendorPayment,
+      createMaterialUsage,
+      deleteMaterialUsage,
       saveSettings,
     }),
     [currentPermissions, currentUser, data, error, loading, users]

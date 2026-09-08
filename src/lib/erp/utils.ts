@@ -4,6 +4,7 @@ import type {
   ERPData,
   OrderRecord,
   ProductRecord,
+  PurchaseMaterialRecord,
   SaleType,
   UserRecord,
 } from '@/lib/erp/types'
@@ -541,6 +542,32 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
   return toArray(data?.orders)
     .filter((order) => order.dealerId === dealerId && order.status !== 'cancelled')
     .reduce((sum, order) => sum + order.due, 0)
+}
+
+// ---- Purchase Section (procurement from vendors) --------------------------
+// Same "always derive it live" shape as computeDealerDue above — a vendor's
+// outstanding due is never stored on the vendor, just the running sum of
+// PurchaseRecord.due across every purchase billed to them (each purchase's
+// own due is already kept correct by createPurchase/recordVendorPayment).
+export function computeVendorDue(data: ERPData | null, vendorId: string) {
+  return toArray(data?.purchases)
+    .filter((purchase) => purchase.vendorId === vendorId)
+    .reduce((sum, purchase) => sum + purchase.due, 0)
+}
+
+// The pieces a packaging material's current stock is actually good for —
+// see the PurchaseMaterialRecord comment in types.ts for the two conversion
+// shapes this covers (weight-based film vs. count-based sack/carton).
+// Returns undefined when the material carries neither conversion field (a
+// plain Kg/Pcs material with nothing to derive, or a raw material).
+export function computeMaterialAvailablePieces(material: PurchaseMaterialRecord): number | undefined {
+  if (material.unit === 'kg' && material.unitWeightGrams && material.unitWeightGrams > 0) {
+    return Math.floor((material.stockQty * 1000) / material.unitWeightGrams)
+  }
+  if (material.unit === 'pcs' && material.capacityPerUnit && material.capacityPerUnit > 0) {
+    return Math.floor(material.stockQty * material.capacityPerUnit)
+  }
+  return undefined
 }
 
 // ---- Loan Management --------------------------------------------------
