@@ -2,6 +2,7 @@ import type {
   ActivityRecord,
   ERPData,
   OrderRecord,
+  PackagingConversionRecord,
   ProductRecord,
   UserRecord,
 } from '@/lib/erp/types'
@@ -497,6 +498,85 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
   return toArray(data?.orders)
     .filter((order) => order.dealerId === dealerId && order.status !== 'cancelled')
     .reduce((sum, order) => sum + order.due, 0)
+}
+
+// ---- Purchase Department --------------------------------------------------
+// A vendor's running totals — purchased quantity/amount from every
+// PurchaseRecord against them, and how much of that has actually been paid
+// (whatever was handed over at purchase time, plus every later
+// VendorPaymentRecord). `due` can go negative if a vendor has been overpaid
+// (a credit balance) — never clamped to zero, so that stays visible.
+export function computeVendorTotals(data: ERPData | null, vendorId: string) {
+  const purchases = toArray(data?.purchases).filter((purchase) => purchase.vendorId === vendorId)
+  const totalQuantity = purchases.reduce((sum, purchase) => sum + purchase.quantity, 0)
+  const totalAmount = purchases.reduce((sum, purchase) => sum + purchase.amount, 0)
+  const paidAtPurchase = purchases.reduce((sum, purchase) => sum + purchase.paid, 0)
+  const paidLater = toArray(data?.vendorPayments)
+    .filter((payment) => payment.vendorId === vendorId)
+    .reduce((sum, payment) => sum + payment.amount, 0)
+  const totalPaid = paidAtPurchase + paidLater
+  return { totalQuantity, totalAmount, totalPaid, due: totalAmount - totalPaid }
+}
+
+// ---- Loan Management --------------------------------------------------
+// A loan member's running balance owed — every 'withdrawal' raises it, every
+// 'repayment' lowers it, never clamped (so an overpayment stays visible as a
+// negative balance, same as computeVendorTotals' due). Reaches zero once
+// fully repaid, per the Loan Chart spec.
+export function computeLoanBalance(data: ERPData | null, loanAccountId: string) {
+  const transactions = toArray(data?.loanTransactions).filter((entry) => entry.loanAccountId === loanAccountId)
+  const totalWithdrawn = transactions
+    .filter((entry) => entry.type === 'withdrawal')
+    .reduce((sum, entry) => sum + entry.amount, 0)
+  const totalRepaid = transactions
+    .filter((entry) => entry.type === 'repayment')
+    .reduce((sum, entry) => sum + entry.amount, 0)
+  return { totalWithdrawn, totalRepaid, balance: totalWithdrawn - totalRepaid }
+}
+
+// ---- Expense Management --------------------------------------------------
+// Per-employee running total of every সেলারি-category expense tagged with
+// that employee (ExpenseRecord.employeeId) — Section 5 of the Loan/Cash
+// Maintenance spec: a quick spot-check of how much salary money an employee
+// has actually received, against a payslip/cheque history. A rejected
+// expense was never actually paid out, so it's excluded here the same way
+// buildCompanyEarningsSummary excludes it from total expense.
+export function computeEmployeeSalaryTotals(data: ERPData | null) {
+  const rows = new Map<string, { employeeId: string; employeeName: string; total: number; count: number }>()
+  toArray(data?.expenses)
+    .filter((entry) => entry.employeeId && entry.approvalStatus !== 'rejected')
+    .forEach((entry) => {
+      const employeeId = entry.employeeId as string
+      const existing = rows.get(employeeId)
+      if (existing) {
+        existing.total += entry.amount
+        existing.count += 1
+      } else {
+        rows.set(employeeId, { employeeId, employeeName: entry.employeeName ?? '', total: entry.amount, count: 1 })
+      }
+    })
+  return Array.from(rows.values()).sort((left, right) => right.total - left.total)
+}
+
+// Total quantity ever purchased for a given product, across every vendor —
+// the input side of the Packaging/HK Conversion capacity report below.
+export function computeVendorPurchasedQty(data: ERPData | null, productId: string) {
+  return toArray(data?.purchases)
+    .filter((purchase) => purchase.productId === productId)
+    .reduce((sum, purchase) => sum + purchase.quantity, 0)
+}
+
+// The Purchase Department's packet/carton conversion example: a purchased
+// quantity in kg, at `packetWeightGrams` per packet, converts to
+// (quantityKg * 1000) / packetWeightGrams packets, and `unitsPerCarton`
+// packets make one carton/sack/bottle case.
+export function computePackagingConversion(
+  quantityKg: number,
+  config: Pick<PackagingConversionRecord, 'packetWeightGrams' | 'unitsPerCarton'>
+) {
+  const pieces = config.packetWeightGrams > 0 ? (quantityKg * 1000) / config.packetWeightGrams : 0
+  const cartons = config.unitsPerCarton > 0 ? pieces / config.unitsPerCarton : 0
+  return { pieces, cartons }
 }
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {

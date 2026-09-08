@@ -28,6 +28,8 @@ import type {
   BatchRecord,
   BudgetInput,
   BudgetRecord,
+  CashMaintenanceInput,
+  CashMaintenanceRecord,
   ChartOfAccountInput,
   ChartOfAccountRecord,
   CollectionInput,
@@ -52,15 +54,23 @@ import type {
   JournalEntryRecord,
   LedgerAccount,
   LedgerEntryRecord,
+  LoanAccountInput,
+  LoanAccountRecord,
+  LoanTransactionInput,
+  LoanTransactionRecord,
   LoginHistoryRecord,
   OrderInput,
   OrderItem,
   OrderItemBatchAllocation,
   OrderRecord,
+  PackagingConversionInput,
+  PackagingConversionRecord,
   ProductInput,
   ProductRecord,
   ProductReturnInput,
   ProductReturnRecord,
+  PurchaseInput,
+  PurchaseRecord,
   QcHoldRecord,
   QualityCheckInput,
   QualityCheckRecord,
@@ -83,9 +93,15 @@ import type {
   TradeSalesProductRecord,
   UserInput,
   UserRecord,
+  VendorInput,
+  VendorPaymentInput,
+  VendorPaymentRecord,
+  VendorRecord,
 } from '@/lib/erp/types'
 import {
+  DIRECT_EXPENSE_CATEGORY,
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
+  EXPENSE_SALARY_CATEGORY,
   STANDARD_CHART_OF_ACCOUNTS,
 } from '@/lib/erp/standardChartOfAccounts'
 import {
@@ -126,6 +142,20 @@ type ERPContextValue = {
   deleteDealer: (dealerId: string) => Promise<void>
   saveDealerCategory: (input: DealerCategoryInput, categoryId?: string) => Promise<string>
   deleteDealerCategory: (categoryId: string) => Promise<void>
+  saveVendor: (input: VendorInput, vendorId?: string) => Promise<string>
+  deleteVendor: (vendorId: string) => Promise<void>
+  savePurchase: (input: PurchaseInput, purchaseId?: string) => Promise<string>
+  deletePurchase: (purchaseId: string) => Promise<void>
+  saveVendorPayment: (input: VendorPaymentInput, paymentId?: string) => Promise<string>
+  deleteVendorPayment: (paymentId: string) => Promise<void>
+  savePackagingConversion: (input: PackagingConversionInput, recordId?: string) => Promise<string>
+  deletePackagingConversion: (recordId: string) => Promise<void>
+  saveLoanAccount: (input: LoanAccountInput, loanAccountId?: string) => Promise<string>
+  deleteLoanAccount: (loanAccountId: string) => Promise<void>
+  saveLoanTransaction: (input: LoanTransactionInput, transactionId?: string) => Promise<string>
+  deleteLoanTransaction: (transactionId: string) => Promise<void>
+  saveCashMaintenance: (input: CashMaintenanceInput, recordId?: string) => Promise<string>
+  deleteCashMaintenance: (recordId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
   deleteProduct: (productId: string) => Promise<void>
   saveDiscountProduct: (input: DiscountProductInput, productId?: string) => Promise<string>
@@ -207,6 +237,10 @@ const ERP_TOP_LEVEL_KEYS = [
   'users',
   'dealers',
   'dealerCategories',
+  'vendors',
+  'purchases',
+  'vendorPayments',
+  'packagingConversions',
   'products',
   'orders',
   'ledgerEntries',
@@ -227,6 +261,9 @@ const ERP_TOP_LEVEL_KEYS = [
   'activities',
   'loginHistory',
   'expenses',
+  'loanAccounts',
+  'loanTransactions',
+  'cashMaintenance',
   'budgets',
   'salesTargets',
   'commissionRules',
@@ -355,6 +392,7 @@ function normalizeDealerRecord(dealer: DealerRecord): DealerRecord {
     phone: dealer.phone || '',
     proprietorName: dealer.proprietorName || '',
     address: dealer.address || '',
+    categoryId: dealer.categoryId || '',
     createdAt: dealer.createdAt || now,
     updatedAt: dealer.updatedAt || dealer.createdAt || now,
   }
@@ -782,6 +820,10 @@ function normalizeERPData(data: ERPData | null): ERPData {
     users: source.users ?? {},
     dealers: normalizeDealerMap(source.dealers),
     dealerCategories: normalizeDealerCategoryMap(source.dealerCategories),
+    vendors: source.vendors ?? {},
+    purchases: source.purchases ?? {},
+    vendorPayments: source.vendorPayments ?? {},
+    packagingConversions: source.packagingConversions ?? {},
     products: normalizeProductMap(source.products),
     discountProducts: normalizeDiscountProductMap(source.discountProducts),
     tradeSalesProducts: normalizeTradeSalesProductMap(source.tradeSalesProducts),
@@ -804,6 +846,9 @@ function normalizeERPData(data: ERPData | null): ERPData {
     activities: source.activities ?? {},
     loginHistory: source.loginHistory ?? {},
     expenses: normalizeExpenseMap(source.expenses),
+    loanAccounts: source.loanAccounts ?? {},
+    loanTransactions: source.loanTransactions ?? {},
+    cashMaintenance: source.cashMaintenance ?? {},
     budgets: source.budgets ?? {},
     salesTargets: source.salesTargets ?? {},
     commissionRules: source.commissionRules ?? {},
@@ -921,12 +966,67 @@ function normalizeDealerInput(input: DealerInput) {
     proprietorName: input.proprietorName?.trim() ?? '',
     address: input.address?.trim() ?? '',
     phone: input.phone.trim(),
+    categoryId: input.categoryId?.trim() ?? '',
   }
 }
 
 function normalizeDealerCategoryInput(input: DealerCategoryInput) {
   return {
     name: input.name.trim(),
+  }
+}
+
+function normalizeVendorInput(input: VendorInput) {
+  return {
+    name: input.name.trim(),
+    address: input.address?.trim() ?? '',
+    phone: input.phone.trim(),
+  }
+}
+
+function normalizeVendorPaymentInput(input: VendorPaymentInput) {
+  return {
+    vendorId: input.vendorId.trim(),
+    amount: Math.max(input.amount ?? 0, 0),
+    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
+    method: input.method?.trim() ?? '',
+    remarks: input.remarks?.trim() ?? '',
+  }
+}
+
+function normalizePackagingConversionInput(input: PackagingConversionInput) {
+  return {
+    productId: input.productId.trim(),
+    packetWeightGrams: Math.max(input.packetWeightGrams ?? 0, 0),
+    unitsPerCarton: Math.max(input.unitsPerCarton ?? 1, 1),
+    cartonLabel: input.cartonLabel?.trim() || 'Carton',
+  }
+}
+
+function normalizeLoanAccountInput(input: LoanAccountInput) {
+  return {
+    memberName: input.memberName.trim(),
+    phone: input.phone?.trim() ?? '',
+    address: input.address?.trim() ?? '',
+  }
+}
+
+function normalizeLoanTransactionInput(input: LoanTransactionInput) {
+  return {
+    loanAccountId: input.loanAccountId.trim(),
+    type: input.type,
+    amount: Math.max(input.amount ?? 0, 0),
+    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
+    note: input.note?.trim() ?? '',
+  }
+}
+
+function normalizeCashMaintenanceInput(input: CashMaintenanceInput) {
+  return {
+    category: input.category.trim(),
+    amount: Math.max(input.amount ?? 0, 0),
+    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
+    note: input.note?.trim() ?? '',
   }
 }
 
@@ -1846,6 +1946,470 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`dealerCategories/${categoryId}`]: null,
     })
     await writeActivity('dealer_category_deleted', 'dealers', `Deleted dealer category ${category.name}.`)
+  }
+
+  // ---- Purchase Department (Vendors, Purchase Entries, Payments) ---------
+  async function saveVendor(input: VendorInput, vendorId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existingVendor = vendorId ? data.vendors[vendorId] : null
+    const normalized = normalizeVendorInput(input)
+
+    if (!normalized.name) {
+      throw new Error('Vendor name is required.')
+    }
+
+    if (!normalized.phone) {
+      throw new Error('Vendor phone number is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingVendor?.id ?? createId('vendor')
+    const now = new Date().toISOString()
+    const vendor: VendorRecord = {
+      id,
+      ...normalized,
+      createdAt: existingVendor?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/vendors'), { [id]: vendor })
+    await writeActivity(
+      existingVendor ? 'vendor_updated' : 'vendor_created',
+      'purchases',
+      existingVendor ? `Updated ${vendor.name} vendor details.` : `Added vendor ${vendor.name}.`
+    )
+
+    return id
+  }
+
+  async function deleteVendor(vendorId: string) {
+    if (!data) {
+      return
+    }
+
+    const vendor = data.vendors[vendorId]
+    if (!vendor) {
+      throw new Error('Vendor not found.')
+    }
+
+    const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.vendorId === vendorId)
+    if (hasPurchases) {
+      throw new Error('Vendors with purchase history cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`vendors/${vendorId}`]: null,
+    })
+    await writeActivity('vendor_deleted', 'purchases', `Deleted vendor ${vendor.name}.`)
+  }
+
+  // A purchase's own quantities are kept entirely separate from
+  // ProductRecord.stockQty — see the PurchaseRecord comment in types.ts —
+  // so this never touches the product beyond reading its name/unit.
+  async function savePurchase(input: PurchaseInput, purchaseId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a purchase.')
+    }
+
+    const existingPurchase = purchaseId ? data.purchases[purchaseId] : null
+    const vendor = data.vendors[input.vendorId]
+    if (!vendor) {
+      throw new Error('Pick a vendor for this purchase.')
+    }
+
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Pick a product for this purchase.')
+    }
+
+    const quantity = Number(input.quantity) || 0
+    if (quantity <= 0) {
+      throw new Error('Purchase quantity must be greater than zero.')
+    }
+
+    const rate = Math.max(Number(input.rate) || 0, 0)
+    const amount = quantity * rate
+    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), amount)
+
+    const db = getDatabaseOrThrow()
+    const id = existingPurchase?.id ?? createId('purchase')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || existingPurchase?.date || now.slice(0, 10)
+    const purchaseNumber = existingPurchase?.purchaseNumber ?? `PUR-${Date.now().toString().slice(-8)}`
+
+    const purchase: PurchaseRecord = {
+      id,
+      purchaseNumber,
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      productId: product.id,
+      productName: product.name,
+      ...(product.unit ? { unit: product.unit } : {}),
+      date,
+      quantity,
+      rate,
+      amount,
+      paid,
+      due: amount - paid,
+      remarks: input.remarks?.trim() ?? '',
+      createdAt: existingPurchase?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/purchases'), { [id]: purchase })
+    await writeActivity(
+      existingPurchase ? 'purchase_updated' : 'purchase_created',
+      'purchases',
+      existingPurchase
+        ? `Updated purchase ${purchaseNumber} — ${quantity} ${product.unit ?? ''} of ${product.name} from ${vendor.name}.`
+        : `Recorded purchase ${purchaseNumber} — ${quantity} ${product.unit ?? ''} of ${product.name} from ${vendor.name} at ${rate}/unit.`
+    )
+
+    return id
+  }
+
+  async function deletePurchase(purchaseId: string) {
+    if (!data) {
+      return
+    }
+
+    const purchase = data.purchases[purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`purchases/${purchaseId}`]: null,
+    })
+    await writeActivity(
+      'purchase_deleted',
+      'purchases',
+      `Deleted purchase ${purchase.purchaseNumber} (${purchase.vendorName}).`
+    )
+  }
+
+  async function saveVendorPayment(input: VendorPaymentInput, paymentId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a vendor payment.')
+    }
+
+    const existingPayment = paymentId ? data.vendorPayments[paymentId] : null
+    const normalized = normalizeVendorPaymentInput(input)
+    const vendor = data.vendors[normalized.vendorId]
+    if (!vendor) {
+      throw new Error('Pick a vendor for this payment.')
+    }
+
+    if (normalized.amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingPayment?.id ?? createId('vendor_payment')
+    const now = new Date().toISOString()
+    const payment: VendorPaymentRecord = {
+      id,
+      vendorId: vendor.id,
+      vendorName: vendor.name,
+      amount: normalized.amount,
+      date: normalized.date,
+      ...(normalized.method ? { method: normalized.method } : {}),
+      ...(normalized.remarks ? { remarks: normalized.remarks } : {}),
+      createdAt: existingPayment?.createdAt ?? now,
+    }
+
+    await update(ref(db, 'erp/vendorPayments'), { [id]: payment })
+    await writeActivity(
+      existingPayment ? 'vendor_payment_updated' : 'vendor_payment_created',
+      'purchases',
+      `Recorded payment of ${normalized.amount} to vendor ${vendor.name}.`
+    )
+
+    return id
+  }
+
+  async function deleteVendorPayment(paymentId: string) {
+    if (!data) {
+      return
+    }
+
+    const payment = data.vendorPayments[paymentId]
+    if (!payment) {
+      throw new Error('Vendor payment not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`vendorPayments/${paymentId}`]: null,
+    })
+    await writeActivity(
+      'vendor_payment_deleted',
+      'purchases',
+      `Deleted payment of ${payment.amount} to vendor ${payment.vendorName}.`
+    )
+  }
+
+  // Section 3 of the Purchase Department spec — packet/carton conversion
+  // config, one row per product (see PackagingConversionRecord in types.ts).
+  async function savePackagingConversion(input: PackagingConversionInput, recordId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existingRecord = recordId ? data.packagingConversions[recordId] : null
+    const normalized = normalizePackagingConversionInput(input)
+    const product = data.products[normalized.productId]
+    if (!product) {
+      throw new Error('Pick a product for this packaging conversion.')
+    }
+
+    if (normalized.packetWeightGrams <= 0) {
+      throw new Error('Packet weight (grams) must be greater than zero.')
+    }
+
+    // One conversion row per product — editing re-saves the same id instead
+    // of creating a duplicate row for a product that already has one.
+    const existingForProduct =
+      existingRecord ??
+      Object.values(data.packagingConversions).find((entry) => entry.productId === normalized.productId)
+
+    const db = getDatabaseOrThrow()
+    const id = existingForProduct?.id ?? createId('packaging_conversion')
+    const now = new Date().toISOString()
+    const record: PackagingConversionRecord = {
+      id,
+      productId: product.id,
+      productName: product.name,
+      packetWeightGrams: normalized.packetWeightGrams,
+      unitsPerCarton: normalized.unitsPerCarton,
+      cartonLabel: normalized.cartonLabel,
+      createdAt: existingForProduct?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/packagingConversions'), { [id]: record })
+    await writeActivity(
+      existingForProduct ? 'packaging_conversion_updated' : 'packaging_conversion_created',
+      'purchases',
+      `Set packaging conversion for ${product.name}: ${normalized.packetWeightGrams}g/packet, ${normalized.unitsPerCarton} packets per ${normalized.cartonLabel}.`
+    )
+
+    return id
+  }
+
+  async function deletePackagingConversion(recordId: string) {
+    if (!data) {
+      return
+    }
+
+    const record = data.packagingConversions[recordId]
+    if (!record) {
+      throw new Error('Packaging conversion not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`packagingConversions/${recordId}`]: null,
+    })
+    await writeActivity(
+      'packaging_conversion_deleted',
+      'purchases',
+      `Deleted packaging conversion for ${record.productName}.`
+    )
+  }
+
+  // ---- Loan Management (Loan Chart) ---------------------------------------
+  // A loan account is who the loan is with — mirrors saveVendor above; the
+  // running balance is never stored here, only ever derived live from its
+  // transactions (see computeLoanBalance in utils.ts).
+  async function saveLoanAccount(input: LoanAccountInput, loanAccountId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existingAccount = loanAccountId ? data.loanAccounts[loanAccountId] : null
+    const normalized = normalizeLoanAccountInput(input)
+
+    if (!normalized.memberName) {
+      throw new Error('Member name is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingAccount?.id ?? createId('loan_account')
+    const now = new Date().toISOString()
+    const account: LoanAccountRecord = {
+      id,
+      memberName: normalized.memberName,
+      phone: normalized.phone,
+      address: normalized.address,
+      createdAt: existingAccount?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/loanAccounts'), { [id]: account })
+    await writeActivity(
+      existingAccount ? 'loan_account_updated' : 'loan_account_created',
+      'finance',
+      existingAccount ? `Updated loan member ${account.memberName}.` : `Added loan member ${account.memberName}.`
+    )
+
+    return id
+  }
+
+  async function deleteLoanAccount(loanAccountId: string) {
+    if (!data) {
+      return
+    }
+
+    const account = data.loanAccounts[loanAccountId]
+    if (!account) {
+      throw new Error('Loan member not found.')
+    }
+
+    const hasTransactions = Object.values(data.loanTransactions).some((entry) => entry.loanAccountId === loanAccountId)
+    if (hasTransactions) {
+      throw new Error('Loan members with recorded transactions cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`loanAccounts/${loanAccountId}`]: null,
+    })
+    await writeActivity('loan_account_deleted', 'finance', `Deleted loan member ${account.memberName}.`)
+  }
+
+  // A withdrawal raises the loan account's derived balance, a repayment
+  // lowers it — see computeLoanBalance in utils.ts, which is what the Loan
+  // Chart's "Remaining balance" column and the reconciliation check on the
+  // Loan & Cash Maintenance page both read live.
+  async function saveLoanTransaction(input: LoanTransactionInput, transactionId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a loan transaction.')
+    }
+
+    const existingTransaction = transactionId ? data.loanTransactions[transactionId] : null
+    const normalized = normalizeLoanTransactionInput(input)
+    const account = data.loanAccounts[normalized.loanAccountId]
+    if (!account) {
+      throw new Error('Pick a loan member for this transaction.')
+    }
+
+    if (normalized.amount <= 0) {
+      throw new Error('Amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingTransaction?.id ?? createId('loan_txn')
+    const now = new Date().toISOString()
+    const transaction: LoanTransactionRecord = {
+      id,
+      loanAccountId: account.id,
+      memberName: account.memberName,
+      type: normalized.type,
+      amount: normalized.amount,
+      date: normalized.date,
+      note: normalized.note,
+      createdBy: existingTransaction?.createdBy ?? currentUser.id,
+      createdByName: existingTransaction?.createdByName ?? currentUser.name,
+      createdAt: existingTransaction?.createdAt ?? now,
+    }
+
+    await update(ref(db, 'erp/loanTransactions'), { [id]: transaction })
+    await writeActivity(
+      existingTransaction ? 'loan_transaction_updated' : 'loan_transaction_created',
+      'finance',
+      `${normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}.`
+    )
+
+    return id
+  }
+
+  async function deleteLoanTransaction(transactionId: string) {
+    if (!data) {
+      return
+    }
+
+    const transaction = data.loanTransactions[transactionId]
+    if (!transaction) {
+      throw new Error('Loan transaction not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`loanTransactions/${transactionId}`]: null,
+    })
+    await writeActivity(
+      'loan_transaction_deleted',
+      'finance',
+      `Deleted ${transaction.type === 'withdrawal' ? 'loan withdrawal' : 'loan repayment'} of ${transaction.amount} for ${transaction.memberName}.`
+    )
+  }
+
+  // ---- Cash Maintenance Chart ----------------------------------------------
+  // Deliberately not posted to ledgerEntries/the Automatic Accounting Engine
+  // — see the CashMaintenanceRecord comment in types.ts for why this stays a
+  // standalone cash log alongside, not inside, the P&L expense chart.
+  async function saveCashMaintenance(input: CashMaintenanceInput, recordId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a cash entry.')
+    }
+
+    const existingRecord = recordId ? data.cashMaintenance[recordId] : null
+    const normalized = normalizeCashMaintenanceInput(input)
+
+    if (!normalized.category) {
+      throw new Error('Category is required.')
+    }
+
+    if (normalized.amount <= 0) {
+      throw new Error('Amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existingRecord?.id ?? createId('cash_maintenance')
+    const now = new Date().toISOString()
+    const record: CashMaintenanceRecord = {
+      id,
+      category: normalized.category,
+      amount: normalized.amount,
+      date: normalized.date,
+      note: normalized.note,
+      isDirectExpense: normalized.category === DIRECT_EXPENSE_CATEGORY,
+      createdBy: existingRecord?.createdBy ?? currentUser.id,
+      createdByName: existingRecord?.createdByName ?? currentUser.name,
+      createdAt: existingRecord?.createdAt ?? now,
+    }
+
+    await update(ref(db, 'erp/cashMaintenance'), { [id]: record })
+    await writeActivity(
+      existingRecord ? 'cash_maintenance_updated' : 'cash_maintenance_created',
+      'finance',
+      `${existingRecord ? 'Updated' : 'Recorded'} ${normalized.category} cash entry of ${normalized.amount}.`
+    )
+
+    return id
+  }
+
+  async function deleteCashMaintenance(recordId: string) {
+    if (!data) {
+      return
+    }
+
+    const record = data.cashMaintenance[recordId]
+    if (!record) {
+      throw new Error('Cash maintenance entry not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`cashMaintenance/${recordId}`]: null,
+    })
+    await writeActivity('cash_maintenance_deleted', 'finance', `Deleted ${record.category} cash entry of ${record.amount}.`)
   }
 
   async function saveDiscountProduct(input: DiscountProductInput, productId?: string) {
@@ -3111,6 +3675,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const paymentMethod = input.paymentMethod ?? existingExpense?.paymentMethod ?? 'cash'
     const expenseDate = input.date?.trim() || now
+    // Only a সেলারি-category expense can carry the employee tag (Loan/Cash
+    // Maintenance spec's Section 5, salary history) — dropped otherwise even
+    // if one was somehow passed in.
+    const employee =
+      category === EXPENSE_SALARY_CATEGORY && input.employeeId?.trim() ? data.users[input.employeeId.trim()] : null
     const expense: ExpenseRecord = {
       id,
       category,
@@ -3125,6 +3694,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       approvedBy: existingExpense?.approvedBy ?? '',
       approvedByName: existingExpense?.approvedByName ?? '',
       approvedAt: existingExpense?.approvedAt ?? '',
+      ...(employee
+        ? { employeeId: employee.id, employeeName: employee.name }
+        : existingExpense?.employeeId
+          ? { employeeId: existingExpense.employeeId, employeeName: existingExpense.employeeName }
+          : {}),
       createdBy: existingExpense?.createdBy ?? currentUser.id,
       createdByName: existingExpense?.createdByName ?? currentUser.name,
       createdAt: existingExpense?.createdAt ?? now,
@@ -4448,6 +5022,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteDealer,
       saveDealerCategory,
       deleteDealerCategory,
+      saveVendor,
+      deleteVendor,
+      savePurchase,
+      deletePurchase,
+      saveVendorPayment,
+      deleteVendorPayment,
+      savePackagingConversion,
+      deletePackagingConversion,
+      saveLoanAccount,
+      deleteLoanAccount,
+      saveLoanTransaction,
+      deleteLoanTransaction,
+      saveCashMaintenance,
+      deleteCashMaintenance,
       createSalesReturn,
       recordCollection,
       releaseQcHold,

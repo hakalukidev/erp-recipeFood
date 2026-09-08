@@ -28,7 +28,49 @@
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('dealers:delete').val() === true))"
         }
       },
+      "vendors": {
+        ".read": "auth != null",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:delete').val() === true))"
+        }
+      },
+      "purchases": {
+        ".read": "auth != null",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:delete').val() === true))"
+        }
+      },
+      "vendorPayments": {
+        ".read": "auth != null",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:delete').val() === true))"
+        }
+      },
+      "packagingConversions": {
+        ".read": "auth != null",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('purchases:delete').val() === true))"
+        }
+      },
       "expenses": {
+        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+        }
+      },
+      "loanAccounts": {
+        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+        }
+      },
+      "loanTransactions": {
+        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
+        "$id": {
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+        }
+      },
+      "cashMaintenance": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"

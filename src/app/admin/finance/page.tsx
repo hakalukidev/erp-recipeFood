@@ -1,19 +1,20 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { ListChecks, Plus, Trash2 } from 'lucide-react'
+import { ListChecks, Plus, Trash2, UserCheck } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { EXPENSE_CATEGORIES } from '@/lib/erp/standardChartOfAccounts'
+import { EXPENSE_CATEGORIES, EXPENSE_SALARY_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
 import type { ExpenseInput } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { computeEmployeeSalaryTotals, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function dateInputValue(date = new Date()) {
@@ -38,6 +39,7 @@ const emptyExpenseForm = {
   note: '',
   date: dateInputValue(),
   paymentMethod: 'cash' as 'cash' | 'bank',
+  employeeId: '',
 }
 
 function SectionHeader({
@@ -63,7 +65,7 @@ function SectionHeader({
 }
 
 export default function ExpensesPage() {
-  const { data, hasPermission, saveExpense, updateExpenseApproval, deleteExpense } = useERP()
+  const { data, users, hasPermission, saveExpense, updateExpenseApproval, deleteExpense } = useERP()
   const canApproveExpense = hasPermission('finance:edit')
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
@@ -76,6 +78,10 @@ export default function ExpensesPage() {
     [data?.expenses]
   )
   const currency = data?.settings.currency
+  const employeeOptions: ComboboxOption[] = useMemo(
+    () => users.map((user) => ({ value: user.id, label: user.name, sublabel: user.title || user.loginId })),
+    [users]
+  )
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter((expense) =>
@@ -86,6 +92,14 @@ export default function ExpensesPage() {
   const expenseTotal = useMemo(
     () => filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0),
     [filteredExpenses]
+  )
+
+  // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
+  const salaryTotals = useMemo(() => computeEmployeeSalaryTotals(data ?? null), [data])
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
+  const selectedEmployeeEntries = useMemo(
+    () => expenses.filter((expense) => expense.employeeId === selectedEmployeeId),
+    [expenses, selectedEmployeeId]
   )
 
   async function handleExpenseSubmit(event: FormEvent<HTMLFormElement>) {
@@ -99,6 +113,7 @@ export default function ExpensesPage() {
         note: expenseForm.note,
         date: expenseForm.date,
         paymentMethod: expenseForm.paymentMethod,
+        employeeId: expenseForm.category === EXPENSE_SALARY_CATEGORY ? expenseForm.employeeId || undefined : undefined,
       }
       await saveExpense(input)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
@@ -181,7 +196,7 @@ export default function ExpensesPage() {
                     </p>
                     <Select
                       value={expenseForm.category}
-                      onValueChange={(value) => setExpenseForm((current) => ({ ...current, category: value }))}
+                      onValueChange={(value) => setExpenseForm((current) => ({ ...current, category: value, employeeId: '' }))}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -191,6 +206,20 @@ export default function ExpensesPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  {expenseForm.category === EXPENSE_SALARY_CATEGORY ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground">
+                        Employee <span className="font-normal text-muted-foreground">(optional)</span>
+                      </p>
+                      <Combobox
+                        options={employeeOptions}
+                        value={expenseForm.employeeId}
+                        onChange={(value) => setExpenseForm((current) => ({ ...current, employeeId: value }))}
+                        placeholder="Select employee"
+                        searchPlaceholder="Search employee"
+                      />
+                    </div>
+                  ) : null}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-foreground">
@@ -339,6 +368,72 @@ export default function ExpensesPage() {
               </CardContent>
             </Card>
           </div>
+        </section>
+
+        <section className="space-y-4">
+          <SectionHeader
+            icon={UserCheck}
+            title="Salary History"
+            description="Per-employee running total of every সেলারি expense — a quick spot-check against a payslip or cheque history."
+          />
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="space-y-4 pt-6">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee</TableHead>
+                      <TableHead className="text-right">Entries</TableHead>
+                      <TableHead className="text-right">Total Received</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {salaryTotals.map((row) => (
+                      <TableRow
+                        key={row.employeeId}
+                        className={cn('cursor-pointer', selectedEmployeeId === row.employeeId && 'bg-muted/40')}
+                        onClick={() => setSelectedEmployeeId(row.employeeId === selectedEmployeeId ? '' : row.employeeId)}
+                      >
+                        <TableCell className="font-medium">{row.employeeName}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {salaryTotals.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
+                          No salary entries tagged to an employee yet — pick an employee when recording a সেলারি expense above.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {selectedEmployeeId ? (
+                <div className="overflow-x-auto rounded-xl border border-border/60">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Note</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedEmployeeEntries.map((expense) => (
+                        <TableRow key={expense.id}>
+                          <TableCell>{formatDate(expense.date)}</TableCell>
+                          <TableCell className="text-muted-foreground">{expense.note || '-'}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(expense.amount, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
         </section>
       </div>
     </AdminShell>

@@ -54,12 +54,15 @@ export type LoginHistoryRecord = {
 // (see computeDealerDue in utils.ts) instead of being stored here.
 // `name` is the dealer's business/shop name; `proprietorName` is the owner's
 // personal name (optional — not every dealer record has one on file).
+// `categoryId` links to a DealerCategoryRecord below (e.g. Wholesaler,
+// Retailer, Distributor) — optional, and '' / missing means uncategorized.
 export type DealerRecord = {
   id: string
   name: string
   proprietorName: string
   address: string
   phone: string
+  categoryId?: string
   createdAt: string
   updatedAt: string
 }
@@ -71,6 +74,123 @@ export type DealerCategoryRecord = {
   name: string
   createdAt: string
   updatedAt: string
+}
+
+// ---- Purchase Department (Vendors, Purchase Entries, Payments) -----------
+// A vendor supplies raw material/packaging material bought in bulk (usually
+// by weight, e.g. kg) — mirrors DealerRecord's shape (name/address/phone
+// only, nothing derived stored on it). A vendor's running due is never
+// stored here; it's always the live sum of every PurchaseRecord.due for that
+// vendor minus every VendorPaymentRecord.amount recorded against them since
+// (see computeVendorTotals in utils.ts) — same "derive, don't store" rule
+// DealerRecord's balance follows.
+export type VendorRecord = {
+  id: string
+  name: string
+  address: string
+  phone: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type VendorInput = {
+  name: string
+  address: string
+  phone: string
+}
+
+// One purchase of a product (typically a raw/packaging material, though any
+// product can be picked) from a vendor — `quantity` in whatever unit that
+// product is bought by (usually kg), at `rate` per unit, so amount =
+// quantity * rate. `paid` is whatever was handed over at the time of
+// receiving (often 0, a running payable); `due` = amount - paid is
+// snapshotted here at save time and only changes if the purchase itself is
+// edited — further money handed over later is recorded separately as a
+// VendorPaymentRecord instead of mutating this record (see computeVendorTotals
+// in utils.ts, which sums both sides for a vendor's live outstanding due).
+// This module keeps its own quantities entirely separate from
+// ProductRecord.stockQty — a purchase here is a payable/ledger entry, not a
+// stock movement; actual sellable stock still only ever changes through
+// Section 19's Stock Adjustment (see StockAdjustmentRecord).
+export type PurchaseRecord = {
+  id: string
+  purchaseNumber: string
+  vendorId: string
+  vendorName: string
+  productId: string
+  productName: string
+  unit?: string
+  date: string
+  quantity: number
+  rate: number
+  amount: number
+  paid: number
+  due: number
+  remarks?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type PurchaseInput = {
+  vendorId: string
+  productId: string
+  quantity: number
+  rate: number
+  date?: string
+  paid?: number
+  remarks?: string
+}
+
+// A payment made against a vendor's running due, independent of any single
+// purchase (e.g. a lump-sum settlement) — see computeVendorTotals in utils.ts.
+export type VendorPaymentRecord = {
+  id: string
+  vendorId: string
+  vendorName: string
+  amount: number
+  date: string
+  method?: string
+  remarks?: string
+  createdAt: string
+}
+
+export type VendorPaymentInput = {
+  vendorId: string
+  amount: number
+  date?: string
+  method?: string
+  remarks?: string
+}
+
+// ---- Packaging / HK Conversion --------------------------------------------
+// One row per product describing how a purchased raw-material quantity (in
+// kg) converts into sellable packets and cartons/sacks/bottles of that
+// product — the Purchase Department's own worked example: a 40g product
+// packed 3g to a packet means 100kg of raw material converts to
+// (100,000g / 3g) = 33,333 packets, and if 500 packets make one sack, that's
+// 66.67 sacks; as those sacks are consumed in production, "HK" (available
+// packet stock) is understood to be falling by that same ratio. Purely a
+// planning/capacity report over how much has been purchased to date for a
+// product (see computeVendorPurchasedQty/computePackagingConversion in
+// utils.ts) — it doesn't move stock or link to any specific PurchaseRecord.
+export type PackagingConversionRecord = {
+  id: string
+  productId: string
+  productName: string
+  packetWeightGrams: number
+  unitsPerCarton: number
+  // Free text for what that bigger unit is actually called — "Carton",
+  // "Sack", "Bottle case", etc. — since it varies by product.
+  cartonLabel: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type PackagingConversionInput = {
+  productId: string
+  packetWeightGrams: number
+  unitsPerCarton?: number
+  cartonLabel?: string
 }
 
 export type ProductStatus = 'active' | 'low-stock' | 'out-of-stock'
@@ -934,9 +1054,101 @@ export type ExpenseRecord = {
   approvedBy: string
   approvedByName: string
   approvedAt: string
+  // Only meaningful on a সেলারি-category entry (see EXPENSE_SALARY_CATEGORY
+  // in standardChartOfAccounts.ts) — lets a specific employee's salary
+  // history be pulled back out later (Finance page's Salary History
+  // section, backed by computeEmployeeSalaryTotals in utils.ts), since
+  // sometimes salary is paid by checking past history/cheques rather than
+  // from memory.
+  employeeId?: string
+  employeeName?: string
   createdBy: string
   createdByName: string
   createdAt: string
+}
+
+// ---- Loan Management (Loan Chart) -----------------------------------------
+// Money the company borrows from a member/lender (an individual, cooperative
+// member, investor, etc.) and repays over time — a LoanAccountRecord is just
+// who the loan is with, mirroring VendorRecord's plain name/phone/address
+// shape. The running balance owed is never stored on it — always the live
+// sum of every LoanTransactionRecord against it (a 'withdrawal' raises the
+// balance, a 'repayment' lowers it, same "derive, don't store" rule
+// VendorRecord's due follows via computeVendorTotals) — see
+// computeLoanBalance in utils.ts. Falls to zero once fully repaid.
+export type LoanAccountRecord = {
+  id: string
+  memberName: string
+  phone: string
+  address?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type LoanAccountInput = {
+  memberName: string
+  phone?: string
+  address?: string
+}
+
+// 'withdrawal' = a new loan draw against the account (raises the balance
+// owed); 'repayment' = money paid back against it (lowers the balance).
+export type LoanTransactionType = 'withdrawal' | 'repayment'
+
+export type LoanTransactionRecord = {
+  id: string
+  loanAccountId: string
+  memberName: string
+  type: LoanTransactionType
+  amount: number
+  date: string
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type LoanTransactionInput = {
+  loanAccountId: string
+  type: LoanTransactionType
+  amount: number
+  date?: string
+  note?: string
+}
+
+// ---- Cash Maintenance Chart -------------------------------------------------
+// A separate cash-outflow chart from the এক্সপেন্স/ExpenseRecord bucket above
+// — the client's own "ক্যাশ মেইনটেনেন্স" categories (see
+// CASH_MAINTENANCE_CATEGORIES in standardChartOfAccounts.ts: loan repayment,
+// new market investment, goods/packaging purchase, depot commission, dealer
+// payment for product transport), none of which overlap with an Expense
+// category — these are cash/balance-sheet movements that never touch
+// Company Earnings' net profit the way an Expense does. Recorded entirely
+// separately from ExpenseRecord and never posted to the ledger/Automatic
+// Accounting Engine — this is a standalone cash log; the Loan & Cash
+// Maintenance page's reconciliation check sums it together with
+// ExpenseRecord (both are real cash out) and compares that against loan
+// withdrawals + sales money for the same period.
+// `isDirectExpense` marks an entry recorded under the DIRECT_EXPENSE_CATEGORY
+// option — shown on the chart for the record but excluded from that cash-out
+// total, since it's only there to help the books balance, not a real spend.
+export type CashMaintenanceRecord = {
+  id: string
+  category: string
+  amount: number
+  date: string
+  note?: string
+  isDirectExpense?: boolean
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type CashMaintenanceInput = {
+  category: string
+  amount: number
+  date?: string
+  note?: string
 }
 
 // Section 37 (Budget Management): a plan for one expense category over one
@@ -1078,6 +1290,10 @@ export type ERPData = {
   users: Record<string, UserRecord>
   dealers: Record<string, DealerRecord>
   dealerCategories: Record<string, DealerCategoryRecord>
+  vendors: Record<string, VendorRecord>
+  purchases: Record<string, PurchaseRecord>
+  vendorPayments: Record<string, VendorPaymentRecord>
+  packagingConversions: Record<string, PackagingConversionRecord>
   products: Record<string, ProductRecord>
   discountProducts: Record<string, DiscountProductRecord>
   tradeSalesProducts: Record<string, TradeSalesProductRecord>
@@ -1100,6 +1316,9 @@ export type ERPData = {
   activities: Record<string, ActivityRecord>
   loginHistory: Record<string, LoginHistoryRecord>
   expenses: Record<string, ExpenseRecord>
+  loanAccounts: Record<string, LoanAccountRecord>
+  loanTransactions: Record<string, LoanTransactionRecord>
+  cashMaintenance: Record<string, CashMaintenanceRecord>
   budgets: Record<string, BudgetRecord>
   salesTargets: Record<string, SalesTargetRecord>
   commissionRules: Record<string, CommissionRuleRecord>
@@ -1170,6 +1389,7 @@ export type DealerInput = {
   proprietorName?: string
   address?: string
   phone: string
+  categoryId?: string
 }
 
 export type DealerCategoryInput = {
@@ -1202,6 +1422,9 @@ export type ExpenseInput = {
   note?: string
   date?: string
   paymentMethod?: ExpensePaymentMethod
+  // Only kept when category is EXPENSE_SALARY_CATEGORY — see
+  // ExpenseRecord.employeeId.
+  employeeId?: string
 }
 
 export type InvestorInput = {

@@ -6,6 +6,7 @@ import { Edit, MapPin, Phone, Plus, Search, Trash2 } from 'lucide-react'
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -16,28 +17,44 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { DealerInput, DealerRecord } from '@/lib/erp/types'
-import { toArray } from '@/lib/erp/utils'
+import { sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 
 type DealerFormState = {
   name: string
   proprietorName: string
   phone: string
   address: string
+  categoryId: string
 }
 
-const emptyDealerForm: DealerFormState = { name: '', proprietorName: '', phone: '', address: '' }
+const emptyDealerForm: DealerFormState = { name: '', proprietorName: '', phone: '', address: '', categoryId: '' }
 
 function formFromDealer(dealer: DealerRecord): DealerFormState {
-  return { name: dealer.name, proprietorName: dealer.proprietorName, phone: dealer.phone, address: dealer.address }
+  return {
+    name: dealer.name,
+    proprietorName: dealer.proprietorName,
+    phone: dealer.phone,
+    address: dealer.address,
+    categoryId: dealer.categoryId ?? '',
+  }
 }
 
 export default function DealersPage() {
   const { data, saveDealer, deleteDealer } = useERP()
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
+  const categories = useMemo(
+    () => sortByCreatedAtDesc(toArray(data?.dealerCategories)),
+    [data?.dealerCategories]
+  )
+  const categoryName = useMemo(() => {
+    const map = new Map(categories.map((category) => [category.id, category.name]))
+    return (categoryId?: string) => (categoryId ? map.get(categoryId) : undefined)
+  }, [categories])
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingDealer, setEditingDealer] = useState<DealerRecord | null>(null)
@@ -54,14 +71,24 @@ export default function DealersPage() {
     if (!normalizedQuery) return dealers
 
     return dealers.filter((dealer) =>
-      [dealer.name, dealer.proprietorName, dealer.phone, dealer.address].join(' ').toLowerCase().includes(normalizedQuery)
+      [dealer.name, dealer.proprietorName, dealer.phone, dealer.address, categoryName(dealer.categoryId) ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery)
     )
-  }, [dealers, query])
+  }, [dealers, query, categoryName])
 
-  const exportHeaders = ['Business Name', 'Proprietor Name', 'Phone', 'Address']
+  const exportHeaders = ['Business Name', 'Proprietor Name', 'Phone', 'Address', 'Category']
   const exportRows = useMemo(
-    () => filteredDealers.map((dealer) => [dealer.name, dealer.proprietorName, dealer.phone, dealer.address]),
-    [filteredDealers]
+    () =>
+      filteredDealers.map((dealer) => [
+        dealer.name,
+        dealer.proprietorName,
+        dealer.phone,
+        dealer.address,
+        categoryName(dealer.categoryId) ?? '',
+      ]),
+    [filteredDealers, categoryName]
   )
 
   function openCreateDialog() {
@@ -87,6 +114,7 @@ export default function DealersPage() {
       proprietorName: dealerForm.proprietorName,
       phone: dealerForm.phone,
       address: dealerForm.address,
+      categoryId: dealerForm.categoryId || undefined,
     }
 
     try {
@@ -160,6 +188,7 @@ export default function DealersPage() {
                     <TableHead>Proprietor</TableHead>
                     <TableHead>Mobile</TableHead>
                     <TableHead>Address</TableHead>
+                    <TableHead>Category</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -194,6 +223,13 @@ export default function DealersPage() {
                           <span>{dealer.address || 'N/A'}</span>
                         </div>
                       </TableCell>
+                      <TableCell className="min-w-32">
+                        {categoryName(dealer.categoryId) ? (
+                          <Badge variant="secondary">{categoryName(dealer.categoryId)}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">Uncategorized</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(dealer)} aria-label={`Edit ${dealer.name}`}>
@@ -215,7 +251,7 @@ export default function DealersPage() {
                   ))}
                   {filteredDealers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">
                         No dealers found.
                       </TableCell>
                     </TableRow>
@@ -275,6 +311,34 @@ export default function DealersPage() {
                 onChange={(event) => setDealerForm((current) => ({ ...current, address: event.target.value }))}
                 placeholder="e.g. Mirpur, Dhaka"
               />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                Dealer category <span className="font-normal text-muted-foreground">(optional)</span>
+              </p>
+              <Select
+                value={dealerForm.categoryId || 'none'}
+                onValueChange={(value) =>
+                  setDealerForm((current) => ({ ...current, categoryId: value === 'none' ? '' : value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No category</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {categories.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No categories yet — add one from Dealer Category first.
+                </p>
+              ) : null}
             </div>
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setDialogOpen(false)}>

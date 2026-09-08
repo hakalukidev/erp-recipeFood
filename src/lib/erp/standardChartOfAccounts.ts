@@ -55,52 +55,67 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
   { code: '5017', name: 'Travel', type: 'expense', ledgerAccount: 'travel' },
 ]
 
-// Section 36's exact Expense Category list, in spec order — the Finance
-// page's "Record expense" form and the Accounting page's Budget form both
-// use this as their category dropdown, so a budget's category always lines
-// up with an expense's category (both compared case-insensitively).
+// The Expense Category list — the Finance page's "Record expense" form uses
+// this as its category dropdown. Replaced with the client's own Expense head
+// chart (the "এক্সপেন্স" bucket, as distinct from the "ক্যাশ মেইন্টেনেন্স"
+// bucket below — CASH_MAINTENANCE_CATEGORIES — which are cash outflows, not
+// P&L expenses, and are recorded on the Loan & Cash Maintenance admin page
+// instead): only these heads actually reduce Company Earnings' net profit
+// (see buildCompanyEarningsSummary in utils.ts).
 export const EXPENSE_CATEGORIES = [
-  'Office Expense',
-  'Factory Expense',
-  'Raw Material',
-  'Transport',
-  'Fuel',
-  'Marketing',
-  'Advertisement',
-  'Salary',
-  'Commission',
-  'Repair',
-  'Utility',
-  'Rent',
-  'Travel',
-  'Miscellaneous',
+  'ড্যামেজ',
+  'ডিলার কমিশন ও মার্কেট ছাড়',
+  'এসআর ইনসেন্টিভ',
+  'পরিবহন খরচ',
+  'ব্যাংক বা বিকাশ খরচ',
+  'অনান্য/বিবিধ খরচ',
+  'রেন্ট',
+  'বিদ্যুৎ বিল',
+  'সেলারি',
 ] as const
 
 // Free-text expense categories (Finance page) are matched against this map
-// (case-insensitive) to decide which Chart of Accounts expense head an
-// expense auto-posts against; anything unmatched falls back to
-// 'other_expense'. Kept in sync with the Expenses group above.
+// (case-insensitive, meaningless for Bangla text but kept for shape) to
+// decide which Chart of Accounts expense head an expense auto-posts
+// against; anything unmatched falls back to 'other_expense'. Kept in sync
+// with the Expenses group above.
 export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
-  salary: 'salary',
-  rent: 'rent',
-  electricity: 'electricity',
-  transport: 'transport',
-  marketing: 'marketing',
-  commission: 'commission',
-  'office expense': 'office_expense',
-  office: 'office_expense',
-  'factory expense': 'factory_expense',
-  factory: 'factory_expense',
-  'raw material': 'cogs',
-  'bank charge': 'bank_charge',
-  'bank charges': 'bank_charge',
-  depreciation: 'depreciation',
-  fuel: 'fuel',
-  advertisement: 'advertisement',
-  repair: 'repair',
-  'repair & maintenance': 'repair',
-  utility: 'utility',
-  utilities: 'utility',
-  travel: 'travel',
-  miscellaneous: 'other_expense',
+  'ড্যামেজ': 'other_expense',
+  'ডিলার কমিশন ও মার্কেট ছাড়': 'commission',
+  'এসআর ইনসেন্টিভ': 'commission',
+  'পরিবহন খরচ': 'transport',
+  'ব্যাংক বা বিকাশ খরচ': 'bank_charge',
+  'অনান্য/বিবিধ খরচ': 'other_expense',
+  'রেন্ট': 'rent',
+  'বিদ্যুৎ বিল': 'electricity',
+  'সেলারি': 'salary',
 }
+
+// ---- Cash Maintenance Chart -----------------------------------------------
+// The Loan & Cash Maintenance page's "Record cash entry" category dropdown —
+// the client's own exact "ক্যাশ মেইনটেনেন্স" list: cash movements that never
+// touch Company Earnings' P&L (loan repayment, new market investment, goods/
+// packaging purchase, depot commission, dealer payment for product
+// transport) — deliberately NOT the same list as EXPENSE_CATEGORIES above
+// (Rent, Salary, Transport, etc. stay exclusively in the Expense chart; see
+// CashMaintenanceRecord in types.ts for why the two charts are kept
+// separate, and the Loan & Cash Maintenance page's reconciliation check for
+// where they're summed back together as one "total cash out" figure).
+export const CASH_MAINTENANCE_CATEGORIES = [
+  'ঋণ পরিশোধ',
+  'নতুন মার্কেট ইনভেস্টমেন্ট',
+  'পণ্য ক্রয়',
+  'প্যাকেজিং মেটেরিয়ালস ক্রয়',
+  'ডিপো কমিশন',
+  'ডিলার পেমেন্ট পণ্য পরিবহন',
+] as const
+
+// The one category that's recorded on the Cash Maintenance chart purely to
+// help the books balance — never subtracted in the cash-out total the
+// reconciliation check uses (see CashMaintenanceRecord.isDirectExpense).
+export const DIRECT_EXPENSE_CATEGORY = 'সরাসরি এক্সপেন্স (হিসাব মেলানোর জন্য)'
+
+// The EXPENSE_CATEGORIES entry an expense must carry to be eligible for the
+// per-employee tag (ExpenseRecord.employeeId) that powers the Salary History
+// section of the Finance page.
+export const EXPENSE_SALARY_CATEGORY = 'সেলারি'

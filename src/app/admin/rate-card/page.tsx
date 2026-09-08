@@ -561,15 +561,18 @@ export default function RateCardPage() {
       })),
     [discountProducts]
   )
-  const dealerOptions: ComboboxOption[] = useMemo(
-    () =>
-      dealers.map((dealer) => ({
+  const dealerCategories = useMemo(() => toArray(data?.dealerCategories), [data?.dealerCategories])
+  const dealerOptions: ComboboxOption[] = useMemo(() => {
+    const categoryNameById = new Map(dealerCategories.map((category) => [category.id, category.name]))
+    return dealers.map((dealer) => {
+      const categoryLabel = dealer.categoryId ? categoryNameById.get(dealer.categoryId) : undefined
+      return {
         value: dealer.id,
         label: dealer.name,
-        sublabel: dealer.phone,
-      })),
-    [dealers]
-  )
+        sublabel: categoryLabel ? `${dealer.phone} · ${categoryLabel}` : dealer.phone,
+      }
+    })
+  }, [dealers, dealerCategories])
 
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)

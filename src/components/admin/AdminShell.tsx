@@ -11,6 +11,7 @@ import {
   Calculator,
   CheckCheck,
   FileBarChart,
+  HandCoins,
   LayoutDashboard,
   Lock,
   LogOut,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   Store,
   Tags,
+  Truck,
   Undo2,
   Users,
   X,
@@ -111,6 +113,13 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'dealers:view',
       },
       {
+        label: 'Purchase',
+        description: 'Vendors, purchase entries and dues, and the packet/carton conversion (HK) report',
+        href: '/admin/purchases',
+        icon: Truck,
+        permission: 'purchases:view',
+      },
+      {
         label: 'Invoice',
         description: 'Raw material → manufacturing → depot → dealer rate cascade with profit margins, and Company/Depot/Dealer vouchers',
         href: '/admin/rate-card',
@@ -126,9 +135,16 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Expenses',
-        description: 'Record and review day-to-day running costs',
+        description: 'Record and review day-to-day running costs, plus per-employee salary history',
         href: '/admin/finance',
         icon: ReceiptText,
+        permission: 'finance:view',
+      },
+      {
+        label: 'Loan & Cash Maintenance',
+        description: 'Loan chart per member with running balance, the cash maintenance chart, and cash-in vs. cash-out reconciliation',
+        href: '/admin/loans',
+        icon: HandCoins,
         permission: 'finance:view',
       },
       {
