@@ -11,7 +11,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
+import {
+  COMPANY_ADDRESS,
+  COMPANY_EMAIL,
+  COMPANY_HELPLINE,
+  COMPANY_INVOICE_FOOTER_NOTE,
+  COMPANY_NAME,
+} from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import { buildCategorySalesReportSummary, buildSalesReportSummary, formatCurrency, type CategorySalesReportRow } from '@/lib/erp/utils'
 import type { SaleType } from '@/lib/erp/types'
@@ -91,6 +97,7 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
           table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 11px; }
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
         </style>
       </head>
@@ -121,6 +128,7 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
             </tr>
           </tbody>
         </table>
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>

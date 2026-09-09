@@ -24,7 +24,13 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
+import {
+  COMPANY_ADDRESS,
+  COMPANY_EMAIL,
+  COMPANY_HELPLINE,
+  COMPANY_INVOICE_FOOTER_NOTE,
+  COMPANY_NAME,
+} from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import type { DealerRecord, DepotRecord, ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
 import { createId, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
@@ -120,6 +126,7 @@ const PRINT_STYLES = `
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
 `
 
@@ -130,6 +137,10 @@ function printHeader(subtitle: string) {
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
         <p class="subtitle">${subtitle}</p>
   `
+}
+
+function printFooter() {
+  return `<p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>`
 }
 
 function partyLabel(entry: ProductReturnRecord) {
@@ -197,6 +208,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
           <tbody>${rows}</tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
+        ${printFooter()}
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -262,6 +274,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
           <tbody>${rows}</tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
+        ${printFooter()}
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -315,6 +328,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
           <tbody>${rows}</tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
+        ${printFooter()}
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>

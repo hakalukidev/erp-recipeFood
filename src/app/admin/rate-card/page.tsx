@@ -36,7 +36,13 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
+import {
+  COMPANY_ADDRESS,
+  COMPANY_EMAIL,
+  COMPANY_HELPLINE,
+  COMPANY_INVOICE_FOOTER_NOTE,
+  COMPANY_NAME,
+} from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import type { DealerCategoryRecord, DepotRecord, RateCardLineItem, RateCardRecord, SaleType } from '@/lib/erp/types'
 import {
@@ -287,6 +293,7 @@ function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean) {
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
         </style>
       </head>
@@ -315,6 +322,7 @@ function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean) {
           <tbody>${rows}${totalsRow}</tbody>
         </table>
         ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -341,6 +349,7 @@ const PARTY_BOX_STYLES = `
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
 `
 
@@ -429,6 +438,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean,
           </tbody>
         </table>
         ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -530,6 +540,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, 
           </tbody>
         </table>
         ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -705,7 +716,7 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
           </thead>
           <tbody>${rows}${totalsRow}</tbody>
         </table>
-        <p class="footnote">This is Computer Generated Invoice no need any seal &amp; signature.</p>
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -774,6 +785,7 @@ function buildCommissionVoucherHtml(rateCard: RateCardRecord) {
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
         </style>
       </head>
@@ -810,6 +822,7 @@ function buildCommissionVoucherHtml(rateCard: RateCardRecord) {
           </tbody>
         </table>
         ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
@@ -1415,9 +1428,7 @@ export default function RateCardPage() {
                             />
                           </div>
                           <div className="space-y-1.5">
-                            <label className="text-sm text-muted-foreground">
-                              {formIsCommission ? 'SR Rate' : 'Dealer'}
-                            </label>
+                            <label className="text-sm text-muted-foreground">Dealer</label>
                             <Input
                               type="number"
                               value={item.dealerRate}
