@@ -536,6 +536,175 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, 
   `
 }
 
+// Retail column set adds TP (Retail Sales Rate) as a fifth rate column next
+// to the Company voucher's four, and relabels depot/dealer to match the
+// client's paper "Retail Delivery" sheet (Dep PR / DeP SR instead of Depot
+// Rate / Delar Rate) — same underlying fields (depotRate/dealerRate/tpRate),
+// just the labelling this one voucher prints.
+const RETAIL_RATE_COLUMN_LABELS: Record<'raw' | 'manuf' | 'depot' | 'dealer' | 'tp', { unit: string; total: string }> = {
+  raw: { unit: 'Raw M', total: 'Raw Rate' },
+  manuf: { unit: 'Mnu Ra', total: 'Manuf Rate' },
+  depot: { unit: 'Dep PR', total: 'Dep PR' },
+  dealer: { unit: 'DeP SR', total: 'DeP SR' },
+  tp: { unit: 'TP', total: 'TP' },
+}
+
+function retailRateValue(item: RateCardLineItem, column: 'raw' | 'manuf' | 'depot' | 'dealer' | 'tp') {
+  switch (column) {
+    case 'raw':
+      return item.rawRate
+    case 'manuf':
+      return item.manufRate
+    case 'depot':
+      return item.depotRate
+    case 'dealer':
+      return item.dealerRate
+    case 'tp':
+      return item.tpRate ?? 0
+  }
+}
+
+// Retail Sales voucher — the client's "Retail Delivery" paper sheet: five
+// rate columns (Raw M / Mnu Ra / Dep PR / DeP SR / TP) plus a profit summary
+// box. Com Gross Profit = Retail Sales Rate − Manuf Rate (what the company
+// earns if everything sold at TP); Depot Profit = DeP SR − Dep PR (mirrors
+// buildDepotInvoiceHtml's Depot Net Profit); Com Net Profit = Gross Profit −
+// Depot Profit (the depot's cut backed out); Packet Cost = Manuf Rate − Raw
+// Rate (same figure as pouchCartonAmount elsewhere on this page).
+function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
+  const columns: Array<'raw' | 'manuf' | 'depot' | 'dealer' | 'tp'> = ['raw', 'manuf', 'depot', 'dealer', 'tp']
+  const packetCost = rateCard.manufRateTotal - rateCard.rawRateTotal
+  const depotProfit = rateCard.dealerRateTotal - rateCard.depotRateTotal
+  const grossProfit = rateCard.tpRateTotal - rateCard.manufRateTotal
+  const grossProfitPercent = rateCard.tpRateTotal ? (grossProfit / rateCard.tpRateTotal) * 100 : 0
+  const netProfit = grossProfit - depotProfit
+  const netProfitPercent = rateCard.tpRateTotal ? (netProfit / rateCard.tpRateTotal) * 100 : 0
+
+  const rows = rateCard.items
+    .map(
+      (item, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
+        <td class="numeric">${item.qty}</td>
+        ${columns.map((column) => `<td class="numeric">${formatAmount(retailRateValue(item, column))}</td>`).join('')}
+        <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
+        ${columns.map((column) => `<td class="numeric">${formatAmount(item.qty * parsePerCtnMultiplier(item.perCtnBgs) * retailRateValue(item, column))}</td>`).join('')}
+      </tr>
+    `
+    )
+    .join('')
+
+  const totalsRow = `
+    <tr class="totals">
+      <td colspan="3"></td>
+      <td colspan="${columns.length}"></td>
+      <td></td>
+      ${columns
+        .map((column) => {
+          const total =
+            column === 'raw'
+              ? rateCard.rawRateTotal
+              : column === 'manuf'
+                ? rateCard.manufRateTotal
+                : column === 'depot'
+                  ? rateCard.depotRateTotal
+                  : column === 'dealer'
+                    ? rateCard.dealerRateTotal
+                    : rateCard.tpRateTotal
+          return `<td class="numeric">${formatAmount(total)}</td>`
+        })
+        .join('')}
+    </tr>
+  `
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Retail Sales Invoice ${escapeHtml(rateCard.invoiceNo)}</title>
+        <style>
+          * { box-sizing: border-box; }
+          @page { margin: 12mm 16mm; size: A4; }
+          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 0; }
+          .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
+          .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
+          .top { display: flex; justify-content: flex-end; margin-top: 10px; }
+          .meta { border: 1px solid #111827; border-collapse: collapse; width: 48%; }
+          .meta td { border: 1px solid #111827; padding: 4px 8px; font-size: 12.5px; }
+          .meta td:first-child { font-weight: 600; width: 55%; }
+          .hl { background: #fef9c3; font-weight: 700; }
+          .boxes { display: flex; gap: 16px; margin: 16px 0; align-items: stretch; }
+          .box { border: 1px solid #111827; border-radius: 4px; flex: 1; padding: 8px 12px; }
+          .box .heading { font-weight: 700; font-size: 12.5px; margin: 0 0 4px; }
+          .box p { margin: 2px 0; font-size: 12.5px; }
+          .box .company-name { font-weight: 700; }
+          table.doc { border-collapse: collapse; width: 100%; }
+          table.doc th, table.doc td { border: 1px solid #d1d5db; padding: 5px 7px; font-size: 12px; }
+          table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 10.5px; }
+          .numeric { text-align: right; white-space: nowrap; }
+          tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
+          @media print { button { display: none; } }
+        </style>
+      </head>
+      <body>
+        <p class="title">${escapeHtml(COMPANY_NAME)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+
+        <div class="top">
+          <table class="meta">
+            <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
+            <tr><td>Invo No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
+            <tr><td>Date:</td><td>${escapeHtml(formatDate(rateCard.date))}</td></tr>
+            <tr><td>Raw Rate:</td><td class="numeric">${formatAmount(rateCard.rawRateTotal)}</td></tr>
+            <tr><td>Manuf Rate:</td><td class="numeric">${formatAmount(rateCard.manufRateTotal)}</td></tr>
+            <tr><td>Depot Perc Rate:</td><td class="numeric">${formatAmount(rateCard.depotRateTotal)}</td></tr>
+            <tr><td>Depot Sales Rate:</td><td class="numeric">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
+            <tr><td>Retail Sales Rate:</td><td class="numeric">${formatAmount(rateCard.tpRateTotal)}</td></tr>
+            <tr><td>Com Gross Profit:</td><td class="numeric hl">${formatAmount(grossProfit)} &middot; ${grossProfitPercent.toFixed(2)}%</td></tr>
+            <tr><td>Com Net Profit:</td><td class="numeric hl">${formatAmount(netProfit)} &middot; ${netProfitPercent.toFixed(2)}%</td></tr>
+            <tr><td>Depot Profit:</td><td class="numeric hl">${formatAmount(depotProfit)}</td></tr>
+            <tr><td>Packet Cost:</td><td class="numeric hl">${formatAmount(packetCost)}</td></tr>
+          </table>
+        </div>
+
+        <div class="boxes">
+          <div class="box">
+            <p class="heading">From &middot; Company</p>
+            <p class="company-name">${escapeHtml(COMPANY_NAME)}</p>
+            <p>${escapeHtml(COMPANY_ADDRESS)}</p>
+            <p>${escapeHtml(COMPANY_EMAIL)}</p>
+            <p>Call: ${escapeHtml(COMPANY_HELPLINE)}</p>
+          </div>
+          <div class="box">
+            <p class="heading" style="text-align:center;">মন্তব্য</p>
+            <p>${rateCard.remarks ? escapeHtml(rateCard.remarks) : '&nbsp;'}</p>
+          </div>
+        </div>
+
+        <table class="doc">
+          <thead>
+            <tr>
+              <th>SL NO</th>
+              <th>Description of Products</th>
+              <th>QTY</th>
+              ${columns.map((column) => `<th>${RETAIL_RATE_COLUMN_LABELS[column].unit}</th>`).join('')}
+              <th>Per Ctn/Bgs</th>
+              ${columns.map((column) => `<th>${RETAIL_RATE_COLUMN_LABELS[column].total}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>${rows}${totalsRow}</tbody>
+        </table>
+        <p class="footnote">This is Computer Generated Invoice no need any seal &amp; signature.</p>
+        <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
+      </body>
+    </html>
+  `
+}
+
 // SR commission per unit, backed out of the already-marked-up rate stored on
 // the line (item.dealerRate holds the SR Rate for a commission-based line —
 // see the productId onChange handler below): if srRate = base * (1 + pct/100),
@@ -945,6 +1114,9 @@ export default function RateCardPage() {
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId)))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card))}>
+                              <Printer className="mr-2 h-4 w-4" /> Print Retail Sales voucher
                             </DropdownMenuItem>
                             {isCommission ? (
                               <DropdownMenuItem onClick={() => openPrintWindow(buildCommissionVoucherHtml(card))}>
