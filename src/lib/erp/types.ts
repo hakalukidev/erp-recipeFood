@@ -649,57 +649,21 @@ export type DiscountProductInput = {
   isActive?: boolean
 }
 
-// ---- Trade Sales Product List --------------------------------------------
-// A third price catalog, for hubs where the company runs a depot but has no
-// dealer under it — the company manufactures and sells retail directly
-// through its own staff there. Same rate-card chain as ProductRecord (Raw M
-// → Manu R → Depot P R → Depot S R → TP → MRP, all typed in directly, no
-// percentage-derived steps like the Discount Product List's SR Com/TP %) —
-// this list just exists standalone from ProductRecord the same way
-// DiscountProductRecord does, e.g. for a different set of hub-specific
-// prices without touching the main Product List.
-export type TradeSalesProductRecord = {
-  id: string
-  name: string
-  banglaName?: string
-  category?: string
-  // Pieces per carton/bag, e.g. "06 ps = 1 bg" — same role as ProductRecord's
-  // packSize/RateCardLineItem's perCtnBgs.
-  perCtnBgs?: string
-  rawRate: number
-  manufRate: number
-  depotRate: number
-  // Depot's selling rate, typed in by hand ("Depot S R" column).
-  dealerRate: number
-  tpRate: number
-  mrpRate: number
-  isActive?: boolean
-  createdAt: string
-  updatedAt: string
-}
-
-export type TradeSalesProductInput = {
-  name: string
-  banglaName?: string
-  category?: string
-  perCtnBgs?: string
-  rawRate?: number
-  manufRate?: number
-  depotRate?: number
-  dealerRate?: number
-  tpRate?: number
-  mrpRate?: number
-  isActive?: boolean
-}
-
-// ---- Product Return (Damage/Return against the Trade Sales Product List) --
+// ---- Product Return (Damage/Return against the Product List) -------------
 // Independent of any invoice — a damaged or returned product is often old
 // stock (2, 5+ years) that was never billed on a recent Rate Card, so this
-// no longer requires (or looks up) a RateCardRecord. Each line is picked
-// straight off the Trade Sales Product List (TradeSalesProductRecord) by
-// name; qty is entered in whichever unit actually came back (Pcs or Kg),
-// used as-is against the rate — no per-carton/bag conversion the way a Rate
-// Card line applies (see parsePerCtnMultiplier).
+// no longer requires (or looks up) a RateCardRecord. Each line starts from a
+// product picked off the main Product List (ProductRecord) by name; qty is
+// entered in whichever unit actually came back (Pcs or Kg), used as-is
+// against the rate — no per-carton/bag conversion the way a Rate Card line
+// applies (see parsePerCtnMultiplier).
+//
+// Unlike a Rate Card line, rawRate/manufRate/depotRate/dealerRate are only a
+// starting point: the product's current rates are copied in when picked, but
+// every one of them can then be hand-edited on the line. A return can come
+// in months (or years) after the original sale, when the price list has
+// already moved on, so the operator types in whatever rate was actually in
+// effect at the time instead of being forced onto today's rate.
 //
 // `returnParty` says who physically returned the goods — only Depot or
 // Dealer are ever offered, never a third "raw material/manufacturing" stage
@@ -707,22 +671,17 @@ export type TradeSalesProductInput = {
 // Dealer chain is always just those two hops):
 //   'depot'  — goods came back straight to the Company from the Depot. Only
 //              the Company<->Depot leg unwinds: companyProfit is pulled
-//              down using the Depot Purchase Price ("Depot P R" /
-//              depotRate) already on file for that product — never re-typed.
+//              down using the Depot Purchase Price ("Depot P R" / depotRate)
+//              on the line, whatever it was edited to.
 //   'dealer' — goods came back from the Dealer to the Depot, which in turn
 //              unwinds its own purchase from the Company, so BOTH legs move:
 //              companyProfit as above, plus depotProfit using the Depot
 //              Sales Price ("Depot S R" / dealerRate — the dealer's own
 //              buying price). This is the "both Depot's and Dealer's return
 //              value get calculated automatically" requirement — both rates
-//              already live on the Trade Sales Product List, so picking the
-//              product and typing the qty is all that's needed.
+//              are on the line the moment a product is picked, and can be
+//              corrected before saving.
 // See computeProductReturnTotals in provider.tsx for the exact formulas.
-//
-// Rates are never re-typed on a return — they're copied from the matching
-// Trade Sales Product List entry at the moment of return (see
-// createProductReturn in provider.tsx) so a return can never silently
-// disagree with the price list.
 //
 // Same sunk-cost write-off as before this chunk: the full manufacturing cost
 // of the returned goods is posted as a "Factory Expense" (a total loss once
@@ -739,18 +698,17 @@ export type ProductReturnParty = 'depot' | 'dealer'
 export type ProductReturnUnit = 'pcs' | 'kg'
 
 export type ProductReturnItem = {
-  // Links back to the Trade Sales Product List line this was returned
-  // against (TradeSalesProductRecord.id) — kept as `productId` for
-  // consistency with RateCardLineItem/reports that key off this field, even
-  // though it no longer points at a ProductRecord.
+  // Links back to the Product List line this was returned against
+  // (ProductRecord.id) when picked from the list — kept as `productId` for
+  // consistency with RateCardLineItem/reports that key off this field.
   productId?: string
   productName: string
   qty: number
   unit: ProductReturnUnit
   rawRate: number
   manufRate: number
-  depotRate: number // Depot Purchase Price ("Depot P R")
-  dealerRate: number // Depot Sales Price ("Depot S R") — the dealer's buying price
+  depotRate: number // Depot Purchase Price ("Depot P R") — editable per line
+  dealerRate: number // Depot Sales Price ("Depot S R") — editable per line
   tpRate?: number
   mrpRate?: number
   perCtnBgs?: string
@@ -802,10 +760,24 @@ export type ProductReturnInput = {
   // Fallback label only used when neither depotId nor dealerId is picked.
   recipientName?: string
   date?: string
-  // Only productId (a TradeSalesProductRecord id)/productName + qty/unit —
-  // rates are always copied from the Trade Sales Product List, never
-  // re-entered (see the ProductReturnRecord comment above).
-  items: Array<{ productId?: string; productName: string; qty: number; unit: ProductReturnUnit }>
+  // productId (a ProductRecord id, when picked from the list) + productName
+  // + qty/unit, plus the rates as they stand on the line at save time —
+  // prefilled from the Product List when picked but hand-editable
+  // afterwards, since a return can land long after the price list moved on
+  // (see the ProductReturnItem comment above).
+  items: Array<{
+    productId?: string
+    productName: string
+    qty: number
+    unit: ProductReturnUnit
+    rawRate?: number
+    manufRate?: number
+    depotRate?: number
+    dealerRate?: number
+    tpRate?: number
+    mrpRate?: number
+    perCtnBgs?: string
+  }>
   reason?: string
 }
 
@@ -1421,7 +1393,6 @@ export type ERPData = {
   depots: Record<string, DepotRecord>
   products: Record<string, ProductRecord>
   discountProducts: Record<string, DiscountProductRecord>
-  tradeSalesProducts: Record<string, TradeSalesProductRecord>
   orders: Record<string, OrderRecord>
   ledgerEntries: Record<string, LedgerEntryRecord>
   chartOfAccounts: Record<string, ChartOfAccountRecord>

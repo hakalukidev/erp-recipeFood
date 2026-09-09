@@ -92,8 +92,6 @@ import type {
   StockAdjustmentRecord,
   StockCountInput,
   StockCountRecord,
-  TradeSalesProductInput,
-  TradeSalesProductRecord,
   UserInput,
   UserRecord,
   VendorInput,
@@ -160,8 +158,6 @@ type ERPContextValue = {
   deleteProduct: (productId: string) => Promise<void>
   saveDiscountProduct: (input: DiscountProductInput, productId?: string) => Promise<string>
   deleteDiscountProduct: (productId: string) => Promise<void>
-  saveTradeSalesProduct: (input: TradeSalesProductInput, productId?: string) => Promise<string>
-  deleteTradeSalesProduct: (productId: string) => Promise<void>
   createStockAdjustmentRequest: (input: StockAdjustmentInput) => Promise<string>
   approveStockAdjustment: (adjustmentId: string) => Promise<void>
   rejectStockAdjustment: (adjustmentId: string) => Promise<void>
@@ -276,7 +272,6 @@ const ERP_TOP_LEVEL_KEYS = [
   'commissionPayouts',
   'investors',
   'discountProducts',
-  'tradeSalesProducts',
   'vendors',
   'purchaseMaterials',
   'purchases',
@@ -476,32 +471,6 @@ function normalizeDiscountProductRecord(product: DiscountProductRecord): Discoun
 function normalizeDiscountProductMap(products?: Record<string, DiscountProductRecord> | null) {
   return Object.fromEntries(
     Object.entries(products ?? {}).map(([id, product]) => [id, normalizeDiscountProductRecord(product)])
-  )
-}
-
-function normalizeTradeSalesProductRecord(product: TradeSalesProductRecord): TradeSalesProductRecord {
-  const now = new Date().toISOString()
-
-  return {
-    ...product,
-    banglaName: product.banglaName || '',
-    category: product.category || '',
-    perCtnBgs: product.perCtnBgs || '',
-    rawRate: Number(product.rawRate ?? 0),
-    manufRate: Number(product.manufRate ?? 0),
-    depotRate: Number(product.depotRate ?? 0),
-    dealerRate: Number(product.dealerRate ?? 0),
-    tpRate: Number(product.tpRate ?? 0),
-    mrpRate: Number(product.mrpRate ?? 0),
-    isActive: product.isActive ?? true,
-    createdAt: product.createdAt || now,
-    updatedAt: product.updatedAt || product.createdAt || now,
-  }
-}
-
-function normalizeTradeSalesProductMap(products?: Record<string, TradeSalesProductRecord> | null) {
-  return Object.fromEntries(
-    Object.entries(products ?? {}).map(([id, product]) => [id, normalizeTradeSalesProductRecord(product)])
   )
 }
 
@@ -900,7 +869,6 @@ function normalizeERPData(data: ERPData | null): ERPData {
     depots: normalizeDepotMap(source.depots),
     products: normalizeProductMap(source.products),
     discountProducts: normalizeDiscountProductMap(source.discountProducts),
-    tradeSalesProducts: normalizeTradeSalesProductMap(source.tradeSalesProducts),
     orders: normalizeOrderMap(source.orders),
     ledgerEntries: source.ledgerEntries ?? {},
     chartOfAccounts: source.chartOfAccounts ?? {},
@@ -1113,22 +1081,6 @@ function normalizeDiscountProductInput(input: DiscountProductInput) {
     dealerRate: Math.max(input.dealerRate ?? 0, 0),
     srCommissionPercent: Math.max(input.srCommissionPercent ?? 8, 0),
     tpPercent: Math.max(input.tpPercent ?? 0, 0),
-    mrpRate: Math.max(input.mrpRate ?? 0, 0),
-    isActive: input.isActive ?? true,
-  }
-}
-
-function normalizeTradeSalesProductInput(input: TradeSalesProductInput) {
-  return {
-    name: input.name.trim(),
-    banglaName: input.banglaName?.trim() ?? '',
-    category: input.category?.trim() ?? '',
-    perCtnBgs: input.perCtnBgs?.trim() ?? '',
-    rawRate: Math.max(input.rawRate ?? 0, 0),
-    manufRate: Math.max(input.manufRate ?? 0, 0),
-    depotRate: Math.max(input.depotRate ?? 0, 0),
-    dealerRate: Math.max(input.dealerRate ?? 0, 0),
-    tpRate: Math.max(input.tpRate ?? 0, 0),
     mrpRate: Math.max(input.mrpRate ?? 0, 0),
     isActive: input.isActive ?? true,
   }
@@ -2732,55 +2684,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`discountProducts/${productId}`]: null,
     })
     await writeActivity('discount_product_deleted', 'inventory', `Deleted ${product.name} from the discount product list.`)
-  }
-
-  async function saveTradeSalesProduct(input: TradeSalesProductInput, productId?: string) {
-    if (!data) {
-      throw new Error('ERP data not loaded yet.')
-    }
-
-    const normalized = normalizeTradeSalesProductInput(input)
-
-    if (!normalized.name) {
-      throw new Error('Product name is required.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const existingProduct = productId ? data.tradeSalesProducts[productId] : null
-    const id = existingProduct?.id ?? createId('trade_sales_product')
-    const now = new Date().toISOString()
-    const product: TradeSalesProductRecord = {
-      id,
-      ...normalized,
-      createdAt: existingProduct?.createdAt ?? now,
-      updatedAt: now,
-    }
-
-    await update(ref(db, 'erp/tradeSalesProducts'), { [id]: product })
-    await writeActivity(
-      existingProduct ? 'trade_sales_product_updated' : 'trade_sales_product_created',
-      'inventory',
-      existingProduct ? `Updated ${product.name} in the trade sales product list.` : `Added ${product.name} to the trade sales product list.`
-    )
-
-    return id
-  }
-
-  async function deleteTradeSalesProduct(productId: string) {
-    if (!data) {
-      return
-    }
-
-    const product = data.tradeSalesProducts[productId]
-    if (!product) {
-      throw new Error('Product not found.')
-    }
-
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`tradeSalesProducts/${productId}`]: null,
-    })
-    await writeActivity('trade_sales_product_deleted', 'inventory', `Deleted ${product.name} from the trade sales product list.`)
   }
 
   // Resolves a QC Hold either back into sellable stock (release — the
@@ -5071,7 +4974,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  // ---- Product Return (Damage/Return against the Trade Sales Product List) --
+  // ---- Product Return (Damage/Return against the Product List) ----------
   // Straight qty x rate, no per-carton/bag conversion — a return is entered
   // directly in whichever unit (Pcs/Kg) came back. See the returnParty
   // comment on ProductReturnRecord in types.ts for what each leg means.
@@ -5131,21 +5034,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (qty <= 0) {
         throw new Error(`Return quantity for ${name} must be greater than zero.`)
       }
-      // Rates always come from the Trade Sales Product List entry, never
-      // re-typed — see the ProductReturnRecord comment in types.ts.
-      const product = requested.productId ? data.tradeSalesProducts[requested.productId] : undefined
+      // Rates are prefilled from the Product List when picked but can be
+      // hand-edited before saving (a return can land long after the price
+      // list moved on) — see the ProductReturnItem comment in types.ts. So
+      // whatever the line shows at save time is what's recorded, not a
+      // fresh lookup off the current Product List.
       return {
         ...(requested.productId ? { productId: requested.productId } : {}),
-        productName: product?.name ?? name,
+        productName: name,
         qty,
         unit: requested.unit,
-        rawRate: product?.rawRate ?? 0,
-        manufRate: product?.manufRate ?? 0,
-        depotRate: product?.depotRate ?? 0,
-        dealerRate: product?.dealerRate ?? 0,
-        tpRate: product?.tpRate ?? 0,
-        mrpRate: product?.mrpRate ?? 0,
-        ...(product?.perCtnBgs ? { perCtnBgs: product.perCtnBgs } : {}),
+        rawRate: Math.max(requested.rawRate ?? 0, 0),
+        manufRate: Math.max(requested.manufRate ?? 0, 0),
+        depotRate: Math.max(requested.depotRate ?? 0, 0),
+        dealerRate: Math.max(requested.dealerRate ?? 0, 0),
+        tpRate: Math.max(requested.tpRate ?? 0, 0),
+        mrpRate: Math.max(requested.mrpRate ?? 0, 0),
+        ...(requested.perCtnBgs ? { perCtnBgs: requested.perCtnBgs } : {}),
       }
     })
 
@@ -5296,8 +5201,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteProduct,
       saveDiscountProduct,
       deleteDiscountProduct,
-      saveTradeSalesProduct,
-      deleteTradeSalesProduct,
       createStockAdjustmentRequest,
       approveStockAdjustment,
       rejectStockAdjustment,

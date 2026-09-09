@@ -464,7 +464,6 @@ export function createDefaultERPData(): ERPData {
       },
     },
     discountProducts: {},
-    tradeSalesProducts: {},
     orders: {
       ord_1001: {
         id: 'ord_1001',

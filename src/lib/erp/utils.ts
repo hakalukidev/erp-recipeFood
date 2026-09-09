@@ -415,16 +415,10 @@ export function buildCategorySalesReportSummary(data: ERPData | null) {
   const rateCards = toArray(data?.rateCards)
   const productReturns = toArray(data?.productReturns)
   const categoryByProductId = new Map(toArray(data?.products).map((product) => [product.id, product.category]))
-  // A Product Return's productId now points at a Trade Sales Product List
-  // entry, not a Product List one (see ProductReturnItem in types.ts) — fall
-  // back to that list's own category when the id isn't a known Product.
-  const categoryByTradeSalesProductId = new Map(
-    toArray(data?.tradeSalesProducts).map((product) => [product.id, product.category || ''])
-  )
 
   function categoryFor(item: { productId?: string }) {
     if (!item.productId) return 'Uncategorized'
-    return categoryByProductId.get(item.productId) || categoryByTradeSalesProductId.get(item.productId) || 'Uncategorized'
+    return categoryByProductId.get(item.productId) || 'Uncategorized'
   }
 
   const rows = new Map<string, CategorySalesReportRow>()

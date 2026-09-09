@@ -44,12 +44,14 @@ function escapeHtml(value: string) {
 
 const UNIT_LABEL: Record<ProductReturnUnit, string> = { pcs: 'Pcs', kg: 'Kg' }
 
-// One row in the return-lines editor — the product is picked straight off
-// the Trade Sales Product List (not an invoice), so rawRate/manufRate/
-// depotRate/dealerRate are auto-filled the moment a product is chosen and
-// never re-typed; only qty + unit are ever entered by hand. See
-// createProductReturn in provider.tsx, which re-derives the same rates
-// server-side from the same list.
+// One row in the return-lines editor — the product is picked off the main
+// Product List (not an invoice), so rawRate/manufRate/depotRate/dealerRate
+// are auto-filled the moment a product is chosen. Depot P R and Depot S R
+// (depotRate/dealerRate) can then be hand-edited: a return can land months
+// or years after the sale, once the price list has already moved on, so the
+// operator types in whatever rate was actually in effect at the time. See
+// createProductReturn in provider.tsx, which now trusts whatever is on the
+// line at save time instead of re-deriving rates itself.
 type ReturnLineDraft = {
   key: string
   productId?: string
@@ -306,19 +308,19 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
 
 export default function ProductReturnsPage() {
   const { data, createProductReturn, deleteProductReturn } = useERP()
-  const tradeSalesProducts = useMemo(() => toArray(data?.tradeSalesProducts), [data?.tradeSalesProducts])
+  const products = useMemo(() => toArray(data?.products), [data?.products])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const productReturns = useMemo(() => sortByCreatedAtDesc(toArray(data?.productReturns)), [data?.productReturns])
 
   const productOptions: ComboboxOption[] = useMemo(
     () =>
-      tradeSalesProducts.map((product) => ({
+      products.map((product) => ({
         value: product.id,
         label: product.name,
         sublabel: product.category,
       })),
-    [tradeSalesProducts]
+    [products]
   )
   const depotOptions: ComboboxOption[] = useMemo(
     () => depots.map((depot) => ({ value: depot.id, label: depot.name, sublabel: depot.address })),
@@ -367,7 +369,7 @@ export default function ProductReturnsPage() {
   }
 
   function selectLineProduct(key: string, productId: string) {
-    const product = tradeSalesProducts.find((item) => item.id === productId)
+    const product = products.find((item) => item.id === productId)
     updateLine(key, {
       productId,
       productName: product?.name ?? '',
@@ -375,7 +377,7 @@ export default function ProductReturnsPage() {
       manufRate: product?.manufRate ?? 0,
       depotRate: product?.depotRate ?? 0,
       dealerRate: product?.dealerRate ?? 0,
-      perCtnBgs: product?.perCtnBgs,
+      perCtnBgs: product?.packSize,
     })
   }
 
@@ -406,6 +408,11 @@ export default function ProductReturnsPage() {
         productName: line.productName,
         qty: Number(line.qty) || 0,
         unit: line.unit,
+        rawRate: line.rawRate,
+        manufRate: line.manufRate,
+        depotRate: line.depotRate,
+        dealerRate: line.dealerRate,
+        perCtnBgs: line.perCtnBgs,
       }))
 
     if (items.length === 0) {
@@ -468,7 +475,7 @@ export default function ProductReturnsPage() {
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight">{productReturns.length.toLocaleString('en-BD')}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Picked from the Trade Sale Product List, no invoice needed</p>
+              <p className="mt-1 text-xs text-muted-foreground">Picked from the Product List, no invoice needed</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -512,9 +519,10 @@ export default function ProductReturnsPage() {
             <div>
               <CardTitle>Product Return</CardTitle>
               <CardDescription>
-                Damage or return entry, independent of any invoice — pick any product off the Trade Sale Product List
-                (however old), enter how much came back in Pcs or Kg, and the Depot/Dealer return value is calculated
-                automatically off that list's Depot Purchase Price and Depot Sales Price.
+                Damage or return entry, independent of any invoice — pick any product off the Product List (however
+                old), enter how much came back in Pcs or Kg, and adjust the Depot Purchase Price / Depot Sales Price
+                if the rate has moved since; the Depot/Dealer return value is calculated automatically off those two
+                rates.
               </CardDescription>
             </div>
             <div className="flex gap-3">
@@ -614,7 +622,8 @@ export default function ProductReturnsPage() {
               <div>
                 <DialogTitle>New product return</DialogTitle>
                 <DialogDescription>
-                  Pick who returned it, then add products from the Trade Sale Product List with the qty that came back.
+                  Pick who returned it, then add products from the Product List with the qty that came back — Depot
+                  P R / Depot S R can be edited per line if the rate has changed since.
                 </DialogDescription>
               </div>
             </div>
@@ -692,8 +701,8 @@ export default function ProductReturnsPage() {
                         value={line.productId ?? ''}
                         onChange={(value) => selectLineProduct(line.key, value)}
                         placeholder="Select product"
-                        searchPlaceholder="Search trade sale products..."
-                        emptyText="No products found — add one in Trade Sales Product List first."
+                        searchPlaceholder="Search products..."
+                        emptyText="No products found — add one in the Product List first."
                       />
                     </div>
                     <Button
@@ -733,15 +742,25 @@ export default function ProductReturnsPage() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs text-muted-foreground">Depot P R</label>
-                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm tabular-nums text-muted-foreground">
-                        {formatAmount(line.depotRate)}
-                      </p>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={line.depotRate}
+                        onChange={(event) => updateLine(line.key, { depotRate: Number(event.target.value) || 0 })}
+                        className="bg-background text-right"
+                      />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs text-muted-foreground">Depot S R</label>
-                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm tabular-nums text-muted-foreground">
-                        {formatAmount(line.dealerRate)}
-                      </p>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={line.dealerRate}
+                        onChange={(event) => updateLine(line.key, { dealerRate: Number(event.target.value) || 0 })}
+                        className="bg-background text-right"
+                      />
                     </div>
                   </div>
                 </div>
@@ -794,10 +813,10 @@ export default function ProductReturnsPage() {
               </div>
             </div>
 
-            {tradeSalesProducts.length === 0 ? (
+            {products.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
                 <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                The Trade Sale Product List is empty — add products there first.
+                The Product List is empty — add products there first.
               </div>
             ) : null}
 
