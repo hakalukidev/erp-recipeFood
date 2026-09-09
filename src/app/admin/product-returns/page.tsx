@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
+import type { DealerRecord, DepotRecord, ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
 import { createId, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 
 function formatAmount(value: number) {
@@ -139,8 +139,11 @@ function partyLabel(entry: ProductReturnRecord) {
 // Combined (Company-side) return voucher — every rate column plus both
 // derived profit reductions this return actually pulls down (Company always,
 // Depot only when returnParty is 'dealer' — see the ProductReturnRecord
-// comment in types.ts).
-function buildCombinedReturnHtml(entry: ProductReturnRecord) {
+// comment in types.ts). `depot` is the Depot this return cascades through —
+// resolved live off the linked dealer (dealer.depotId) when returnParty is
+// 'dealer', so one Dealer-return entry documents both legs without a second
+// Depot-only entry — see resolveDepotForEntry in ProductReturnsPage.
+function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -170,7 +173,8 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
           <tr><td>Returned From:</td><td>${escapeHtml(partyLabel(entry))}</td></tr>
-          <tr><td>Depot / Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          <tr><td>${entry.returnParty === 'dealer' ? 'Dealer Name:' : 'Depot Name:'}</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          ${entry.returnParty === 'dealer' && depot ? `<tr><td>Depot (cascades through):</td><td>${escapeHtml(depot.name)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Return Value (refunded):</td><td class="numeric hl">${formatAmount(entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal)}</td></tr>
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
@@ -201,8 +205,14 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord) {
 
 // Depot's own copy — Depot P P / Depot S P for the returned qty. Relevant
 // whichever party actually returned the goods, since a Dealer return
-// cascades up through the Depot's own purchase from the Company too.
-function buildDepotReturnHtml(entry: ProductReturnRecord) {
+// cascades up through the Depot's own purchase from the Company too — for a
+// 'dealer' returnParty, `depot` is resolved live off the linked dealer
+// (dealer.depotId), never the dealer's own name, so this prints as a
+// legitimate Depot adjustment document straight off the one Dealer-return
+// entry (no separate Depot-only entry needed). Falls back to entry's own
+// name when returnParty is 'depot' (the depot was picked directly) or the
+// dealer has no linked depot on file.
+function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -230,7 +240,10 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
           <tr><td>Returned From:</td><td>${escapeHtml(partyLabel(entry))}</td></tr>
-          <tr><td>Depot / Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          <tr><td>Depot Name:</td><td>${escapeHtml(depot?.name || entry.recipientName)}</td></tr>
+          ${depot?.address ? `<tr><td>Address:</td><td>${escapeHtml(depot.address)}</td></tr>` : ''}
+          ${depot?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(depot.phone)}</td></tr>` : ''}
+          ${entry.returnParty === 'dealer' ? `<tr><td>Returned by Dealer:</td><td>${escapeHtml(entry.recipientName)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Depot Sales Price (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
           <tr><td>Depot Purchase Price (returned):</td><td class="numeric">${formatAmount(entry.depotRateTotal)}</td></tr>
@@ -258,7 +271,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord) {
 // Dealer's own copy — only printed when returnParty is 'dealer' (the goods
 // actually came back from a dealer, so this is the only voucher where the
 // Depot Sales Price is an active refund rather than a reference figure).
-function buildDealerReturnHtml(entry: ProductReturnRecord) {
+function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -285,6 +298,8 @@ function buildDealerReturnHtml(entry: ProductReturnRecord) {
         <table class="meta">
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
           <tr><td>Dealer Name:</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          ${dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
+          ${dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Goods Amount (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
         </table>
@@ -330,6 +345,22 @@ export default function ProductReturnsPage() {
     () => dealers.map((dealer) => ({ value: dealer.id, label: dealer.name, sublabel: dealer.address })),
     [dealers]
   )
+  const depotById = useMemo(() => new Map(depots.map((depot) => [depot.id, depot])), [depots])
+  const dealerById = useMemo(() => new Map(dealers.map((dealer) => [dealer.id, dealer])), [dealers])
+  // Resolves the Depot a return actually cascades through — direct pick for
+  // a 'depot' returnParty, or live off the linked dealer (dealer.depotId)
+  // for a 'dealer' returnParty, the same way rate-card's depotForDealerId
+  // resolves a dealer invoice's real "From" party. Lets one Dealer-return
+  // entry print a legitimate Depot voucher too, no second Depot-only entry.
+  const resolveDepotForEntry = (entry: ProductReturnRecord) => {
+    if (entry.depotId) return depotById.get(entry.depotId)
+    if (entry.dealerId) {
+      const dealer = dealerById.get(entry.dealerId)
+      return dealer?.depotId ? depotById.get(dealer.depotId) : undefined
+    }
+    return undefined
+  }
+  const resolveDealerForEntry = (entry: ProductReturnRecord) => (entry.dealerId ? dealerById.get(entry.dealerId) : undefined)
 
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -521,8 +552,8 @@ export default function ProductReturnsPage() {
               <CardDescription>
                 Damage or return entry, independent of any invoice — pick any product off the Product List (however
                 old), enter how much came back in Pcs or Kg, and adjust the Depot Purchase Price / Depot Sales Price
-                if the rate has moved since; the Depot/Dealer return value is calculated automatically off those two
-                rates.
+                if the rate has moved since. Picking a Dealer covers both legs in one entry — the Depot it's linked to
+                gets its adjustment automatically, so there's no need to also record a separate Depot-only return.
               </CardDescription>
             </div>
             <div className="flex gap-3">
@@ -578,14 +609,20 @@ export default function ProductReturnsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildCombinedReturnHtml(entry))}>
+                            <DropdownMenuItem
+                              onClick={() => openPrintWindow(buildCombinedReturnHtml(entry, resolveDepotForEntry(entry)))}
+                            >
                               <Printer className="mr-2 h-4 w-4" /> Print Combined voucher
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDepotReturnHtml(entry))}>
+                            <DropdownMenuItem
+                              onClick={() => openPrintWindow(buildDepotReturnHtml(entry, resolveDepotForEntry(entry)))}
+                            >
                               <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
                             </DropdownMenuItem>
                             {entry.returnParty === 'dealer' ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildDealerReturnHtml(entry))}>
+                              <DropdownMenuItem
+                                onClick={() => openPrintWindow(buildDealerReturnHtml(entry, resolveDealerForEntry(entry)))}
+                              >
                                 <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
                               </DropdownMenuItem>
                             ) : null}
@@ -677,6 +714,22 @@ export default function ProductReturnsPage() {
                     emptyText="No dealers found — add one in Dealer List first."
                   />
                 )}
+                {returnParty === 'dealer' && dealerId
+                  ? (() => {
+                      const selectedDealerDepotId = dealerById.get(dealerId)?.depotId
+                      const linkedDepot = selectedDealerDepotId ? depotById.get(selectedDealerDepotId) : undefined
+                      return linkedDepot ? (
+                        <p className="text-xs text-muted-foreground">
+                          Also adjusts Depot &ldquo;{linkedDepot.name}&rdquo; automatically — no separate Depot entry needed.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-600">
+                          This dealer isn&apos;t linked to a Depot yet — link it in Depot List to also print a Depot
+                          voucher from this entry.
+                        </p>
+                      )
+                    })()
+                  : null}
               </div>
             </div>
 
