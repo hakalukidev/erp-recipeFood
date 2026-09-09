@@ -98,7 +98,7 @@ export default function DiscountProductsPage() {
     'Manu R',
     'Depot P R',
     'Depot S R',
-    'SR Rate',
+    'Dealer Rate',
     'TP %',
     'TP Rate',
     'MRP',
@@ -231,7 +231,7 @@ export default function DiscountProductsPage() {
                     <TableHead className="text-right">Manu R</TableHead>
                     <TableHead className="text-right">Depot P R</TableHead>
                     <TableHead className="text-right">Depot S R</TableHead>
-                    <TableHead className="text-right">SR Rate</TableHead>
+                    <TableHead className="text-right">Dealer Rate</TableHead>
                     <TableHead className="text-right">TP %</TableHead>
                     <TableHead className="text-right">TP Rate</TableHead>
                     <TableHead className="text-right">MRP</TableHead>
@@ -400,7 +400,7 @@ export default function DiscountProductsPage() {
               return (
                 <div className="grid grid-cols-2 gap-4 rounded-xl border border-border/70 bg-muted/30 p-3 text-sm">
                   <div>
-                    <p className="text-muted-foreground">SR Rate (computed)</p>
+                    <p className="text-muted-foreground">Dealer Rate</p>
                     <p className="font-semibold tabular-nums">{formatCurrency(srRate)}</p>
                   </div>
                   <div>
