@@ -30,6 +30,17 @@ export function isCommissionSaleType(saleType: SaleType | undefined, dealerCateg
   return category ? category.name.toLowerCase().includes('commission') : false
 }
 
+// A dealer category counts as "Trade Sales" (the only distributor type that
+// gets the extra Retail Sales voucher on the Invoice print menu — see
+// rate-card/page.tsx) when its name mentions "trade sales"; every other
+// category (SR/Commission distributors included) only gets the three common
+// vouchers (Company/Depot/Dealer).
+export function isTradeSalesType(saleType: SaleType | undefined, dealerCategories: DealerCategoryRecord[]) {
+  if (!saleType || saleType === 'commission' || saleType === 'others') return false
+  const category = dealerCategories.find((item) => item.id === saleType)
+  return category ? category.name.toLowerCase().includes('trade sales') : false
+}
+
 // Display label for a saved saleType value — the linked dealer category's
 // name, the legacy literal's fixed label, or undefined for an invoice with no
 // saleType at all (reported as "Unclassified").

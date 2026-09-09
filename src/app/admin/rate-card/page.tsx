@@ -50,6 +50,7 @@ import {
   createId,
   formatDate,
   isCommissionSaleType,
+  isTradeSalesType,
   parsePerCtnMultiplier,
   saleTypeLabel,
   sortByCreatedAtDesc,
@@ -723,112 +724,6 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
   `
 }
 
-// SR commission per unit, backed out of the already-marked-up rate stored on
-// the line (item.dealerRate holds the SR Rate for a commission-based line —
-// see the productId onChange handler below): if srRate = base * (1 + pct/100),
-// then commission = srRate * pct / (100 + pct). 0 on a line with no commission
-// (regular Product List line, or a Discount Product with 0% SR commission).
-function lineCommissionAmount(item: RateCardLineItem) {
-  const pct = item.srCommissionPercent ?? 0
-  if (!pct) return 0
-  const totalPieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
-  return totalPieces * item.dealerRate * (pct / (100 + pct))
-}
-
-// SR Commission voucher — only ever printed for a commission-based sale (see
-// the Actions dropdown below). Documents what the SR earned on this invoice:
-// the Depot S R base rate each line was marked up from, the % applied, and
-// the resulting commission amount per line and in total.
-function buildCommissionVoucherHtml(rateCard: RateCardRecord) {
-  const totalCommission = rateCard.items.reduce((sum, item) => sum + lineCommissionAmount(item), 0)
-
-  const rows = rateCard.items
-    .map((item, index) => {
-      const pct = item.srCommissionPercent ?? 0
-      const baseRate = pct ? item.dealerRate / (1 + pct / 100) : item.dealerRate
-      const commission = lineCommissionAmount(item)
-      return `
-      <tr>
-        <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}</td>
-        <td class="numeric">${item.qty}</td>
-        <td class="numeric">${formatAmount(baseRate)}</td>
-        <td class="numeric">${pct.toFixed(2)}%</td>
-        <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
-        <td class="numeric">${formatAmount(commission)}</td>
-      </tr>
-    `
-    })
-    .join('')
-
-  return `
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>Commission Voucher ${escapeHtml(rateCard.invoiceNo)}</title>
-        <style>
-          * { box-sizing: border-box; }
-          @page { margin: 12mm 16mm; size: A4; }
-          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 0; }
-          .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
-          .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
-          .subtitle { text-align: center; color: #4b5563; font-size: 13px; margin: 10px 0 16px; }
-          .meta { border: 1px solid #d1d5db; border-collapse: collapse; margin-bottom: 16px; width: 60%; }
-          .meta td { border: 1px solid #d1d5db; padding: 4px 8px; font-size: 13px; }
-          .meta td:first-child { font-weight: 600; width: 55%; }
-          .hl { background: #fef9c3; font-weight: 700; }
-          table.doc { border-collapse: collapse; width: 100%; }
-          table.doc th, table.doc td { border: 1px solid #d1d5db; padding: 5px 7px; font-size: 12.5px; }
-          table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 11px; }
-          .numeric { text-align: right; white-space: nowrap; }
-          tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
-          .remarks { margin-top: 16px; font-size: 12.5px; }
-          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
-          @media print { button { display: none; } }
-        </style>
-      </head>
-      <body>
-        <p class="title">${escapeHtml(COMPANY_NAME)}</p>
-        <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
-        <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
-        <p class="subtitle">SR Commission Voucher &middot; Commission-based Sale</p>
-        <table class="meta">
-          <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
-          <tr><td>Invoice No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
-          <tr><td>Date:</td><td>${escapeHtml(rateCard.date)}</td></tr>
-          <tr><td>Total SR Commission:</td><td class="numeric hl">${formatAmount(totalCommission)}</td></tr>
-        </table>
-        <table class="doc">
-          <thead>
-            <tr>
-              <th>SL</th>
-              <th>Description of Products</th>
-              <th>QTY</th>
-              <th>Depot S R</th>
-              <th>SR Com %</th>
-              <th>SR Rate</th>
-              <th>Per Ctn/Bgs</th>
-              <th>Commission Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-            <tr class="totals">
-              <td colspan="7" style="text-align:right;">Grand Total</td>
-              <td class="numeric">${formatAmount(totalCommission)}</td>
-            </tr>
-          </tbody>
-        </table>
-        ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
-        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
-        <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
-      </body>
-    </html>
-  `
-}
-
 export default function RateCardPage() {
   const { data, saveRateCard, deleteRateCard } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
@@ -1105,6 +1000,7 @@ export default function RateCardPage() {
                 <TableBody>
                   {filteredRateCards.map((card) => {
                     const isCommission = isCommissionSaleType(card.saleType, dealerCategories)
+                    const isTradeSales = isTradeSalesType(card.saleType, dealerCategories)
                     return (
                     <TableRow key={card.id}>
                       <TableCell className="font-medium">{card.invoiceNo}</TableCell>
@@ -1135,12 +1031,9 @@ export default function RateCardPage() {
                             <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId)))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card))}>
-                              <Printer className="mr-2 h-4 w-4" /> Print Retail Sales voucher
-                            </DropdownMenuItem>
-                            {isCommission ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildCommissionVoucherHtml(card))}>
-                                <Printer className="mr-2 h-4 w-4" /> Print Commission (SR) voucher
+                            {isTradeSales ? (
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card))}>
+                                <Printer className="mr-2 h-4 w-4" /> Print Retail Sales voucher
                               </DropdownMenuItem>
                             ) : null}
                             <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(card)}>
