@@ -6,13 +6,13 @@
         "$id": {
           ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:delete').val() === true))",
           "stockQty": {
-            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true)"
+            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true)"
           },
           "status": {
-            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true)"
+            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true)"
           },
           "updatedAt": {
-            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true)"
+            ".write": "(root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:create').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:edit').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('orders:approve').val() === true || root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('products:edit').val() === true)"
           }
         }
       },
@@ -176,6 +176,14 @@
         ".write": "auth != null"
       },
       "materialUsages": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "finishedGoods": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "productionBatches": {
         ".read": "auth != null",
         ".write": "auth != null"
       },

@@ -65,7 +65,12 @@ import type {
   OrderItem,
   OrderItemBatchAllocation,
   OrderRecord,
+  FinishedGoodsInput,
+  FinishedGoodsRecord,
   ProductInput,
+  ProductionBatchInput,
+  ProductionBatchRecord,
+  ProductionOutputLine,
   ProductRecord,
   ProductReturnInput,
   ProductReturnRecord,
@@ -211,6 +216,10 @@ type ERPContextValue = {
   recordVendorPayment: (input: VendorPaymentInput) => Promise<string>
   createMaterialUsage: (input: MaterialUsageInput) => Promise<string>
   deleteMaterialUsage: (materialUsageId: string) => Promise<void>
+  saveFinishedGoods: (input: FinishedGoodsInput, finishedGoodsId?: string) => Promise<string>
+  deleteFinishedGoods: (finishedGoodsId: string) => Promise<void>
+  createProductionBatch: (input: ProductionBatchInput) => Promise<string>
+  deleteProductionBatch: (productionBatchId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
 }
 
@@ -888,6 +897,8 @@ function normalizeERPData(data: ERPData | null): ERPData {
     purchases: normalizePurchaseMap(source.purchases),
     vendorPayments: source.vendorPayments ?? {},
     materialUsages: source.materialUsages ?? {},
+    finishedGoods: source.finishedGoods ?? {},
+    productionBatches: source.productionBatches ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     notifications: source.notifications ?? {},
@@ -2447,6 +2458,241 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
     await writeActivity('material_usage_deleted', 'purchase', `Deleted material usage entry for ${usage.materialName}.`)
+  }
+
+  // ---- Finished Goods (Production output) ---------------------------------
+  // Its own list rather than the main Product List — a Finished Goods item
+  // only ever comes out of a Production batch (see createProductionBatch
+  // below) and is sold through Rate Card / Trade Sales invoicing via
+  // RateCardLineItem.finishedGoodsId.
+  async function saveFinishedGoods(input: FinishedGoodsInput, finishedGoodsId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const existing = finishedGoodsId ? data.finishedGoods[finishedGoodsId] : null
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Finished goods name is required.')
+    }
+
+    const rawMaterial = input.rawMaterialId ? data.purchaseMaterials[input.rawMaterialId] : undefined
+    if (input.rawMaterialId && !rawMaterial) {
+      throw new Error('Raw material not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('finishedgoods')
+    const now = new Date().toISOString()
+    const record: FinishedGoodsRecord = {
+      id,
+      name,
+      ...(rawMaterial ? { rawMaterialId: rawMaterial.id, rawMaterialName: rawMaterial.name } : {}),
+      ...(input.packSize?.trim() ? { packSize: input.packSize.trim() } : {}),
+      unitWeightKg: Math.max(Number(input.unitWeightKg) || 0, 0),
+      stockQty: Number(input.stockQty) || 0,
+      minStock: Number(input.minStock) || 0,
+      rawRate: Math.max(Number(input.rawRate) || 0, 0),
+      manufRate: Math.max(Number(input.manufRate) || 0, 0),
+      depotRate: Math.max(Number(input.depotRate) || 0, 0),
+      dealerRate: Math.max(Number(input.dealerRate) || 0, 0),
+      tpRate: Math.max(Number(input.tpRate) || 0, 0),
+      mrpRate: Math.max(Number(input.mrpRate) || 0, 0),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/finishedGoods'), { [id]: record })
+    await writeActivity(
+      existing ? 'finished_goods_updated' : 'finished_goods_created',
+      'purchase',
+      existing ? `Updated finished goods ${record.name}.` : `Added finished goods ${record.name}.`
+    )
+
+    return id
+  }
+
+  async function deleteFinishedGoods(finishedGoodsId: string) {
+    if (!data) {
+      return
+    }
+
+    const record = data.finishedGoods[finishedGoodsId]
+    if (!record) {
+      throw new Error('Finished goods item not found.')
+    }
+
+    const isReferenced =
+      Object.values(data.productionBatches).some((batch) =>
+        batch.outputs.some((output) => output.finishedGoodsId === finishedGoodsId)
+      ) ||
+      Object.values(data.rateCards).some((card) => card.items.some((item) => item.finishedGoodsId === finishedGoodsId))
+    if (isReferenced) {
+      throw new Error('Finished goods with production or invoice history cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`finishedGoods/${finishedGoodsId}`]: null })
+    await writeActivity('finished_goods_deleted', 'purchase', `Deleted finished goods ${record.name}.`)
+  }
+
+  // ---- Production (Raw Material → Finished Goods) --------------------------
+  // Raw material stock drops by the batch total (posted as a MaterialUsageRecord
+  // too, so it shows on the Materials & Stock "Recent usage" log like any other
+  // consumption — see the MaterialUsageRecord comment in types.ts), and every
+  // output line's Finished Goods stock rises by its qtyProduced. Allowed to
+  // take raw material stock negative rather than block the batch — same
+  // reasoning as createMaterialUsage: surface the shortage, don't get in the
+  // way of logging what actually happened on the floor.
+  async function createProductionBatch(input: ProductionBatchInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a production batch.')
+    }
+    if (!input.outputs.length) {
+      throw new Error('Add at least one output pack size.')
+    }
+
+    const rawMaterial = data.purchaseMaterials[input.rawMaterialId]
+    if (!rawMaterial) {
+      throw new Error('Raw material not found.')
+    }
+
+    const outputs: ProductionOutputLine[] = input.outputs.map((requested) => {
+      const finishedGoods = data.finishedGoods[requested.finishedGoodsId]
+      if (!finishedGoods) {
+        throw new Error('Finished goods item not found.')
+      }
+      const qtyProduced = Number(requested.qtyProduced) || 0
+      if (qtyProduced <= 0) {
+        throw new Error(`Quantity produced for ${finishedGoods.name} must be greater than zero.`)
+      }
+      const unitWeightKg = Math.max(Number(requested.unitWeightKg) || 0, 0)
+      return {
+        finishedGoodsId: finishedGoods.id,
+        finishedGoodsName: finishedGoods.name,
+        ...(finishedGoods.packSize ? { packSize: finishedGoods.packSize } : {}),
+        qtyProduced,
+        unitWeightKg,
+        rawKgConsumed: qtyProduced * unitWeightKg,
+      }
+    })
+
+    const rawKgConsumedTotal = outputs.reduce((sum, output) => sum + output.rawKgConsumed, 0)
+
+    const db = getDatabaseOrThrow()
+    const id = createId('production')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || now.slice(0, 10)
+    const batchNumber = `PB-${Date.now().toString().slice(-8)}`
+    const nextRawStock = rawMaterial.stockQty - rawKgConsumedTotal
+
+    const usageId = createId('usage')
+    const usage: MaterialUsageRecord = {
+      id: usageId,
+      materialId: rawMaterial.id,
+      materialName: rawMaterial.name,
+      category: rawMaterial.category,
+      unit: rawMaterial.unit,
+      qty: rawKgConsumedTotal,
+      date,
+      note: `Consumed by Production batch ${batchNumber}.`,
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+
+    const batch: ProductionBatchRecord = {
+      id,
+      batchNumber,
+      date,
+      rawMaterialId: rawMaterial.id,
+      rawMaterialName: rawMaterial.name,
+      rawKgConsumedTotal,
+      outputs,
+      materialUsageId: usageId,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+
+    const updates: Record<string, unknown> = {
+      [`productionBatches/${id}`]: batch,
+      [`materialUsages/${usageId}`]: usage,
+      [`purchaseMaterials/${rawMaterial.id}/stockQty`]: nextRawStock,
+      [`purchaseMaterials/${rawMaterial.id}/updatedAt`]: now,
+    }
+
+    // A finished goods item can appear as more than one output line only if
+    // picked twice by mistake — deltas are summed first, same guard
+    // createPurchase uses for repeated materials.
+    const outputDeltas = new Map<string, number>()
+    outputs.forEach((output) => {
+      outputDeltas.set(output.finishedGoodsId, (outputDeltas.get(output.finishedGoodsId) ?? 0) + output.qtyProduced)
+    })
+    outputDeltas.forEach((delta, finishedGoodsId) => {
+      const finishedGoods = data.finishedGoods[finishedGoodsId]
+      if (!finishedGoods) return
+      updates[`finishedGoods/${finishedGoodsId}/stockQty`] = finishedGoods.stockQty + delta
+      updates[`finishedGoods/${finishedGoodsId}/updatedAt`] = now
+    })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'production_batch_created',
+      'purchase',
+      `Recorded production batch ${batchNumber} — ${rawKgConsumedTotal} Kg of ${rawMaterial.name} repacked into ${outputs.length} pack size(s).`
+    )
+
+    if (nextRawStock <= rawMaterial.minStock) {
+      await writeNotification(
+        'Material low stock alert',
+        `${rawMaterial.name} is at or below its minimum stock (${nextRawStock} ${rawMaterial.unit}/${rawMaterial.minStock} ${rawMaterial.unit}) — consider purchasing more.`,
+        'warning',
+        ['super_admin', 'manager', 'warehouse_manager', 'production_manager']
+      )
+    }
+
+    return id
+  }
+
+  async function deleteProductionBatch(productionBatchId: string) {
+    if (!data) {
+      return
+    }
+
+    const batch = data.productionBatches[productionBatchId]
+    if (!batch) {
+      throw new Error('Production batch not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = { [`productionBatches/${productionBatchId}`]: null }
+
+    const rawMaterial = data.purchaseMaterials[batch.rawMaterialId]
+    if (rawMaterial) {
+      updates[`purchaseMaterials/${rawMaterial.id}/stockQty`] = rawMaterial.stockQty + batch.rawKgConsumedTotal
+      updates[`purchaseMaterials/${rawMaterial.id}/updatedAt`] = now
+    }
+
+    if (batch.materialUsageId && data.materialUsages[batch.materialUsageId]) {
+      updates[`materialUsages/${batch.materialUsageId}`] = null
+    }
+
+    const outputDeltas = new Map<string, number>()
+    batch.outputs.forEach((output) => {
+      outputDeltas.set(output.finishedGoodsId, (outputDeltas.get(output.finishedGoodsId) ?? 0) + output.qtyProduced)
+    })
+    outputDeltas.forEach((delta, finishedGoodsId) => {
+      const finishedGoods = data.finishedGoods[finishedGoodsId]
+      if (!finishedGoods) return
+      updates[`finishedGoods/${finishedGoodsId}/stockQty`] = finishedGoods.stockQty - delta
+      updates[`finishedGoods/${finishedGoodsId}/updatedAt`] = now
+    })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('production_batch_deleted', 'purchase', `Deleted production batch ${batch.batchNumber}.`)
   }
 
   // ---- Loan Management (Loan Chart) ---------------------------------------
@@ -4868,6 +5114,50 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // How many actual units (Product List or Finished Goods) a rate card's
+  // items move — same "qty × per-carton multiplier" pieces math
+  // computeRateCardTotals uses, grouped by which stock collection each line
+  // actually belongs to (a line sets at most one of productId/
+  // finishedGoodsId — see the RateCardLineItem comment in types.ts).
+  function rateCardStockPieces(items: RateCardLineItem[]) {
+    const productPieces = new Map<string, number>()
+    const finishedGoodsPieces = new Map<string, number>()
+    items.forEach((item) => {
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      if (item.finishedGoodsId) {
+        finishedGoodsPieces.set(item.finishedGoodsId, (finishedGoodsPieces.get(item.finishedGoodsId) ?? 0) + pieces)
+      } else if (item.productId) {
+        productPieces.set(item.productId, (productPieces.get(item.productId) ?? 0) + pieces)
+      }
+    })
+    return { productPieces, finishedGoodsPieces }
+  }
+
+  // Nets an old-items-vs-new-items pieces delta straight into `updates` —
+  // used by saveRateCard so editing an invoice only moves stock by the
+  // difference, not the full old and new amounts stacked on top of each
+  // other. Takes stock negative rather than blocking the save, the same
+  // stance createMaterialUsage/createProductionBatch take: surface the
+  // shortage on the relevant stock report, don't get in the way of billing.
+  function applyRateCardStockDeltas(
+    updates: Record<string, unknown>,
+    collectionPath: 'products' | 'finishedGoods',
+    recordsById: Record<string, { stockQty: number }>,
+    oldPieces: Map<string, number>,
+    newPieces: Map<string, number>,
+    now: string
+  ) {
+    const ids = new Set<string>([...oldPieces.keys(), ...newPieces.keys()])
+    ids.forEach((id) => {
+      const record = recordsById[id]
+      if (!record) return
+      const delta = (newPieces.get(id) ?? 0) - (oldPieces.get(id) ?? 0)
+      if (delta === 0) return
+      updates[`${collectionPath}/${id}/stockQty`] = record.stockQty - delta
+      updates[`${collectionPath}/${id}/updatedAt`] = now
+    })
+  }
+
   async function saveRateCard(input: RateCardInput, rateCardId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -4887,7 +5177,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const items = input.items
       .filter((item) => item.productName.trim())
       .map((item) => ({
-        ...(item.productId ? { productId: item.productId } : {}),
+        ...(item.finishedGoodsId ? { finishedGoodsId: item.finishedGoodsId } : item.productId ? { productId: item.productId } : {}),
         productName: item.productName.trim(),
         qty: Number(item.qty) || 0,
         rawRate: Number(item.rawRate) || 0,
@@ -4924,7 +5214,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/rateCards'), { [id]: rateCard })
+    const updates: Record<string, unknown> = { [`rateCards/${id}`]: rateCard }
+    const oldPieces = existing
+      ? rateCardStockPieces(existing.items)
+      : { productPieces: new Map<string, number>(), finishedGoodsPieces: new Map<string, number>() }
+    const newPieces = rateCardStockPieces(items)
+    applyRateCardStockDeltas(updates, 'products', data.products, oldPieces.productPieces, newPieces.productPieces, now)
+    applyRateCardStockDeltas(
+      updates,
+      'finishedGoods',
+      data.finishedGoods,
+      oldPieces.finishedGoodsPieces,
+      newPieces.finishedGoodsPieces,
+      now
+    )
+
+    await update(ref(db, 'erp'), updates)
     await writeActivity(
       existing ? 'ratecard_updated' : 'ratecard_created',
       'sales',
@@ -4945,7 +5250,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`rateCards/${rateCardId}`]: null })
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = { [`rateCards/${rateCardId}`]: null }
+    const pieces = rateCardStockPieces(rateCard.items)
+    const empty = new Map<string, number>()
+    applyRateCardStockDeltas(updates, 'products', data.products, pieces.productPieces, empty, now)
+    applyRateCardStockDeltas(updates, 'finishedGoods', data.finishedGoods, pieces.finishedGoodsPieces, empty, now)
+
+    await update(ref(db, 'erp'), updates)
     await writeActivity('ratecard_deleted', 'sales', `Deleted rate card ${rateCard.invoiceNo}.`)
   }
 
@@ -5416,6 +5728,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recordVendorPayment,
       createMaterialUsage,
       deleteMaterialUsage,
+      saveFinishedGoods,
+      deleteFinishedGoods,
+      createProductionBatch,
+      deleteProductionBatch,
       saveSettings,
     }),
     [currentPermissions, currentUser, data, error, loading, users]

@@ -184,6 +184,8 @@ function partyLabel(entry: ProductReturnRecord) {
 // 'dealer', so one Dealer-return entry documents both legs without a second
 // Depot-only entry — see resolveDepotForEntry in ProductReturnsPage.
 function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
+  const returnRate = entry.returnParty === 'depot' ? 'depotRate' : 'dealerRate'
+  const returnValueTotal = entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal
   const rows = entry.items
     .map(
       (item, index) => `
@@ -195,6 +197,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
         <td class="numeric">${formatAmount(item.manufRate)}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item[returnRate])}</td>
       </tr>
     `
     )
@@ -232,9 +235,16 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
               <th>Mnu Ra</th>
               <th>Dep Rate</th>
               <th>Del Rate</th>
+              <th>Total</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>
+            ${rows}
+            <tr class="totals">
+              <td colspan="7">Grand Total (Return Value)</td>
+              <td class="numeric">${formatAmount(returnValueTotal)}</td>
+            </tr>
+          </tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
         ${printFooter()}
@@ -263,6 +273,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
         <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
       </tr>
     `
     )
@@ -298,9 +309,16 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
               <th>Return QTY</th>
               <th>Depot P P</th>
               <th>Depot S P</th>
+              <th>Total</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>
+            ${rows}
+            <tr class="totals">
+              <td colspan="5">Grand Total (Depot Sales Price returned)</td>
+              <td class="numeric">${formatAmount(entry.dealerRateTotal)}</td>
+            </tr>
+          </tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
         ${printFooter()}
@@ -322,6 +340,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
         <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
       </tr>
     `
     )
@@ -352,9 +371,16 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
               <th>Description of Products</th>
               <th>Return QTY</th>
               <th>Depot S P (DP)</th>
+              <th>Total</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>
+            ${rows}
+            <tr class="totals">
+              <td colspan="4">Grand Total (Goods Amount returned)</td>
+              <td class="numeric">${formatAmount(entry.dealerRateTotal)}</td>
+            </tr>
+          </tbody>
         </table>
         ${entry.reason ? `<p class="remarks"><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p>` : ''}
         ${printFooter()}

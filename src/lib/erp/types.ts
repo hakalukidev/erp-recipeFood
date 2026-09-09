@@ -511,6 +511,12 @@ export type StockCountInput = {
 //   both percentages are the figure above ÷ dealerRateTotal
 export type RateCardLineItem = {
   productId?: string
+  // Set instead of productId when this line was picked from the Finished
+  // Goods list (a Production batch's output — see FinishedGoodsRecord)
+  // rather than the main Product List. Drives which stock collection
+  // saveRateCard/deleteRateCard adjusts (see rateCardStockDeltas in
+  // provider.tsx) — a line never sets both.
+  finishedGoodsId?: string
   productName: string
   qty: number
   rawRate: number
@@ -965,6 +971,111 @@ export type MaterialUsageInput = {
   note?: string
 }
 
+// ---- Production (Raw Material → Finished Goods) ---------------------------
+// Fills the gap MaterialUsageRecord's own comment above flagged ("no
+// production/BOM module yet for this to link to automatically") — one raw
+// material (PurchaseMaterialRecord, category 'raw_material') gets repacked
+// into one or more Finished Goods pack-size variants in a single
+// ProductionBatchRecord. Finished Goods are their own list (not the main
+// Product List) since they only ever come from a Production batch — created
+// once per pack-size (e.g. "মরিচ ২.৫ কেজি") and then sold through Rate Card /
+// Trade Sales invoicing the same way a regular Product List item is (see
+// RateCardLineItem.finishedGoodsId).
+export type FinishedGoodsRecord = {
+  id: string
+  name: string
+  // Which raw material this pack-size is produced from — optional (a
+  // Finished Goods item can exist before its raw material is decided, though
+  // a Production batch always requires one).
+  rawMaterialId?: string
+  rawMaterialName?: string
+  // Free-text pack size, e.g. "2.5 Kg" — printed on invoices, purely
+  // informational and never drives any math on its own.
+  packSize?: string
+  // Kg of raw material one produced unit of this item represents — e.g. a
+  // "sack" that bundles enough 2.5 Kg pouches to weigh 15 Kg total. Used to
+  // auto-suggest a Production batch line's raw kg consumed (qtyProduced ×
+  // unitWeightKg), hand-editable per batch the same way every other
+  // prefilled rate on this app is.
+  unitWeightKg: number
+  stockQty: number
+  minStock: number
+  // Same six rate columns a Rate Card line item carries (see
+  // RateCardLineItem) so a new invoice line can prefill from this record
+  // instead of being retyped every time.
+  rawRate: number
+  manufRate: number
+  depotRate: number
+  dealerRate: number
+  tpRate?: number
+  mrpRate?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type FinishedGoodsInput = {
+  name: string
+  rawMaterialId?: string
+  packSize?: string
+  unitWeightKg?: number
+  stockQty?: number
+  minStock?: number
+  rawRate?: number
+  manufRate?: number
+  depotRate?: number
+  dealerRate?: number
+  tpRate?: number
+  mrpRate?: number
+}
+
+// One output line of a production batch — qtyProduced/unitWeightKg are
+// copied onto the line at save time (prefilled from the Finished Goods
+// record but hand-editable, the same "trust what's on the line" pattern
+// ProductReturnItem uses) so a historical batch always reports the numbers
+// actually used, even if the Finished Goods record's own unitWeightKg
+// changes later.
+export type ProductionOutputLine = {
+  finishedGoodsId: string
+  finishedGoodsName: string
+  packSize?: string
+  qtyProduced: number
+  unitWeightKg: number
+  rawKgConsumed: number // = qtyProduced * unitWeightKg, stored not re-derived
+}
+
+// One production run: the raw material's stock drops by the sum of every
+// output line's rawKgConsumed (via a linked MaterialUsageRecord — see
+// materialUsageId — so it shows on the Materials & Stock "Recent usage" log
+// like any other consumption), and each output's Finished Goods stock rises
+// by that line's qtyProduced. Whatever raw material doesn't get consumed
+// stays as leftover stock automatically — there's no separate "leftover"
+// field, it's just PurchaseMaterialRecord.stockQty after the deduction.
+export type ProductionBatchRecord = {
+  id: string
+  batchNumber: string
+  date: string
+  rawMaterialId: string
+  rawMaterialName: string
+  rawKgConsumedTotal: number
+  outputs: ProductionOutputLine[]
+  materialUsageId?: string
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+}
+
+export type ProductionBatchInput = {
+  rawMaterialId: string
+  date?: string
+  note?: string
+  outputs: Array<{
+    finishedGoodsId: string
+    qtyProduced: number
+    unitWeightKg: number
+  }>
+}
+
 // ---- Quality Control (Section 26) ---------------------------------------
 // One QC module — the detailed lab-test parameters. Production
 // (completeProduction) is the only source that creates these today; 'purchase'
@@ -1411,6 +1522,8 @@ export type ERPData = {
   purchases: Record<string, PurchaseRecord>
   vendorPayments: Record<string, VendorPaymentRecord>
   materialUsages: Record<string, MaterialUsageRecord>
+  finishedGoods: Record<string, FinishedGoodsRecord>
+  productionBatches: Record<string, ProductionBatchRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   notifications: Record<string, NotificationRecord>

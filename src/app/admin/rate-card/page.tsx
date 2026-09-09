@@ -73,6 +73,11 @@ const RATE_COLUMN_LABELS: Record<'raw' | 'manuf' | 'depot' | 'dealer', { unit: s
 type LineItemForm = {
   key: string
   productId: string
+  // Set instead of productId when this line was picked from the Finished
+  // Goods list (a Production batch's output) rather than the main Product
+  // List — see the RateCardLineItem comment in types.ts. A line only ever
+  // sets one of the two.
+  finishedGoodsId: string
   productName: string
   qty: string
   rawRate: string
@@ -94,6 +99,7 @@ function emptyLineItem(): LineItemForm {
   return {
     key: createId('line'),
     productId: '',
+    finishedGoodsId: '',
     productName: '',
     qty: '1',
     rawRate: '0',
@@ -136,6 +142,7 @@ function toLineItemForm(item: RateCardLineItem): LineItemForm {
   return {
     key: createId('line'),
     productId: item.productId ?? '',
+    finishedGoodsId: item.finishedGoodsId ?? '',
     productName: item.productName,
     qty: String(item.qty),
     rawRate: String(item.rawRate),
@@ -728,6 +735,8 @@ export default function RateCardPage() {
   const { data, saveRateCard, deleteRateCard } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
   const products = useMemo(() => toArray(data?.products), [data?.products])
+  const finishedGoods = useMemo(() => toArray(data?.finishedGoods), [data?.finishedGoods])
+  const finishedGoodsById = useMemo(() => new Map(finishedGoods.map((item) => [item.id, item])), [finishedGoods])
   const discountProducts = useMemo(() => toArray(data?.discountProducts), [data?.discountProducts])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
@@ -747,6 +756,23 @@ export default function RateCardPage() {
         sublabel: product.category,
       })),
     [products]
+  )
+  // Regular Product List entries plus Finished Goods (a Production batch's
+  // output — see FinishedGoodsRecord) in one picker, so a distribution
+  // invoice can bill straight out of either stock without a separate mode
+  // toggle. Only offered on a non-commission sale type, same as
+  // productOptions — a commission invoice always sources from the Discount
+  // Product List instead (see discountProductOptions below).
+  const productAndFinishedGoodsOptions: ComboboxOption[] = useMemo(
+    () => [
+      ...productOptions,
+      ...finishedGoods.map((item) => ({
+        value: item.id,
+        label: item.name,
+        sublabel: item.packSize ? `Finished Goods · ${item.packSize}` : 'Finished Goods',
+      })),
+    ],
+    [productOptions, finishedGoods]
   )
   // Product picker source for a commission-based invoice — see the Sale
   // type selector below; picking a line here (instead of from productOptions)
@@ -870,7 +896,8 @@ export default function RateCardPage() {
     const items: RateCardLineItem[] = form.items
       .filter((item) => item.productName.trim())
       .map((item) => ({
-        productId: item.productId || undefined,
+        productId: item.finishedGoodsId ? undefined : item.productId || undefined,
+        finishedGoodsId: item.finishedGoodsId || undefined,
         productName: item.productName.trim(),
         qty: Number(item.qty) || 0,
         rawRate: Number(item.rawRate) || 0,
@@ -1163,8 +1190,8 @@ export default function RateCardPage() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <Combobox
-                          options={formIsCommission ? discountProductOptions : productOptions}
-                          value={item.productId}
+                          options={formIsCommission ? discountProductOptions : productAndFinishedGoodsOptions}
+                          value={item.finishedGoodsId || item.productId}
                           onChange={(value) => {
                             // Commission-based sale — pick from the Discount Product List
                             // instead, and run the SR Commission %/TP % chain (see
@@ -1181,6 +1208,7 @@ export default function RateCardPage() {
                               )
                               updateItem(item.key, {
                                 productId: value,
+                                finishedGoodsId: '',
                                 productName: selected.name,
                                 perCtnBgs: selected.perCtnBgs ?? '',
                                 rawRate: String(selected.rawRate),
@@ -1195,9 +1223,37 @@ export default function RateCardPage() {
                               return
                             }
 
+                            // Finished Goods (a Production batch's output) — picked from
+                            // the same combobox as the regular Product List, distinguished
+                            // by its "Finished Goods" sublabel. Leaves Total pieces (/ctn)
+                            // blank/1 rather than copying its pack size in: that field is a
+                            // pieces-per-carton multiplier and the pack size (e.g. "2.5 Kg")
+                            // is a weight label, not a multiplier — qty here already counts
+                            // finished units directly (see rateCardStockPieces in
+                            // provider.tsx, which is what actually moves this stock).
+                            const selectedFinishedGoods = finishedGoodsById.get(value)
+                            if (selectedFinishedGoods) {
+                              updateItem(item.key, {
+                                productId: '',
+                                finishedGoodsId: value,
+                                productName: selectedFinishedGoods.name,
+                                perCtnBgs: '',
+                                rawRate: item.rawRate === '0' ? String(selectedFinishedGoods.rawRate) : item.rawRate,
+                                manufRate: item.manufRate === '0' ? String(selectedFinishedGoods.manufRate) : item.manufRate,
+                                depotRate: item.depotRate === '0' ? String(selectedFinishedGoods.depotRate) : item.depotRate,
+                                dealerRate: item.dealerRate === '0' ? String(selectedFinishedGoods.dealerRate) : item.dealerRate,
+                                tpRate: item.tpRate === '0' ? String(selectedFinishedGoods.tpRate ?? 0) : item.tpRate,
+                                mrpRate: item.mrpRate === '0' ? String(selectedFinishedGoods.mrpRate ?? 0) : item.mrpRate,
+                                srCommissionPercent: '0',
+                                tpPercent: '0',
+                              })
+                              return
+                            }
+
                             const selected = products.find((product) => product.id === value)
                             updateItem(item.key, {
                               productId: value,
+                              finishedGoodsId: '',
                               productName: selected?.name ?? item.productName,
                               // Carton size defaults from the product (Edit product →
                               // Carton size) but stays editable per line below — the
