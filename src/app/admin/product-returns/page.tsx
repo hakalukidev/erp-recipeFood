@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { FileText, Package, Plus, Printer, Search, Trash2, Undo2 } from 'lucide-react'
+import { FileText, Package, Pencil, Plus, Printer, Search, Trash2, Undo2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
@@ -336,7 +336,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
 }
 
 export default function ProductReturnsPage() {
-  const { data, createProductReturn, deleteProductReturn } = useERP()
+  const { data, createProductReturn, updateProductReturn, deleteProductReturn } = useERP()
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
@@ -378,6 +378,7 @@ export default function ProductReturnsPage() {
 
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [returnParty, setReturnParty] = useState<ProductReturnParty>('depot')
   const [depotId, setDepotId] = useState('')
   const [dealerId, setDealerId] = useState('')
@@ -399,12 +400,38 @@ export default function ProductReturnsPage() {
   }, [productReturns, query])
 
   function openCreateDialog() {
+    setEditingId(null)
     setReturnParty('depot')
     setDepotId('')
     setDealerId('')
     setLines([emptyLine()])
     setDate(new Date().toISOString().slice(0, 10))
     setReason('')
+    setFormError(null)
+    setDialogOpen(true)
+  }
+
+  function openEditDialog(entry: ProductReturnRecord) {
+    setEditingId(entry.id)
+    setReturnParty(entry.returnParty)
+    setDepotId(entry.depotId ?? '')
+    setDealerId(entry.dealerId ?? '')
+    setLines(
+      entry.items.map((item) => ({
+        key: createId('line'),
+        productId: item.productId,
+        productName: item.productName,
+        qty: String(item.qty),
+        unit: item.unit,
+        rawRate: item.rawRate,
+        manufRate: item.manufRate,
+        depotRate: item.depotRate,
+        dealerRate: item.dealerRate,
+        perCtnBgs: item.perCtnBgs,
+      }))
+    )
+    setDate(entry.date)
+    setReason(entry.reason ?? '')
     setFormError(null)
     setDialogOpen(true)
   }
@@ -467,18 +494,27 @@ export default function ProductReturnsPage() {
 
     setSaving(true)
     try {
-      await createProductReturn({
+      const input = {
         returnParty,
         depotId: returnParty === 'depot' ? depotId : undefined,
         dealerId: returnParty === 'dealer' ? dealerId : undefined,
         date,
         reason: reason.trim() || undefined,
         items,
-      })
+      }
+      if (editingId) {
+        await updateProductReturn(editingId, input)
+        setFeedback('Product return updated.')
+      } else {
+        await createProductReturn(input)
+        setFeedback('Product return recorded — print the combined or party voucher from the row actions.')
+      }
       setDialogOpen(false)
-      setFeedback('Product return recorded — print the combined or party voucher from the row actions.')
+      setEditingId(null)
     } catch (reason_) {
-      setFormError(reason_ instanceof Error ? reason_.message : 'Unable to record product return.')
+      setFormError(
+        reason_ instanceof Error ? reason_.message : `Unable to ${editingId ? 'update' : 'record'} product return.`
+      )
     } finally {
       setSaving(false)
     }
@@ -640,6 +676,9 @@ export default function ProductReturnsPage() {
                                 <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
                               </DropdownMenuItem>
                             ) : null}
+                            <DropdownMenuItem onClick={() => openEditDialog(entry)}>
+                              <Pencil className="mr-2 h-4 w-4" /> Edit
+                            </DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(entry)}>
                               <Trash2 className="mr-2 h-4 w-4" /> Delete
                             </DropdownMenuItem>
@@ -663,7 +702,13 @@ export default function ProductReturnsPage() {
         </Card>
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open)
+          if (!open) setEditingId(null)
+        }}
+      >
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-4xl overflow-y-auto p-0 sm:max-h-[calc(100dvh-3rem)]">
           <DialogHeader className="border-b border-border/60 px-6 pb-4 pt-6">
             <div className="flex items-center gap-3">
@@ -671,10 +716,11 @@ export default function ProductReturnsPage() {
                 <FileText className="h-4.5 w-4.5" />
               </span>
               <div>
-                <DialogTitle>New product return</DialogTitle>
+                <DialogTitle>{editingId ? 'Edit product return' : 'New product return'}</DialogTitle>
                 <DialogDescription>
-                  Pick who returned it, then add products from the Product List with the qty that came back — Depot
-                  P R / Depot S R can be edited per line if the rate has changed since.
+                  {editingId
+                    ? 'Update the quantity, rates, or party for this return entry, then save.'
+                    : 'Pick who returned it, then add products from the Product List with the qty that came back — Depot P R / Depot S R can be edited per line if the rate has changed since.'}
                 </DialogDescription>
               </div>
             </div>
@@ -890,11 +936,17 @@ export default function ProductReturnsPage() {
             {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
 
             <div className="flex justify-end gap-3 border-t border-border/60 pt-4">
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDialogOpen(false)
+                  setEditingId(null)
+                }}
+              >
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving}>
-                {saving ? 'Saving…' : 'Record return'}
+                {saving ? 'Saving…' : editingId ? 'Save changes' : 'Record return'}
               </Button>
             </div>
           </div>

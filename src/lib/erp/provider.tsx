@@ -200,6 +200,7 @@ type ERPContextValue = {
   deleteRateCard: (rateCardId: string) => Promise<void>
   classifyRateCardSaleType: (rateCardId: string, saleType: SaleType) => Promise<void>
   createProductReturn: (input: ProductReturnInput) => Promise<string>
+  updateProductReturn: (productReturnId: string, input: ProductReturnInput) => Promise<void>
   deleteProductReturn: (productReturnId: string) => Promise<void>
   saveVendor: (input: VendorInput, vendorId?: string) => Promise<string>
   deleteVendor: (vendorId: string) => Promise<void>
@@ -5148,6 +5149,159 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
+  // Edits an existing return in place (same id/returnNumber) — the write-off
+  // expenses it posted are reversed and re-posted at the (possibly changed)
+  // totals, the same reverse-then-post shape deleteProductReturn/
+  // createProductReturn each use on their own, just combined into one atomic
+  // update() so there's no window where the return exists without its
+  // expenses reconciled.
+  async function updateProductReturn(productReturnId: string, input: ProductReturnInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before editing a product return.')
+    }
+    const existing = data.productReturns[productReturnId]
+    if (!existing) {
+      throw new Error('Product return not found.')
+    }
+    if (!input.items.length) {
+      throw new Error('Add at least one product to return.')
+    }
+
+    const depot = input.depotId ? data.depots[input.depotId] : undefined
+    if (input.depotId && !depot) {
+      throw new Error('Depot not found.')
+    }
+    const dealer = input.dealerId ? data.dealers[input.dealerId] : undefined
+    if (input.dealerId && !dealer) {
+      throw new Error('Dealer not found.')
+    }
+    const recipientName = (depot?.name || dealer?.name || input.recipientName?.trim() || '').trim()
+    if (!recipientName) {
+      throw new Error(
+        input.returnParty === 'depot' ? 'Pick the depot this return is against.' : 'Pick the dealer this return is against.'
+      )
+    }
+
+    const items: ProductReturnRecord['items'] = input.items.map((requested) => {
+      const name = requested.productName.trim()
+      if (!name) {
+        throw new Error('Every return line needs a product.')
+      }
+      const qty = Number(requested.qty) || 0
+      if (qty <= 0) {
+        throw new Error(`Return quantity for ${name} must be greater than zero.`)
+      }
+      return {
+        ...(requested.productId ? { productId: requested.productId } : {}),
+        productName: name,
+        qty,
+        unit: requested.unit,
+        rawRate: Math.max(requested.rawRate ?? 0, 0),
+        manufRate: Math.max(requested.manufRate ?? 0, 0),
+        depotRate: Math.max(requested.depotRate ?? 0, 0),
+        dealerRate: Math.max(requested.dealerRate ?? 0, 0),
+        tpRate: Math.max(requested.tpRate ?? 0, 0),
+        mrpRate: Math.max(requested.mrpRate ?? 0, 0),
+        ...(requested.perCtnBgs ? { perCtnBgs: requested.perCtnBgs } : {}),
+      }
+    })
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const returnDate = input.date?.trim() || existing.date
+    const totals = computeProductReturnTotals(items, input.returnParty)
+
+    const updates: Record<string, unknown> = {}
+
+    // Reverse the previous write-off expenses — the qty/rate edit may have
+    // changed the amounts, so the old postings can't just be left standing.
+    ;[existing.manufacturingExpenseId, existing.rawMaterialExpenseId].forEach((expenseId) => {
+      if (!expenseId || !data.expenses[expenseId]) {
+        return
+      }
+      updates[`expenses/${expenseId}`] = null
+      const active = getActiveLedgerEntries(data.ledgerEntries, expenseId)
+      Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+    })
+
+    const postedExpenses: ExpenseRecord[] = []
+    function postWriteOffExpense(category: string, amount: number): string | undefined {
+      if (amount <= 0) {
+        return undefined
+      }
+      const expenseId = createId('expense')
+      const expense: ExpenseRecord = {
+        id: expenseId,
+        category,
+        amount,
+        note: `${category} write-off for product return ${existing.returnNumber} (${recipientName}).`,
+        date: returnDate,
+        paymentMethod: 'cash',
+        approvalStatus: 'pending',
+        approvedBy: '',
+        approvedByName: '',
+        approvedAt: '',
+        createdBy: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+      }
+      updates[`expenses/${expenseId}`] = expense
+      postedExpenses.push(expense)
+      Object.values(
+        buildExpenseLedgerEntries({ expenseId, date: returnDate, category, amount, paymentMethod: 'cash' })
+      ).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+      return expenseId
+    }
+
+    const manufacturingExpenseId = postWriteOffExpense('Factory Expense', totals.manufRateTotal)
+    const rawMaterialExpenseAmount = totals.rawRateTotal * 0.1
+    const rawMaterialExpenseId = postWriteOffExpense('Raw Material', rawMaterialExpenseAmount)
+
+    const updatedReturn: ProductReturnRecord = {
+      id: existing.id,
+      returnNumber: existing.returnNumber,
+      ...(existing.rateCardId ? { rateCardId: existing.rateCardId } : {}),
+      ...(existing.invoiceNo ? { invoiceNo: existing.invoiceNo } : {}),
+      returnParty: input.returnParty,
+      ...(depot ? { depotId: depot.id } : {}),
+      ...(dealer ? { dealerId: dealer.id } : {}),
+      recipientName,
+      date: returnDate,
+      items,
+      reason: input.reason?.trim() ?? '',
+      ...totals,
+      ...(manufacturingExpenseId ? { manufacturingExpenseId } : {}),
+      manufacturingExpenseAmount: totals.manufRateTotal,
+      ...(rawMaterialExpenseId ? { rawMaterialExpenseId } : {}),
+      rawMaterialExpenseAmount,
+      processedBy: existing.processedBy,
+      processedByName: existing.processedByName,
+      createdAt: existing.createdAt,
+    }
+    updates[`productReturns/${existing.id}`] = updatedReturn
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'product_return_updated',
+      'sales',
+      `Edited product return ${existing.returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName}.`
+    )
+
+    if (postedExpenses.length) {
+      const expensesAfterWrite = { ...data.expenses }
+      postedExpenses.forEach((expense) => {
+        expensesAfterWrite[expense.id] = expense
+      })
+      for (const expense of postedExpenses) {
+        await checkBudgetOverrun(data.budgets, expensesAfterWrite, writeNotification, expense.category, expense.date)
+      }
+    }
+  }
+
   async function deleteProductReturn(productReturnId: string) {
     if (!data) {
       return
@@ -5251,6 +5405,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteRateCard,
       classifyRateCardSaleType,
       createProductReturn,
+      updateProductReturn,
       deleteProductReturn,
       saveVendor,
       deleteVendor,
