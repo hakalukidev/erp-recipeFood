@@ -566,19 +566,26 @@ function retailRateValue(item: RateCardLineItem, column: 'raw' | 'manuf' | 'depo
 
 // Retail Sales voucher — the client's "Retail Delivery" paper sheet: five
 // rate columns (Raw M / Mnu Ra / Dep PR / DeP SR / TP) plus a profit summary
-// box. Com Gross Profit = Retail Sales Rate − Manuf Rate (what the company
-// earns if everything sold at TP); Depot Profit = DeP SR − Dep PR (mirrors
-// buildDepotInvoiceHtml's Depot Net Profit); Com Net Profit = Gross Profit −
-// Depot Profit (the depot's cut backed out); Packet Cost = Manuf Rate − Raw
-// Rate (same figure as pouchCartonAmount elsewhere on this page).
+// box. This voucher treats Depot and Dealer as internal price checkpoints
+// only, not separate profit-holding entities — the company is modelled as
+// manufacturing and selling straight through to TP itself, so the *entire*
+// margin from Manuf Rate up to TP is the company's own:
+//   Com Gross Profit = Retail Sales Rate (TP) − Manuf Rate
+// Depot Margin (Dep PR → Dep SR) and Dealer Margin (Dep SR → TP) are shown
+// underneath purely as an informational split of that same Gross Profit —
+// used to check whether the old depot/dealer cut would have covered the
+// company's own marketing cost (DSR, vehicles, etc.), not subtracted from
+// it. Packet Cost = Manuf Rate − Raw Rate (same figure as pouchCartonAmount
+// elsewhere on this page).
 function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
   const columns: Array<'raw' | 'manuf' | 'depot' | 'dealer' | 'tp'> = ['raw', 'manuf', 'depot', 'dealer', 'tp']
   const packetCost = rateCard.manufRateTotal - rateCard.rawRateTotal
-  const depotProfit = rateCard.dealerRateTotal - rateCard.depotRateTotal
   const grossProfit = rateCard.tpRateTotal - rateCard.manufRateTotal
   const grossProfitPercent = rateCard.tpRateTotal ? (grossProfit / rateCard.tpRateTotal) * 100 : 0
-  const netProfit = grossProfit - depotProfit
-  const netProfitPercent = rateCard.tpRateTotal ? (netProfit / rateCard.tpRateTotal) * 100 : 0
+  const depotMargin = rateCard.dealerRateTotal - rateCard.depotRateTotal
+  const depotMarginPercent = rateCard.tpRateTotal ? (depotMargin / rateCard.tpRateTotal) * 100 : 0
+  const dealerMargin = rateCard.tpRateTotal - rateCard.dealerRateTotal
+  const dealerMarginPercent = rateCard.tpRateTotal ? (dealerMargin / rateCard.tpRateTotal) * 100 : 0
 
   const rows = rateCard.items
     .map(
@@ -630,7 +637,7 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
           body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 0; }
           .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
           .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
-          .top { display: flex; justify-content: flex-end; margin-top: 10px; }
+          .top { display: flex; justify-content: flex-start; margin-top: 10px; }
           .meta { border: 1px solid #111827; border-collapse: collapse; width: 48%; }
           .meta td { border: 1px solid #111827; padding: 4px 8px; font-size: 12.5px; }
           .meta td:first-child { font-weight: 600; width: 55%; }
@@ -661,12 +668,12 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
             <tr><td>Date:</td><td>${escapeHtml(formatDate(rateCard.date))}</td></tr>
             <tr><td>Raw Rate:</td><td class="numeric">${formatAmount(rateCard.rawRateTotal)}</td></tr>
             <tr><td>Manuf Rate:</td><td class="numeric">${formatAmount(rateCard.manufRateTotal)}</td></tr>
-            <tr><td>Depot Perc Rate:</td><td class="numeric">${formatAmount(rateCard.depotRateTotal)}</td></tr>
+            <tr><td>Depot Purchase Rate:</td><td class="numeric">${formatAmount(rateCard.depotRateTotal)}</td></tr>
             <tr><td>Depot Sales Rate:</td><td class="numeric">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
             <tr><td>Retail Sales Rate:</td><td class="numeric">${formatAmount(rateCard.tpRateTotal)}</td></tr>
             <tr><td>Com Gross Profit:</td><td class="numeric hl">${formatAmount(grossProfit)} &middot; ${grossProfitPercent.toFixed(2)}%</td></tr>
-            <tr><td>Com Net Profit:</td><td class="numeric hl">${formatAmount(netProfit)} &middot; ${netProfitPercent.toFixed(2)}%</td></tr>
-            <tr><td>Depot Profit:</td><td class="numeric hl">${formatAmount(depotProfit)}</td></tr>
+            <tr><td>&nbsp;&nbsp;· Depot Margin (Dep PR → Dep SR):</td><td class="numeric">${formatAmount(depotMargin)} &middot; ${depotMarginPercent.toFixed(2)}%</td></tr>
+            <tr><td>&nbsp;&nbsp;· Dealer Margin (Dep SR → TP):</td><td class="numeric">${formatAmount(dealerMargin)} &middot; ${dealerMarginPercent.toFixed(2)}%</td></tr>
             <tr><td>Packet Cost:</td><td class="numeric hl">${formatAmount(packetCost)}</td></tr>
           </table>
         </div>

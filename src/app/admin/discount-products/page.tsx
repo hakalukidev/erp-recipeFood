@@ -33,7 +33,6 @@ type DiscountProductFormState = {
   manufRate: string
   depotRate: string
   dealerRate: string
-  srCommissionPercent: string
   tpPercent: string
   mrpRate: string
 }
@@ -47,7 +46,6 @@ const emptyForm: DiscountProductFormState = {
   manufRate: '0',
   depotRate: '0',
   dealerRate: '0',
-  srCommissionPercent: '8',
   tpPercent: '0',
   mrpRate: '0',
 }
@@ -62,7 +60,6 @@ function formFromProduct(product: DiscountProductRecord): DiscountProductFormSta
     manufRate: String(product.manufRate),
     depotRate: String(product.depotRate),
     dealerRate: String(product.dealerRate),
-    srCommissionPercent: String(product.srCommissionPercent),
     tpPercent: String(product.tpPercent),
     mrpRate: String(product.mrpRate),
   }
@@ -101,7 +98,6 @@ export default function DiscountProductsPage() {
     'Manu R',
     'Depot P R',
     'Depot S R',
-    'SR Com %',
     'SR Rate',
     'TP %',
     'TP Rate',
@@ -110,11 +106,7 @@ export default function DiscountProductsPage() {
   const exportRows = useMemo(
     () =>
       filteredProducts.map((product) => {
-        const { srRate, tpRate } = computeDiscountProductRates(
-          product.dealerRate,
-          product.srCommissionPercent,
-          product.tpPercent
-        )
+        const { srRate, tpRate } = computeDiscountProductRates(product.dealerRate, 0, product.tpPercent)
         return [
           product.name,
           product.perCtnBgs ?? '',
@@ -122,7 +114,6 @@ export default function DiscountProductsPage() {
           product.manufRate,
           product.depotRate,
           product.dealerRate,
-          product.srCommissionPercent,
           Number(srRate.toFixed(2)),
           product.tpPercent,
           Number(tpRate.toFixed(2)),
@@ -159,7 +150,7 @@ export default function DiscountProductsPage() {
       manufRate: parseAmount(form.manufRate),
       depotRate: parseAmount(form.depotRate),
       dealerRate: parseAmount(form.dealerRate),
-      srCommissionPercent: parseAmount(form.srCommissionPercent),
+      srCommissionPercent: 0,
       tpPercent: parseAmount(form.tpPercent),
       mrpRate: parseAmount(form.mrpRate),
     }
@@ -208,8 +199,8 @@ export default function DiscountProductsPage() {
             <div>
               <CardTitle>Discount product list</CardTitle>
               <CardDescription>
-                Depot P R, Depot S R, and MRP are typed in directly — SR Rate and TP Rate are each computed live as a
-                percentage step off the rate before it.
+                Depot P R, Depot S R, and MRP are typed in directly — TP Rate is computed live as a percentage step
+                off Depot S R.
               </CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
@@ -240,7 +231,6 @@ export default function DiscountProductsPage() {
                     <TableHead className="text-right">Manu R</TableHead>
                     <TableHead className="text-right">Depot P R</TableHead>
                     <TableHead className="text-right">Depot S R</TableHead>
-                    <TableHead className="text-right">SR Com %</TableHead>
                     <TableHead className="text-right">SR Rate</TableHead>
                     <TableHead className="text-right">TP %</TableHead>
                     <TableHead className="text-right">TP Rate</TableHead>
@@ -250,11 +240,7 @@ export default function DiscountProductsPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredProducts.map((product) => {
-                    const { srRate, tpRate } = computeDiscountProductRates(
-                      product.dealerRate,
-                      product.srCommissionPercent,
-                      product.tpPercent
-                    )
+                    const { srRate, tpRate } = computeDiscountProductRates(product.dealerRate, 0, product.tpPercent)
                     return (
                       <TableRow key={product.id}>
                         <TableCell className="min-w-56">
@@ -273,7 +259,6 @@ export default function DiscountProductsPage() {
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.manufRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.depotRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(product.dealerRate)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{product.srCommissionPercent}%</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(srRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{product.tpPercent}%</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(tpRate)}</TableCell>
@@ -305,7 +290,7 @@ export default function DiscountProductsPage() {
                   })}
                   {filteredProducts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={11} className="h-28 text-center text-muted-foreground">
                         No discount products found.
                       </TableCell>
                     </TableRow>
@@ -322,8 +307,8 @@ export default function DiscountProductsPage() {
           <DialogHeader>
             <DialogTitle>{editingProduct ? 'Edit discount product' : 'Add discount product'}</DialogTitle>
             <DialogDescription>
-              Depot P R, Depot S R, and MRP are typed in — SR Rate and TP Rate are each computed automatically as a
-              percentage step off the rate before it.
+              Depot P R, Depot S R, and MRP are typed in — TP Rate is computed automatically as a percentage step
+              off Depot S R.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmit}>
@@ -392,15 +377,6 @@ export default function DiscountProductsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">SR Commission %</p>
-                <Input
-                  inputMode="numeric"
-                  placeholder="8"
-                  value={form.srCommissionPercent}
-                  onChange={(event) => setForm((current) => ({ ...current, srCommissionPercent: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">TP %</p>
                 <Input
                   inputMode="numeric"
@@ -420,11 +396,7 @@ export default function DiscountProductsPage() {
               </div>
             </div>
             {(() => {
-              const { srRate, tpRate } = computeDiscountProductRates(
-                parseAmount(form.dealerRate),
-                parseAmount(form.srCommissionPercent),
-                parseAmount(form.tpPercent)
-              )
+              const { srRate, tpRate } = computeDiscountProductRates(parseAmount(form.dealerRate), 0, parseAmount(form.tpPercent))
               return (
                 <div className="grid grid-cols-2 gap-4 rounded-xl border border-border/70 bg-muted/30 p-3 text-sm">
                   <div>
