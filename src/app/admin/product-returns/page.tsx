@@ -33,7 +33,15 @@ import {
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import type { DealerRecord, DepotRecord, ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
-import { createId, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import {
+  createId,
+  formatDate,
+  isCommissionSaleType,
+  isSrDistributorType,
+  isTradeSalesType,
+  sortByCreatedAtDesc,
+  toArray,
+} from '@/lib/erp/utils'
 
 function formatAmount(value: number) {
   return value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -49,6 +57,22 @@ function escapeHtml(value: string) {
 }
 
 const UNIT_LABEL: Record<ProductReturnUnit, string> = { pcs: 'Pcs', kg: 'Kg' }
+
+// "Returned From" now picks one of three fixed distributor buckets (each a
+// Dealer Category whose name is matched by isSrDistributorType/
+// isTradeSalesType/isCommissionSaleType in utils.ts) instead of a bare
+// Dealer, plus Depot kept alongside as a fourth option — see the Bangla
+// client request this replaced (2026-09-09): grouping dealers by distributor
+// type both filters the party picker and drives which historical sale rate
+// gets pulled in per line (see findLatestSoldRate below).
+type DistributorType = 'sr' | 'trade_sales' | 'commission' | 'depot'
+
+const DISTRIBUTOR_TYPE_LABELS: Record<DistributorType, string> = {
+  sr: 'SR Distributor',
+  trade_sales: 'Trade Sales Distributor',
+  commission: 'Commission Distributor',
+  depot: 'Depot',
+}
 
 // One row in the return-lines editor — the product is picked off the main
 // Product List (not an invoice), so rawRate/manufRate/depotRate/dealerRate
@@ -69,6 +93,11 @@ type ReturnLineDraft = {
   depotRate: number
   dealerRate: number
   perCtnBgs?: string
+  // Set when a line's rates were pulled from that dealer's own most recent
+  // sale of this product (see findLatestSoldRate) rather than the flat
+  // Product List — only ever set for a dealer return, purely so the form can
+  // show which source the numbers came from.
+  rateSource?: 'sale' | 'catalog'
 }
 
 function emptyLine(): ReturnLineDraft {
@@ -340,7 +369,21 @@ export default function ProductReturnsPage() {
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
+  const dealerCategories = useMemo(() => toArray(data?.dealerCategories), [data?.dealerCategories])
+  const rateCards = useMemo(() => toArray(data?.rateCards), [data?.rateCards])
   const productReturns = useMemo(() => sortByCreatedAtDesc(toArray(data?.productReturns)), [data?.productReturns])
+
+  // Which of the three fixed buckets a dealer's own category (DealerRecord.
+  // categoryId) falls into — reuses the same name-matching rules the invoice
+  // Sale type selector uses for Commission/Trade Sales (see utils.ts) plus
+  // the new SR bucket, so "distributor type" means the same thing everywhere
+  // in the app.
+  function distributorTypeMatchesDealer(dealer: DealerRecord, type: DistributorType) {
+    if (type === 'sr') return isSrDistributorType(dealer.categoryId, dealerCategories)
+    if (type === 'trade_sales') return isTradeSalesType(dealer.categoryId, dealerCategories)
+    if (type === 'commission') return isCommissionSaleType(dealer.categoryId, dealerCategories)
+    return false
+  }
 
   const productOptions: ComboboxOption[] = useMemo(
     () =>
@@ -355,12 +398,38 @@ export default function ProductReturnsPage() {
     () => depots.map((depot) => ({ value: depot.id, label: depot.name, sublabel: depot.address })),
     [depots]
   )
-  const dealerOptions: ComboboxOption[] = useMemo(
-    () => dealers.map((dealer) => ({ value: dealer.id, label: dealer.name, sublabel: dealer.address })),
-    [dealers]
-  )
   const depotById = useMemo(() => new Map(depots.map((depot) => [depot.id, depot])), [depots])
   const dealerById = useMemo(() => new Map(dealers.map((dealer) => [dealer.id, dealer])), [dealers])
+  // Resolves which distributor bucket a saved return's dealer actually falls
+  // into, so re-opening it for edit pre-selects the right "Returned From"
+  // option instead of always defaulting to the first one.
+  const resolveDistributorTypeForEntry = (entry: ProductReturnRecord): DistributorType => {
+    if (entry.returnParty === 'depot') return 'depot'
+    const dealer = entry.dealerId ? dealerById.get(entry.dealerId) : undefined
+    if (dealer && distributorTypeMatchesDealer(dealer, 'commission')) return 'commission'
+    if (dealer && distributorTypeMatchesDealer(dealer, 'trade_sales')) return 'trade_sales'
+    return 'sr'
+  }
+  // Most recent Rate Card (invoice) line this dealer was actually charged for
+  // this product — the "specific price it was sold at" the client asked for,
+  // rather than today's flat Product List rate. Ties broken by date then
+  // createdAt so the truly latest sale wins when several land on one day.
+  function findLatestSoldRate(forDealerId: string, productId: string) {
+    let best: (typeof rateCards)[number]['items'][number] | undefined
+    let bestKey = ''
+    for (const card of rateCards) {
+      if (card.dealerId !== forDealerId) continue
+      for (const item of card.items) {
+        if (item.productId !== productId) continue
+        const key = `${card.date}_${card.createdAt}`
+        if (key > bestKey) {
+          bestKey = key
+          best = item
+        }
+      }
+    }
+    return best
+  }
   // Resolves the Depot a return actually cascades through — direct pick for
   // a 'depot' returnParty, or live off the linked dealer (dealer.depotId)
   // for a 'dealer' returnParty, the same way rate-card's depotForDealerId
@@ -379,7 +448,8 @@ export default function ProductReturnsPage() {
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [returnParty, setReturnParty] = useState<ProductReturnParty>('depot')
+  const [distributorType, setDistributorType] = useState<DistributorType>('sr')
+  const returnParty: ProductReturnParty = distributorType === 'depot' ? 'depot' : 'dealer'
   const [depotId, setDepotId] = useState('')
   const [dealerId, setDealerId] = useState('')
   const [lines, setLines] = useState<ReturnLineDraft[]>([emptyLine()])
@@ -388,6 +458,16 @@ export default function ProductReturnsPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+
+  // Dealers whose own category falls under the selected distributor type —
+  // plus the currently-picked dealer even if it doesn't match, so re-opening
+  // an old return for edit never shows an unexpectedly empty picker.
+  const dealerOptionsForDistributorType: ComboboxOption[] = useMemo(() => {
+    if (distributorType === 'depot') return []
+    return dealers
+      .filter((dealer) => distributorTypeMatchesDealer(dealer, distributorType) || dealer.id === dealerId)
+      .map((dealer) => ({ value: dealer.id, label: dealer.name, sublabel: dealer.address }))
+  }, [dealers, distributorType, dealerId, dealerCategories])
 
   const previewTotals = useMemo(() => computePreviewTotals(lines, returnParty), [lines, returnParty])
 
@@ -401,7 +481,7 @@ export default function ProductReturnsPage() {
 
   function openCreateDialog() {
     setEditingId(null)
-    setReturnParty('depot')
+    setDistributorType('sr')
     setDepotId('')
     setDealerId('')
     setLines([emptyLine()])
@@ -413,7 +493,7 @@ export default function ProductReturnsPage() {
 
   function openEditDialog(entry: ProductReturnRecord) {
     setEditingId(entry.id)
-    setReturnParty(entry.returnParty)
+    setDistributorType(resolveDistributorTypeForEntry(entry))
     setDepotId(entry.depotId ?? '')
     setDealerId(entry.dealerId ?? '')
     setLines(
@@ -442,15 +522,61 @@ export default function ProductReturnsPage() {
 
   function selectLineProduct(key: string, productId: string) {
     const product = products.find((item) => item.id === productId)
+    // A dealer return prefers the rate this exact dealer was actually
+    // charged the last time this product was invoiced to them — falls back
+    // to the flat Product List rate when there's no sale on record yet (a
+    // brand-new dealer, or a product never sold to them before).
+    const soldItem = returnParty === 'dealer' && dealerId ? findLatestSoldRate(dealerId, productId) : undefined
     updateLine(key, {
       productId,
-      productName: product?.name ?? '',
-      rawRate: product?.rawRate ?? 0,
-      manufRate: product?.manufRate ?? 0,
-      depotRate: product?.depotRate ?? 0,
-      dealerRate: product?.dealerRate ?? 0,
-      perCtnBgs: product?.packSize,
+      productName: soldItem?.productName || product?.name || '',
+      rawRate: soldItem?.rawRate ?? product?.rawRate ?? 0,
+      manufRate: soldItem?.manufRate ?? product?.manufRate ?? 0,
+      depotRate: soldItem?.depotRate ?? product?.depotRate ?? 0,
+      dealerRate: soldItem?.dealerRate ?? product?.dealerRate ?? 0,
+      perCtnBgs: soldItem?.perCtnBgs ?? product?.packSize,
+      rateSource: soldItem ? 'sale' : returnParty === 'dealer' && dealerId ? 'catalog' : undefined,
     })
+  }
+
+  // Dealer picker's onChange — beyond just recording the choice, re-derives
+  // every already-picked line's rates against the newly selected dealer's
+  // own sale history (see findLatestSoldRate), so switching dealers after
+  // adding products doesn't leave stale rates from the previous dealer/the
+  // flat catalog behind. When this dealer has no recorded sale of a line's
+  // product, falls through to that product's current Product List rate
+  // (never leaves the line showing whatever number happened to be on it
+  // before — that was the bug: re-selecting a dealer with no sale history
+  // silently kept the *previous* dealer's numbers on screen).
+  function selectDealer(value: string) {
+    setDealerId(value)
+    setLines((current) =>
+      current.map((line) => {
+        if (!line.productId) return line
+        const soldItem = findLatestSoldRate(value, line.productId)
+        if (soldItem) {
+          return {
+            ...line,
+            rawRate: soldItem.rawRate,
+            manufRate: soldItem.manufRate,
+            depotRate: soldItem.depotRate,
+            dealerRate: soldItem.dealerRate,
+            perCtnBgs: soldItem.perCtnBgs ?? line.perCtnBgs,
+            rateSource: 'sale',
+          }
+        }
+        const product = products.find((item) => item.id === line.productId)
+        return {
+          ...line,
+          rawRate: product?.rawRate ?? 0,
+          manufRate: product?.manufRate ?? 0,
+          depotRate: product?.depotRate ?? 0,
+          dealerRate: product?.dealerRate ?? 0,
+          perCtnBgs: product?.packSize ?? line.perCtnBgs,
+          rateSource: 'catalog',
+        }
+      })
+    )
   }
 
   function addLine() {
@@ -731,9 +857,10 @@ export default function ProductReturnsPage() {
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Returned From</label>
                 <Select
-                  value={returnParty}
+                  value={distributorType}
                   onValueChange={(value) => {
-                    setReturnParty(value as ProductReturnParty)
+                    if (value === distributorType) return
+                    setDistributorType(value as DistributorType)
                     setDepotId('')
                     setDealerId('')
                   }}
@@ -742,8 +869,10 @@ export default function ProductReturnsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="sr">SR Distributors</SelectItem>
+                    <SelectItem value="trade_sales">Trade Sales Distributors</SelectItem>
+                    <SelectItem value="commission">Commission Distributors</SelectItem>
                     <SelectItem value="depot">Depot</SelectItem>
-                    <SelectItem value="dealer">Dealer</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -752,10 +881,8 @@ export default function ProductReturnsPage() {
                 <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="bg-background" />
               </div>
               <div className="space-y-1 sm:col-span-2">
-                <label className="text-xs font-medium text-muted-foreground">
-                  {returnParty === 'depot' ? 'Depot' : 'Dealer'}
-                </label>
-                {returnParty === 'depot' ? (
+                <label className="text-xs font-medium text-muted-foreground">{DISTRIBUTOR_TYPE_LABELS[distributorType]}</label>
+                {distributorType === 'depot' ? (
                   <Combobox
                     options={depotOptions}
                     value={depotId}
@@ -766,12 +893,12 @@ export default function ProductReturnsPage() {
                   />
                 ) : (
                   <Combobox
-                    options={dealerOptions}
+                    options={dealerOptionsForDistributorType}
                     value={dealerId}
-                    onChange={setDealerId}
-                    placeholder="Select a dealer"
+                    onChange={selectDealer}
+                    placeholder={`Select a ${DISTRIBUTOR_TYPE_LABELS[distributorType].toLowerCase()}`}
                     searchPlaceholder="Search dealers..."
-                    emptyText="No dealers found — add one in Dealer List first."
+                    emptyText={`No ${DISTRIBUTOR_TYPE_LABELS[distributorType]}s found — check Dealer Category on the Dealer List.`}
                   />
                 )}
                 {returnParty === 'dealer' && dealerId
@@ -876,6 +1003,15 @@ export default function ProductReturnsPage() {
                       />
                     </div>
                   </div>
+                  {line.rateSource === 'sale' ? (
+                    <p className="text-xs text-emerald-600">
+                      Rate auto-filled from this dealer&apos;s most recent sale of this product.
+                    </p>
+                  ) : line.rateSource === 'catalog' ? (
+                    <p className="text-xs text-muted-foreground">
+                      No sale on record for this dealer yet — using the Product List rate; edit if needed.
+                    </p>
+                  ) : null}
                 </div>
               ))}
               <Button type="button" variant="outline" size="sm" onClick={addLine}>

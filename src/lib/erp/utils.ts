@@ -41,6 +41,19 @@ export function isTradeSalesType(saleType: SaleType | undefined, dealerCategorie
   return category ? category.name.toLowerCase().includes('trade sales') : false
 }
 
+// A dealer category counts as "SR" distribution — the third fixed bucket the
+// Product Return screen's Returned From selector filters dealers into,
+// alongside Commission/Trade Sales (see isCommissionSaleType/isTradeSalesType
+// above) — when its name mentions "sr" as a whole word. Takes a dealer's
+// categoryId directly (DealerRecord.categoryId) rather than an invoice
+// saleType, since Product Return groups dealers by their own category, not
+// by a chosen invoice sale type.
+export function isSrDistributorType(categoryId: string | undefined, dealerCategories: DealerCategoryRecord[]) {
+  if (!categoryId) return false
+  const category = dealerCategories.find((item) => item.id === categoryId)
+  return category ? /\bsr\b/i.test(category.name) : false
+}
+
 // Display label for a saved saleType value — the linked dealer category's
 // name, the legacy literal's fixed label, or undefined for an invoice with no
 // saleType at all (reported as "Unclassified").
