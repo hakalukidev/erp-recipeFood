@@ -751,9 +751,9 @@ export type ProductReturnRecord = {
   // return itself; the amounts are snapshotted here so the printed voucher
   // and the returns list never have to re-derive them from `items`.
   manufacturingExpenseId?: string
-  manufacturingExpenseAmount: number // = manufRateTotal, posted as Factory Expense
+  manufacturingExpenseAmount: number // = manufRateTotal - rawRateTotal, posted as Factory Expense
   rawMaterialExpenseId?: string
-  rawMaterialExpenseAmount: number // = 10% of rawRateTotal, posted as Raw Material expense
+  rawMaterialExpenseAmount: number // = 30% of rawRateTotal, posted as Raw Material expense
   processedBy: string
   processedByName: string
   createdAt: string

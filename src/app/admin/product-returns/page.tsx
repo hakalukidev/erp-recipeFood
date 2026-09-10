@@ -133,8 +133,8 @@ function computePreviewTotals(lines: ReturnLineDraft[], returnParty: ProductRetu
     companyProfit: depotRateTotal - manufRateTotal,
     depotProfit: returnParty === 'dealer' ? dealerRateTotal - depotRateTotal : 0,
     returnValue: returnParty === 'depot' ? depotRateTotal : dealerRateTotal,
-    manufacturingExpenseAmount: manufRateTotal,
-    rawMaterialExpenseAmount: rawRateTotal * 0.1,
+    manufacturingExpenseAmount: manufRateTotal - rawRateTotal,
+    rawMaterialExpenseAmount: rawRateTotal * 0.3,
   }
 }
 
@@ -223,7 +223,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
           ${entry.returnParty === 'dealer' ? `<tr><td>Depot Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.depotProfit)}</td></tr>` : ''}
           <tr><td>Manufacturing Cost (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
-          <tr><td>Raw Material 10% (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
+          <tr><td>Raw Material 30% (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -391,7 +391,9 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
 }
 
 export default function ProductReturnsPage() {
-  const { data, createProductReturn, updateProductReturn, deleteProductReturn } = useERP()
+  const { data, createProductReturn, updateProductReturn, deleteProductReturn, recalculateProductReturnExpenses } =
+    useERP()
+  const [recalculating, setRecalculating] = useState(false)
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
@@ -682,6 +684,27 @@ export default function ProductReturnsPage() {
     }
   }
 
+  // One-off backfill button for the 2026-09 formula change (manufacturing
+  // expense net of raw material, raw material write-off 10% -> 30%) — see
+  // recalculateProductReturnExpenses in provider.tsx. Safe to click more
+  // than once; records already on the new formula are left untouched.
+  async function handleRecalculate() {
+    setFeedback(null)
+    setRecalculating(true)
+    try {
+      const changed = await recalculateProductReturnExpenses()
+      setFeedback(
+        changed > 0
+          ? `Recalculated write-off expenses for ${changed} older product return(s) to the 30% raw material formula.`
+          : 'All product returns already use the current formula — nothing to recalculate.'
+      )
+    } catch (reason_) {
+      setFeedback(reason_ instanceof Error ? reason_.message : 'Unable to recalculate product returns.')
+    } finally {
+      setRecalculating(false)
+    }
+  }
+
   function openPrintWindow(html: string) {
     const printWindow = window.open('', '_blank')
     if (!printWindow) return
@@ -768,6 +791,9 @@ export default function ProductReturnsPage() {
                   placeholder="Search return no or party"
                 />
               </div>
+              <Button variant="outline" onClick={handleRecalculate} disabled={recalculating}>
+                {recalculating ? 'Recalculating…' : 'Recalculate old returns (30%)'}
+              </Button>
               <Button onClick={openCreateDialog}>
                 <Plus className="mr-2 h-4 w-4" />
                 New Product Return
@@ -1070,7 +1096,7 @@ export default function ProductReturnsPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Raw material 10% (posted as expense)</p>
+                  <p className="text-xs text-muted-foreground">Raw material 30% (posted as expense)</p>
                   <p className="text-lg font-semibold text-destructive">
                     -{formatAmount(previewTotals.rawMaterialExpenseAmount)}
                   </p>
