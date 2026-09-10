@@ -4,7 +4,6 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { ListChecks, Pencil, Plus, Trash2, UserCheck } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -312,7 +311,6 @@ export default function ExpensesPage() {
                         <TableHead>Category</TableHead>
                         <TableHead>Amount</TableHead>
                         <TableHead>Note</TableHead>
-                        <TableHead>Approval</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -323,22 +321,6 @@ export default function ExpensesPage() {
                           <TableCell className="font-medium">{expense.category}</TableCell>
                           <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                'rounded-full capitalize',
-                                expense.approvalStatus === 'approved' &&
-                                  'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300',
-                                expense.approvalStatus === 'rejected' &&
-                                  'border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300',
-                                expense.approvalStatus === 'pending' &&
-                                  'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
-                              )}
-                            >
-                              {expense.approvalStatus}
-                            </Badge>
-                          </TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-2">
                               <Button
@@ -365,7 +347,7 @@ export default function ExpensesPage() {
                       ))}
                       {filteredExpenses.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                          <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                             No expenses recorded for this period.
                           </TableCell>
                         </TableRow>
