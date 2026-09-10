@@ -272,7 +272,9 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
 // in types.ts), the actual credited return value is always the Depot
 // Purchase Price (depotRate) — Depot Sales Price (dealerRate) is shown only
 // as a reference figure, and the old separate "Depot Profit" deduction line
-// is gone.
+// is gone. The gap between the two (dealerRateTotal - depotRateTotal) is
+// the Depot's margin on this return; it's surfaced as "Adjustment Amount"
+// so it can be deducted from the Depot's accounting head at month end.
 function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
   const rows = entry.items
     .map(
@@ -309,6 +311,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Depot Sales Price (reference):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
           <tr><td>Return Value (credited at Depot Purchase Price):</td><td class="numeric hl">${formatAmount(entry.depotRateTotal)}</td></tr>
+          <tr><td>Depot Profit (Adjustment Amount, deduct from Depot Head):</td><td class="numeric hl">${formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -730,11 +733,12 @@ export default function ProductReturnsPage() {
     (sum, entry) => sum + entry.manufacturingExpenseAmount + entry.rawMaterialExpenseAmount,
     0
   )
+  const totalDepotProfit = productReturns.reduce((sum, entry) => sum + (entry.dealerRateTotal - entry.depotRateTotal), 0)
 
   return (
     <AdminShell active="Product Return">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
@@ -747,6 +751,13 @@ export default function ProductReturnsPage() {
               <p className="text-sm text-muted-foreground">Total return value refunded</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalReturnValue)}</p>
               <p className="mt-1 text-xs text-muted-foreground">Always credited at Depot Purchase Price, per return</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Depot profit (adjust from Depot Head)</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatAmount(totalDepotProfit)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Depot Sales Price − Return Value, deduct at month end</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -811,6 +822,7 @@ export default function ProductReturnsPage() {
                     <TableHead>Depot / Dealer</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Return Value</TableHead>
+                    <TableHead className="text-right">Depot Profit</TableHead>
                     <TableHead className="text-right">Company Profit</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -823,6 +835,7 @@ export default function ProductReturnsPage() {
                       <TableCell>{entry.recipientName}</TableCell>
                       <TableCell>{formatDate(entry.date)}</TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.depotRateTotal)}</TableCell>
+                      <TableCell className="text-right">{formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.companyProfit)}</TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

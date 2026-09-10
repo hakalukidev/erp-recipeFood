@@ -248,7 +248,7 @@ const PRINT_STYLES = `
           @media print { button { display: none; } }
 `
 
-function buildPurchaseVoucherHtml(entry: PurchaseRecord) {
+function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -280,6 +280,8 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord) {
         <table class="meta">
           <tr><td>Purchase No:</td><td>${escapeHtml(entry.purchaseNumber)}</td></tr>
           <tr><td>Vendor:</td><td>${escapeHtml(entry.vendorName)}</td></tr>
+          ${vendor?.address ? `<tr><td>Address:</td><td>${escapeHtml(vendor.address)}</td></tr>` : ''}
+          ${vendor?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(vendor.phone)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(formatDate(entry.date))}</td></tr>
           <tr><td>Total Amount:</td><td class="numeric hl">${formatAmount(entry.totalAmount)}</td></tr>
           <tr><td>Paid:</td><td class="numeric">${formatAmount(entry.paid)}</td></tr>
@@ -336,6 +338,7 @@ export default function PurchasePage() {
   } = useERP()
 
   const vendors = useMemo(() => sortByCreatedAtDesc(toArray(data?.vendors)), [data?.vendors])
+  const vendorById = useMemo(() => new Map(vendors.map((vendor) => [vendor.id, vendor])), [vendors])
   const materials = useMemo(() => sortByCreatedAtDesc(toArray(data?.purchaseMaterials)), [data?.purchaseMaterials])
   const rawMaterials = useMemo(() => materials.filter((material) => material.category === 'raw_material'), [materials])
   const purchases = useMemo(() => sortByCreatedAtDesc(toArray(data?.purchases)), [data?.purchases])
@@ -1071,7 +1074,7 @@ export default function PurchasePage() {
                                 >
                                   <Wallet className="mr-2 h-4 w-4" /> Record payment
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => openPrintWindow(buildPurchaseVoucherHtml(purchase))}>
+                                <DropdownMenuItem onClick={() => openPrintWindow(buildPurchaseVoucherHtml(purchase, purchase.vendorId ? vendorById.get(purchase.vendorId) : undefined))}>
                                   <Printer className="mr-2 h-4 w-4" /> Print voucher
                                 </DropdownMenuItem>
                                 <DropdownMenuItem className="text-destructive" onClick={() => handleDeletePurchase(purchase)}>

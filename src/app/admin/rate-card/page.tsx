@@ -44,7 +44,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { DealerCategoryRecord, DepotRecord, RateCardLineItem, RateCardRecord, SaleType } from '@/lib/erp/types'
+import type { DealerCategoryRecord, DealerRecord, DepotRecord, RateCardLineItem, RateCardRecord, SaleType } from '@/lib/erp/types'
 import {
   computeDiscountProductRates,
   createId,
@@ -226,7 +226,7 @@ function computeTotals(items: LineItemForm[]) {
 }
 
 // Company (internal) voucher — every rate column plus the margin box.
-function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean) {
+function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean, dealer?: DealerRecord) {
   const columns: Array<'raw' | 'manuf' | 'depot' | 'dealer'> = ['raw', 'manuf', 'depot', 'dealer']
 
   const summaryRows = `
@@ -312,6 +312,8 @@ function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean) {
         <p class="subtitle">Company (internal) Voucher${isCommission ? ' &middot; Commission-based Sale' : ''}</p>
         <table class="meta">
           <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
+          ${dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
+          ${dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
           <tr><td>Invoice No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
           <tr><td>Date:</td><td>${escapeHtml(rateCard.date)}</td></tr>
           ${summaryRows}
@@ -364,7 +366,7 @@ const PARTY_BOX_STYLES = `
 // Depot → Dealer invoice: shows DP (= dealerRate, what the dealer pays) and
 // TP (= tpRate, what the dealer resells at) — the gap between the two is the
 // dealer's own margin (Dealer Margin, mirroring Depot Net Profit above).
-function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord) {
+function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord, dealer?: DealerRecord) {
   const dealerMargin = rateCard.tpRateTotal - rateCard.dealerRateTotal
   const rows = rateCard.items
     .map(
@@ -422,6 +424,8 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean,
           <div class="party">
             <p class="label">To &middot; Dealer</p>
             <p class="name">${escapeHtml(rateCard.recipientName)}</p>
+            ${dealer?.address ? `<p>${escapeHtml(dealer.address)}</p>` : ''}
+            ${dealer?.phone ? `<p>Mob: ${escapeHtml(dealer.phone)}</p>` : ''}
           </div>
         </div>
 
@@ -458,7 +462,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean,
 // dealer at — the same figure the Dealer voucher calls "DP"). Depot Net
 // Profit (the depot's own per-invoice commission) is Depot S P total −
 // Depot P P total — derived here, not stored.
-function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord) {
+function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord, dealer?: DealerRecord) {
   const depotNetProfit = rateCard.dealerRateTotal - rateCard.depotRateTotal
 
   const rows = rateCard.items
@@ -503,6 +507,8 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, 
             <tr><td>Delivery Date:</td><td>${escapeHtml(rateCard.deliveryDate || rateCard.date)}</td></tr>
             <tr><td>Depot Name:</td><td>${depot ? escapeHtml(depot.name) : escapeHtml(rateCard.recipientName)}</td></tr>
             <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
+            ${dealer?.address ? `<tr><td>Dealer Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
+            ${dealer?.phone ? `<tr><td>Dealer Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Depot Sales Price:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
             <tr><td>Depot Purchase Price:</td><td class="numeric">${formatAmount(rateCard.depotRateTotal)}</td></tr>
@@ -596,7 +602,7 @@ function retailRateValue(item: RateCardLineItem, column: 'raw' | 'manuf' | 'depo
 // company's own marketing cost (DSR, vehicles, etc.), not subtracted from
 // it. Packet Cost = Manuf Rate − Raw Rate (same figure as pouchCartonAmount
 // elsewhere on this page).
-function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
+function buildRetailInvoiceHtml(rateCard: RateCardRecord, dealer?: DealerRecord) {
   const columns: Array<'raw' | 'manuf' | 'depot' | 'dealer' | 'tp'> = ['raw', 'manuf', 'depot', 'dealer', 'tp']
   const packetCost = rateCard.manufRateTotal - rateCard.rawRateTotal
   const grossProfit = rateCard.tpRateTotal - rateCard.manufRateTotal
@@ -683,6 +689,8 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord) {
         <div class="top">
           <table class="meta">
             <tr><td>Dealer Name:</td><td>${escapeHtml(rateCard.recipientName)}</td></tr>
+            ${dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
+            ${dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
             <tr><td>Invo No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Date:</td><td>${escapeHtml(formatDate(rateCard.date))}</td></tr>
             <tr><td>Raw Rate:</td><td class="numeric">${formatAmount(rateCard.rawRateTotal)}</td></tr>
@@ -740,14 +748,15 @@ export default function RateCardPage() {
   const discountProducts = useMemo(() => toArray(data?.discountProducts), [data?.discountProducts])
   const dealers = useMemo(() => toArray(data?.dealers), [data?.dealers])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
+  const dealerById = useMemo(() => new Map(dealers.map((dealer) => [dealer.id, dealer])), [dealers])
+  const dealerForId = useMemo(() => (dealerId?: string) => (dealerId ? dealerById.get(dealerId) : undefined), [dealerById])
   const depotForDealerId = useMemo(() => {
-    const dealerById = new Map(dealers.map((dealer) => [dealer.id, dealer]))
     const depotById = new Map(depots.map((depot) => [depot.id, depot]))
     return (dealerId?: string) => {
       const dealer = dealerId ? dealerById.get(dealerId) : undefined
       return dealer?.depotId ? depotById.get(dealer.depotId) : undefined
     }
-  }, [dealers, depots])
+  }, [dealerById, depots])
   const productOptions: ComboboxOption[] = useMemo(
     () =>
       products.map((product) => ({
@@ -1049,17 +1058,17 @@ export default function RateCardPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openEditDialog(card)}>Edit</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission))}>
+                            <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId)))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Company voucher
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId)))}>
+                            <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId)))}>
+                            <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
                               <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
                             </DropdownMenuItem>
                             {isTradeSales ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card))}>
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card, dealerForId(card.dealerId)))}>
                                 <Printer className="mr-2 h-4 w-4" /> Print Retail Sales voucher
                               </DropdownMenuItem>
                             ) : null}
