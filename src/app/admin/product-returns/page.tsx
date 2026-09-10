@@ -115,8 +115,11 @@ function emptyLine(): ReturnLineDraft {
 
 // Same math as computeProductReturnTotals in provider.tsx — kept in sync by
 // hand since this is a live preview over uncommitted form state. Qty is used
-// as-is against the rate (Pcs/Kg, no per-carton/bag conversion).
-function computePreviewTotals(lines: ReturnLineDraft[], returnParty: ProductReturnParty) {
+// as-is against the rate (Pcs/Kg, no per-carton/bag conversion). Return
+// value is always the Depot Purchase Price (depotRate) regardless of
+// returnParty — see the returnParty comment on ProductReturnRecord in
+// types.ts — so there's no separate "Depot Profit" deduction any more.
+function computePreviewTotals(lines: ReturnLineDraft[]) {
   const active = lines.filter((line) => (Number(line.qty) || 0) > 0)
   const qtyOf = (line: ReturnLineDraft) => Number(line.qty) || 0
 
@@ -131,8 +134,8 @@ function computePreviewTotals(lines: ReturnLineDraft[], returnParty: ProductRetu
     depotRateTotal,
     dealerRateTotal,
     companyProfit: depotRateTotal - manufRateTotal,
-    depotProfit: returnParty === 'dealer' ? dealerRateTotal - depotRateTotal : 0,
-    returnValue: returnParty === 'depot' ? depotRateTotal : dealerRateTotal,
+    depotProfit: 0,
+    returnValue: depotRateTotal,
     manufacturingExpenseAmount: manufRateTotal - rawRateTotal,
     rawMaterialExpenseAmount: rawRateTotal * 0.3,
   }
@@ -176,16 +179,14 @@ function partyLabel(entry: ProductReturnRecord) {
   return entry.returnParty === 'depot' ? 'Depot' : 'Dealer'
 }
 
-// Combined (Company-side) return voucher — every rate column plus both
-// derived profit reductions this return actually pulls down (Company always,
-// Depot only when returnParty is 'dealer' — see the ProductReturnRecord
-// comment in types.ts). `depot` is the Depot this return cascades through —
-// resolved live off the linked dealer (dealer.depotId) when returnParty is
-// 'dealer', so one Dealer-return entry documents both legs without a second
+// Combined (Company-side) return voucher — every rate column plus the one
+// profit reduction a return actually pulls down (companyProfit, always
+// depotRateTotal - manufRateTotal — see the ProductReturnRecord comment in
+// types.ts). `depot` is the Depot this return cascades through — resolved
+// live off the linked dealer (dealer.depotId) when returnParty is 'dealer',
+// so one Dealer-return entry documents both legs without a second
 // Depot-only entry — see resolveDepotForEntry in ProductReturnsPage.
-function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
-  const returnRate = entry.returnParty === 'depot' ? 'depotRate' : 'dealerRate'
-  const returnValueTotal = entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal
+function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord, dealer?: DealerRecord) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -197,7 +198,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
         <td class="numeric">${formatAmount(item.manufRate)}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td class="numeric">${formatAmount(item.qty * item[returnRate])}</td>
+        <td class="numeric">${formatAmount(item.qty * item.depotRate)}</td>
       </tr>
     `
     )
@@ -217,11 +218,14 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
           <tr><td>Return No:</td><td>${escapeHtml(entry.returnNumber)}</td></tr>
           <tr><td>Returned From:</td><td>${escapeHtml(partyLabel(entry))}</td></tr>
           <tr><td>${entry.returnParty === 'dealer' ? 'Dealer Name:' : 'Depot Name:'}</td><td>${escapeHtml(entry.recipientName)}</td></tr>
+          ${entry.returnParty === 'dealer' && dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
+          ${entry.returnParty === 'dealer' && dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
+          ${entry.returnParty === 'depot' && depot?.address ? `<tr><td>Address:</td><td>${escapeHtml(depot.address)}</td></tr>` : ''}
+          ${entry.returnParty === 'depot' && depot?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(depot.phone)}</td></tr>` : ''}
           ${entry.returnParty === 'dealer' && depot ? `<tr><td>Depot (cascades through):</td><td>${escapeHtml(depot.name)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
-          <tr><td>Return Value (refunded):</td><td class="numeric hl">${formatAmount(entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal)}</td></tr>
+          <tr><td>Return Value (refunded):</td><td class="numeric hl">${formatAmount(entry.depotRateTotal)}</td></tr>
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
-          ${entry.returnParty === 'dealer' ? `<tr><td>Depot Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.depotProfit)}</td></tr>` : ''}
           <tr><td>Manufacturing Cost (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
           <tr><td>Raw Material 30% (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
         </table>
@@ -242,7 +246,7 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
             ${rows}
             <tr class="totals">
               <td colspan="7">Grand Total (Return Value)</td>
-              <td class="numeric">${formatAmount(returnValueTotal)}</td>
+              <td class="numeric">${formatAmount(entry.depotRateTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -254,15 +258,21 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
   `
 }
 
-// Depot's own copy — Depot P P / Depot S P for the returned qty. Relevant
-// whichever party actually returned the goods, since a Dealer return
-// cascades up through the Depot's own purchase from the Company too — for a
-// 'dealer' returnParty, `depot` is resolved live off the linked dealer
-// (dealer.depotId), never the dealer's own name, so this prints as a
-// legitimate Depot adjustment document straight off the one Dealer-return
-// entry (no separate Depot-only entry needed). Falls back to entry's own
-// name when returnParty is 'depot' (the depot was picked directly) or the
-// dealer has no linked depot on file.
+// Depot's own copy — Depot P P / Depot S P for the returned qty, shown side
+// by side for reference. Relevant whichever party actually returned the
+// goods, since a Dealer return cascades up through the Depot's own purchase
+// from the Company too — for a 'dealer' returnParty, `depot` is resolved
+// live off the linked dealer (dealer.depotId), never the dealer's own name,
+// so this prints as a legitimate Depot adjustment document straight off the
+// one Dealer-return entry (no separate Depot-only entry needed). Falls back
+// to entry's own name when returnParty is 'depot' (the depot was picked
+// directly) or the dealer has no linked depot on file.
+//
+// Per the 2026-09-10 rule (see the ProductReturnRecord.returnParty comment
+// in types.ts), the actual credited return value is always the Depot
+// Purchase Price (depotRate) — Depot Sales Price (dealerRate) is shown only
+// as a reference figure, and the old separate "Depot Profit" deduction line
+// is gone.
 function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
   const rows = entry.items
     .map(
@@ -273,7 +283,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
         <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item.depotRate)}</td>
       </tr>
     `
     )
@@ -297,9 +307,8 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
           ${depot?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(depot.phone)}</td></tr>` : ''}
           ${entry.returnParty === 'dealer' ? `<tr><td>Returned by Dealer:</td><td>${escapeHtml(entry.recipientName)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
-          <tr><td>Depot Sales Price (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
-          <tr><td>Depot Purchase Price (returned):</td><td class="numeric">${formatAmount(entry.depotRateTotal)}</td></tr>
-          <tr><td>Depot Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.depotProfit)}</td></tr>
+          <tr><td>Depot Sales Price (reference):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
+          <tr><td>Return Value (credited at Depot Purchase Price):</td><td class="numeric hl">${formatAmount(entry.depotRateTotal)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -315,8 +324,8 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
           <tbody>
             ${rows}
             <tr class="totals">
-              <td colspan="5">Grand Total (Depot Sales Price returned)</td>
-              <td class="numeric">${formatAmount(entry.dealerRateTotal)}</td>
+              <td colspan="5">Grand Total (Return Value)</td>
+              <td class="numeric">${formatAmount(entry.depotRateTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -329,8 +338,11 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
 }
 
 // Dealer's own copy — only printed when returnParty is 'dealer' (the goods
-// actually came back from a dealer, so this is the only voucher where the
-// Depot Sales Price is an active refund rather than a reference figure).
+// actually came back from a dealer). Depot Sales Price (dealerRate, what the
+// dealer was actually charged) is shown per line for reference, but per the
+// 2026-09-10 rule (see the ProductReturnRecord.returnParty comment in
+// types.ts) the actual amount credited is always the Depot Purchase Price
+// (depotRate), same as every other copy of this voucher.
 function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord) {
   const rows = entry.items
     .map(
@@ -340,7 +352,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
         <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item.depotRate)}</td>
       </tr>
     `
     )
@@ -362,7 +374,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
           ${dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
           ${dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
-          <tr><td>Goods Amount (returned):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
+          <tr><td>Goods Amount (returned at Depot Rate):</td><td class="numeric">${formatAmount(entry.depotRateTotal)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -378,7 +390,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
             ${rows}
             <tr class="totals">
               <td colspan="4">Grand Total (Goods Amount returned)</td>
-              <td class="numeric">${formatAmount(entry.dealerRateTotal)}</td>
+              <td class="numeric">${formatAmount(entry.depotRateTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -497,7 +509,7 @@ export default function ProductReturnsPage() {
       .map((dealer) => ({ value: dealer.id, label: dealer.name, sublabel: dealer.address }))
   }, [dealers, distributorType, dealerId, dealerCategories])
 
-  const previewTotals = useMemo(() => computePreviewTotals(lines, returnParty), [lines, returnParty])
+  const previewTotals = useMemo(() => computePreviewTotals(lines), [lines])
 
   const filteredReturns = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -713,11 +725,7 @@ export default function ProductReturnsPage() {
   }
 
   const totalCompanyImpact = productReturns.reduce((sum, entry) => sum + entry.companyProfit, 0)
-  const totalDepotImpact = productReturns.reduce((sum, entry) => sum + entry.depotProfit, 0)
-  const totalReturnValue = productReturns.reduce(
-    (sum, entry) => sum + (entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal),
-    0
-  )
+  const totalReturnValue = productReturns.reduce((sum, entry) => sum + entry.depotRateTotal, 0)
   const totalWriteOffImpact = productReturns.reduce(
     (sum, entry) => sum + entry.manufacturingExpenseAmount + entry.rawMaterialExpenseAmount,
     0
@@ -726,7 +734,7 @@ export default function ProductReturnsPage() {
   return (
     <AdminShell active="Product Return">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
@@ -738,7 +746,7 @@ export default function ProductReturnsPage() {
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Total return value refunded</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalReturnValue)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Depot Purchase Price or Depot Sales Price, per return</p>
+              <p className="mt-1 text-xs text-muted-foreground">Always credited at Depot Purchase Price, per return</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -746,13 +754,6 @@ export default function ProductReturnsPage() {
               <p className="text-sm text-muted-foreground">Company profit given back</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalCompanyImpact)}</p>
               <p className="mt-1 text-xs text-muted-foreground">Deducted from Company Earnings' gross profit</p>
-            </CardContent>
-          </Card>
-          <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Depot profit given back</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalDepotImpact)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Only when the return came from a Dealer</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -811,7 +812,6 @@ export default function ProductReturnsPage() {
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Return Value</TableHead>
                     <TableHead className="text-right">Company Profit</TableHead>
-                    <TableHead className="text-right">Depot Profit</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -822,13 +822,8 @@ export default function ProductReturnsPage() {
                       <TableCell>{partyLabel(entry)}</TableCell>
                       <TableCell>{entry.recipientName}</TableCell>
                       <TableCell>{formatDate(entry.date)}</TableCell>
-                      <TableCell className="text-right text-destructive">
-                        -{formatAmount(entry.returnParty === 'depot' ? entry.depotRateTotal : entry.dealerRateTotal)}
-                      </TableCell>
+                      <TableCell className="text-right text-destructive">-{formatAmount(entry.depotRateTotal)}</TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.companyProfit)}</TableCell>
-                      <TableCell className="text-right text-destructive">
-                        {entry.returnParty === 'dealer' ? `-${formatAmount(entry.depotProfit)}` : '—'}
-                      </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -838,7 +833,11 @@ export default function ProductReturnsPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
-                              onClick={() => openPrintWindow(buildCombinedReturnHtml(entry, resolveDepotForEntry(entry)))}
+                              onClick={() =>
+                                openPrintWindow(
+                                  buildCombinedReturnHtml(entry, resolveDepotForEntry(entry), resolveDealerForEntry(entry))
+                                )
+                              }
                             >
                               <Printer className="mr-2 h-4 w-4" /> Print Combined voucher
                             </DropdownMenuItem>
@@ -1071,20 +1070,14 @@ export default function ProductReturnsPage() {
                 Add product line
               </Button>
 
-              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-3">
+              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
                 <div>
-                  <p className="text-xs text-muted-foreground">Return Value (refunded)</p>
+                  <p className="text-xs text-muted-foreground">Return Value (credited at Depot Rate)</p>
                   <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.returnValue)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Company Profit (deducted)</p>
                   <p className="text-lg font-semibold text-destructive">-{formatAmount(previewTotals.companyProfit)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Depot Profit (deducted)</p>
-                  <p className="text-lg font-semibold text-destructive">
-                    {returnParty === 'dealer' ? `-${formatAmount(previewTotals.depotProfit)}` : '— (not returned via Dealer)'}
-                  </p>
                 </div>
               </div>
 

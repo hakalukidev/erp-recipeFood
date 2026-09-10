@@ -5292,10 +5292,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // Straight qty x rate, no per-carton/bag conversion — a return is entered
   // directly in whichever unit (Pcs/Kg) came back. See the returnParty
   // comment on ProductReturnRecord in types.ts for what each leg means.
-  function computeProductReturnTotals(
-    items: ProductReturnRecord['items'],
-    returnParty: ProductReturnRecord['returnParty']
-  ) {
+  function computeProductReturnTotals(items: ProductReturnRecord['items']) {
     const rawRateTotal = items.reduce((sum, item) => sum + item.qty * item.rawRate, 0)
     const manufRateTotal = items.reduce((sum, item) => sum + item.qty * item.manufRate, 0)
     const depotRateTotal = items.reduce((sum, item) => sum + item.qty * item.depotRate, 0)
@@ -5303,6 +5300,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const tpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.tpRate ?? 0), 0)
     const mrpRateTotal = items.reduce((sum, item) => sum + item.qty * (item.mrpRate ?? 0), 0)
 
+    // Return value is always credited at Depot Purchase Price (depotRate),
+    // regardless of returnParty — see the ProductReturnRecord.returnParty
+    // comment in types.ts. companyProfit alone (depotRateTotal -
+    // manufRateTotal) is the only profit adjustment a return makes now; the
+    // old separate depotProfit (dealerRateTotal - depotRateTotal) deduction
+    // is gone.
     return {
       rawRateTotal,
       manufRateTotal,
@@ -5311,7 +5314,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       tpRateTotal,
       mrpRateTotal,
       companyProfit: depotRateTotal - manufRateTotal,
-      depotProfit: returnParty === 'dealer' ? dealerRateTotal - depotRateTotal : 0,
+      depotProfit: 0,
       dealerProfit: 0,
     }
   }
@@ -5373,7 +5376,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const returnDate = input.date?.trim() || now.slice(0, 10)
     const returnNumber = `PRTN-${Date.now().toString().slice(-8)}`
-    const totals = computeProductReturnTotals(items, input.returnParty)
+    const totals = computeProductReturnTotals(items)
 
     const updates: Record<string, unknown> = {}
     const postedExpenses: ExpenseRecord[] = []
@@ -5444,9 +5447,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'product_return_created',
       'sales',
-      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — company profit down ${totals.companyProfit.toFixed(2)}${
-        input.returnParty === 'dealer' ? `, depot profit down ${totals.depotProfit.toFixed(2)}` : ''
-      }, manufacturing cost ${manufacturingExpenseAmount.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
+      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — return value ${totals.depotRateTotal.toFixed(2)} credited at Depot Rate, company profit down ${totals.companyProfit.toFixed(2)}, manufacturing cost ${manufacturingExpenseAmount.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
     )
 
     // Section 37: re-check the write-off categories' budget(s) now that
@@ -5524,7 +5525,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const returnDate = input.date?.trim() || existing.date
-    const totals = computeProductReturnTotals(items, input.returnParty)
+    const totals = computeProductReturnTotals(items)
 
     const updates: Record<string, unknown> = {}
 

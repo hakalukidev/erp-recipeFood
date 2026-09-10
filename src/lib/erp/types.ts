@@ -674,19 +674,19 @@ export type DiscountProductInput = {
 // `returnParty` says who physically returned the goods — only Depot or
 // Dealer are ever offered, never a third "raw material/manufacturing" stage
 // (the invoice side of the app never had one either — the Company → Depot →
-// Dealer chain is always just those two hops):
-//   'depot'  — goods came back straight to the Company from the Depot. Only
-//              the Company<->Depot leg unwinds: companyProfit is pulled
-//              down using the Depot Purchase Price ("Depot P R" / depotRate)
-//              on the line, whatever it was edited to.
-//   'dealer' — goods came back from the Dealer to the Depot, which in turn
-//              unwinds its own purchase from the Company, so BOTH legs move:
-//              companyProfit as above, plus depotProfit using the Depot
-//              Sales Price ("Depot S R" / dealerRate — the dealer's own
-//              buying price). This is the "both Depot's and Dealer's return
-//              value get calculated automatically" requirement — both rates
-//              are on the line the moment a product is picked, and can be
-//              corrected before saving.
+// Dealer chain is always just those two hops).
+//
+// Per the 2026-09-10 Bangla client request: whichever party physically
+// returned the goods, the return is always valued/credited at the Depot
+// Purchase Price ("Depot P R" / depotRate — the rate the Company originally
+// sold it to the Depot at), never the Depot Sales Price ("Depot S R" /
+// dealerRate). A dealer return still cascades through the Depot's own
+// purchase from the Company, but crediting everything uniformly at
+// depotRate means companyProfit (depotRateTotal - manufRateTotal) alone
+// already nets out correctly — the separate "Depot Profit" deduction that
+// used to isolate the dealerRate-vs-depotRate margin has been removed
+// entirely; depotRate/dealerRate stay on the line only as reference figures
+// (and dealerRate for context on what the dealer was actually charged).
 // See computeProductReturnTotals in provider.tsx for the exact formulas.
 //
 // Same sunk-cost write-off as before this chunk: the full manufacturing cost
@@ -743,8 +743,8 @@ export type ProductReturnRecord = {
   dealerRateTotal: number
   tpRateTotal: number
   mrpRateTotal: number
-  companyProfit: number // depotRateTotal - manufRateTotal, always computed
-  depotProfit: number   // dealerRateTotal - depotRateTotal, only when returnParty === 'dealer'
+  companyProfit: number // depotRateTotal - manufRateTotal, always computed — this is the return's only profit adjustment now
+  depotProfit: number   // kept at 0 going forward (return value is always credited at depotRate, so there's no separate dealerRate-vs-depotRate margin to deduct); retained only so old records/reports keep type-checking
   dealerProfit: number  // kept at 0 going forward (no "customer return" tier in this flow); retained only so old records/reports keep type-checking
   // Sunk-cost write-off (see ProductReturnItem comment above) — the linked
   // ExpenseRecord ids let deleteProductReturn reverse them along with the
