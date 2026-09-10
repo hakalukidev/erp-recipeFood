@@ -689,13 +689,12 @@ export type DiscountProductInput = {
 // (and dealerRate for context on what the dealer was actually charged).
 // See computeProductReturnTotals in provider.tsx for the exact formulas.
 //
-// Same sunk-cost write-off as before this chunk: the full manufacturing cost
-// of the returned goods is posted as a "Factory Expense" (a total loss once
-// they're back) and 10% of the raw material cost is posted as a "Raw
-// Material" expense (the other 90% is assumed recoverable/re-usable) — both
-// ordinary ExpenseRecords (see createProductReturn in provider.tsx), so they
-// flow through the normal approval + ledger + Company Earnings expense
-// pipeline just like any manually-recorded expense.
+// Per the 2026-09-10 request: manufacturingExpenseAmount/rawMaterialExpenseAmount
+// below are informational-only cost figures now — they are NOT posted as
+// ExpenseRecords any more (they used to double-count against companyProfit,
+// which already nets out the return's full P&L impact — see
+// createProductReturn in provider.tsx). The *ExpenseId fields stay on the
+// type only so old records created before this change still type-check.
 //
 // rateCardId/invoiceNo are kept only so a return recorded before this chunk
 // (against an actual invoice) still type-checks and prints correctly — a
@@ -746,14 +745,14 @@ export type ProductReturnRecord = {
   companyProfit: number // depotRateTotal - manufRateTotal, always computed — this is the return's only profit adjustment now
   depotProfit: number   // kept at 0 going forward (return value is always credited at depotRate, so there's no separate dealerRate-vs-depotRate margin to deduct); retained only so old records/reports keep type-checking
   dealerProfit: number  // kept at 0 going forward (no "customer return" tier in this flow); retained only so old records/reports keep type-checking
-  // Sunk-cost write-off (see ProductReturnItem comment above) — the linked
-  // ExpenseRecord ids let deleteProductReturn reverse them along with the
-  // return itself; the amounts are snapshotted here so the printed voucher
-  // and the returns list never have to re-derive them from `items`.
+  // Informational cost figures only (see comment above) — never posted as
+  // ExpenseRecords for a return created after 2026-09-10. *ExpenseId is only
+  // ever populated on a legacy record that hasn't been through the one-time
+  // cleanup (recalculateProductReturnExpenses in provider.tsx) yet.
   manufacturingExpenseId?: string
-  manufacturingExpenseAmount: number // = manufRateTotal - rawRateTotal, posted as Factory Expense
+  manufacturingExpenseAmount: number // = manufRateTotal - rawRateTotal
   rawMaterialExpenseId?: string
-  rawMaterialExpenseAmount: number // = 30% of rawRateTotal, posted as Raw Material expense
+  rawMaterialExpenseAmount: number // = 30% of rawRateTotal
   processedBy: string
   processedByName: string
   createdAt: string

@@ -226,8 +226,8 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Return Value (refunded):</td><td class="numeric hl">${formatAmount(entry.depotRateTotal)}</td></tr>
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
-          <tr><td>Manufacturing Cost (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
-          <tr><td>Raw Material 30% (posted as expense):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
+          <tr><td>Manufacturing Cost (informational):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
+          <tr><td>Raw Material 30% (informational):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -311,7 +311,7 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
           <tr><td>Depot Sales Price (reference):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
           <tr><td>Return Value (credited at Depot Purchase Price):</td><td class="numeric hl">${formatAmount(entry.depotRateTotal)}</td></tr>
-          <tr><td>Depot Profit (Adjustment Amount, deduct from Depot Head):</td><td class="numeric hl">${formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</td></tr>
+          <tr><td>Depot Profit (adjust from Depot Head):</td><td class="numeric hl">${formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -699,10 +699,12 @@ export default function ProductReturnsPage() {
     }
   }
 
-  // One-off backfill button for the 2026-09 formula change (manufacturing
-  // expense net of raw material, raw material write-off 10% -> 30%) — see
-  // recalculateProductReturnExpenses in provider.tsx. Safe to click more
-  // than once; records already on the new formula are left untouched.
+  // One-off cleanup button for the 2026-09-10 change: product returns no
+  // longer post their manufacturing/raw-material write-off as a real
+  // ExpenseRecord (it double-counted against Company Profit and inflated
+  // Company Earnings' Total Expenses) — see recalculateProductReturnExpenses
+  // in provider.tsx. This removes any such expense still linked to an older
+  // return. Safe to click more than once; already-clean returns are skipped.
   async function handleRecalculate() {
     setFeedback(null)
     setRecalculating(true)
@@ -710,11 +712,11 @@ export default function ProductReturnsPage() {
       const changed = await recalculateProductReturnExpenses()
       setFeedback(
         changed > 0
-          ? `Recalculated write-off expenses for ${changed} older product return(s) to the 30% raw material formula.`
-          : 'All product returns already use the current formula — nothing to recalculate.'
+          ? `Removed write-off expenses from ${changed} older product return(s) — they no longer count against Total Expenses.`
+          : 'No product returns had write-off expenses posted — nothing to clean up.'
       )
     } catch (reason_) {
-      setFeedback(reason_ instanceof Error ? reason_.message : 'Unable to recalculate product returns.')
+      setFeedback(reason_ instanceof Error ? reason_.message : 'Unable to clean up product returns.')
     } finally {
       setRecalculating(false)
     }
@@ -769,9 +771,9 @@ export default function ProductReturnsPage() {
           </Card>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Manufacturing + raw material written off</p>
+              <p className="text-sm text-muted-foreground">Manufacturing + raw material cost impact</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalWriteOffImpact)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Full manufacturing cost + 10% of raw material, posted as expense</p>
+              <p className="mt-1 text-xs text-muted-foreground">Informational only — not posted to Expenses (Company Profit already covers it)</p>
             </CardContent>
           </Card>
         </div>
@@ -804,7 +806,7 @@ export default function ProductReturnsPage() {
                 />
               </div>
               <Button variant="outline" onClick={handleRecalculate} disabled={recalculating}>
-                {recalculating ? 'Recalculating…' : 'Recalculate old returns (30%)'}
+                {recalculating ? 'Cleaning up…' : 'Remove old write-off expenses'}
               </Button>
               <Button onClick={openCreateDialog}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -1096,13 +1098,13 @@ export default function ProductReturnsPage() {
 
               <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
                 <div>
-                  <p className="text-xs text-muted-foreground">Manufacturing cost (posted as expense)</p>
+                  <p className="text-xs text-muted-foreground">Manufacturing cost (informational)</p>
                   <p className="text-lg font-semibold text-destructive">
                     -{formatAmount(previewTotals.manufacturingExpenseAmount)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Raw material 30% (posted as expense)</p>
+                  <p className="text-xs text-muted-foreground">Raw material 30% (informational)</p>
                   <p className="text-lg font-semibold text-destructive">
                     -{formatAmount(previewTotals.rawMaterialExpenseAmount)}
                   </p>

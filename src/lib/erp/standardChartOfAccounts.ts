@@ -65,13 +65,20 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
 export const EXPENSE_CATEGORIES = [
   'ড্যামেজ',
   'ডিলার কমিশন ও মার্কেট ছাড়',
+  'ডিলার কমিশন',
   'এসআর ইনসেন্টিভ',
+  'মার্কেট স্যার / এসআর ইনসেন্টিভ',
   'পরিবহন খরচ',
   'ব্যাংক বা বিকাশ খরচ',
+  'ব্যাংক',
+  'বিকাশ',
   'অনান্য/বিবিধ খরচ',
+  'অন্যান্য',
+  'বিবিধ',
   'রেন্ট',
   'বিদ্যুৎ বিল',
   'সেলারি',
+  'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)',
 ] as const
 
 // Free-text expense categories (Finance page) are matched against this map
@@ -82,13 +89,20 @@ export const EXPENSE_CATEGORIES = [
 export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   'ড্যামেজ': 'other_expense',
   'ডিলার কমিশন ও মার্কেট ছাড়': 'commission',
+  'ডিলার কমিশন': 'commission',
   'এসআর ইনসেন্টিভ': 'commission',
+  'মার্কেট স্যার / এসআর ইনসেন্টিভ': 'commission',
   'পরিবহন খরচ': 'transport',
   'ব্যাংক বা বিকাশ খরচ': 'bank_charge',
+  'ব্যাংক': 'bank_charge',
+  'বিকাশ': 'bank_charge',
   'অনান্য/বিবিধ খরচ': 'other_expense',
+  'অন্যান্য': 'other_expense',
+  'বিবিধ': 'other_expense',
   'রেন্ট': 'rent',
   'বিদ্যুৎ বিল': 'electricity',
   'সেলারি': 'salary',
+  'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)': 'factory_expense',
 }
 
 // ---- Cash Maintenance Chart -----------------------------------------------

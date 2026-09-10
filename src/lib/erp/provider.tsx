@@ -5379,48 +5379,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const totals = computeProductReturnTotals(items)
 
     const updates: Record<string, unknown> = {}
-    const postedExpenses: ExpenseRecord[] = []
 
-    // Sunk-cost write-off (see ProductReturnItem comment in types.ts): the
-    // manufacturing cost of the returned goods (net of the raw material
-    // portion, which is written off separately below) is a total loss, and
-    // 30% of their raw material cost is assumed unrecoverable — both post as
-    // ordinary ExpenseRecords (same shape saveExpense writes) so they flow
-    // through the normal ledger + Company Earnings expense pipeline.
-    function postWriteOffExpense(category: string, amount: number): string | undefined {
-      if (amount <= 0) {
-        return undefined
-      }
-      const expenseId = createId('expense')
-      const expense: ExpenseRecord = {
-        id: expenseId,
-        category,
-        amount,
-        note: `${category} write-off for product return ${returnNumber} (${recipientName}).`,
-        date: returnDate,
-        paymentMethod: 'cash',
-        approvalStatus: 'pending',
-        approvedBy: '',
-        approvedByName: '',
-        approvedAt: '',
-        createdBy: currentUser.id,
-        createdByName: currentUser.name,
-        createdAt: now,
-      }
-      updates[`expenses/${expenseId}`] = expense
-      postedExpenses.push(expense)
-      Object.values(
-        buildExpenseLedgerEntries({ expenseId, date: returnDate, category, amount, paymentMethod: 'cash' })
-      ).forEach((entry) => {
-        updates[`ledgerEntries/${entry.id}`] = entry
-      })
-      return expenseId
-    }
-
+    // Per the 2026-09-10 request: these are informational cost figures only
+    // — no longer posted as ExpenseRecords (they used to double-count
+    // against companyProfit, which already nets out the return's full P&L
+    // impact — see the ProductReturnRecord comment in types.ts).
     const manufacturingExpenseAmount = totals.manufRateTotal - totals.rawRateTotal
-    const manufacturingExpenseId = postWriteOffExpense('Factory Expense', manufacturingExpenseAmount)
     const rawMaterialExpenseAmount = totals.rawRateTotal * 0.3
-    const rawMaterialExpenseId = postWriteOffExpense('Raw Material', rawMaterialExpenseAmount)
 
     const productReturn: ProductReturnRecord = {
       id,
@@ -5433,9 +5398,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       items,
       reason: input.reason?.trim() ?? '',
       ...totals,
-      ...(manufacturingExpenseId ? { manufacturingExpenseId } : {}),
       manufacturingExpenseAmount,
-      ...(rawMaterialExpenseId ? { rawMaterialExpenseId } : {}),
       rawMaterialExpenseAmount,
       processedBy: currentUser.id,
       processedByName: currentUser.name,
@@ -5447,20 +5410,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'product_return_created',
       'sales',
-      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — return value ${totals.depotRateTotal.toFixed(2)} credited at Depot Rate, company profit down ${totals.companyProfit.toFixed(2)}, manufacturing cost ${manufacturingExpenseAmount.toFixed(2)} and raw material ${rawMaterialExpenseAmount.toFixed(2)} written off as expense.`
+      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — return value ${totals.depotRateTotal.toFixed(2)} credited at Depot Rate, company profit down ${totals.companyProfit.toFixed(2)}.`
     )
-
-    // Section 37: re-check the write-off categories' budget(s) now that
-    // these expenses are folded in — same call saveExpense makes.
-    if (postedExpenses.length) {
-      const expensesAfterWrite = { ...data.expenses }
-      postedExpenses.forEach((expense) => {
-        expensesAfterWrite[expense.id] = expense
-      })
-      for (const expense of postedExpenses) {
-        await checkBudgetOverrun(data.budgets, expensesAfterWrite, writeNotification, expense.category, expense.date)
-      }
-    }
 
     return id
   }
@@ -5529,8 +5480,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const updates: Record<string, unknown> = {}
 
-    // Reverse the previous write-off expenses — the qty/rate edit may have
-    // changed the amounts, so the old postings can't just be left standing.
+    // A legacy record (created before the 2026-09-10 change) may still carry
+    // write-off expense ids — reverse them on edit so they don't keep
+    // double-counting against companyProfit. A record created after that
+    // change never has these ids, so this is a no-op for it.
     ;[existing.manufacturingExpenseId, existing.rawMaterialExpenseId].forEach((expenseId) => {
       if (!expenseId || !data.expenses[expenseId]) {
         return
@@ -5542,41 +5495,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       })
     })
 
-    const postedExpenses: ExpenseRecord[] = []
-    function postWriteOffExpense(category: string, amount: number): string | undefined {
-      if (amount <= 0) {
-        return undefined
-      }
-      const expenseId = createId('expense')
-      const expense: ExpenseRecord = {
-        id: expenseId,
-        category,
-        amount,
-        note: `${category} write-off for product return ${existing.returnNumber} (${recipientName}).`,
-        date: returnDate,
-        paymentMethod: 'cash',
-        approvalStatus: 'pending',
-        approvedBy: '',
-        approvedByName: '',
-        approvedAt: '',
-        createdBy: currentUser.id,
-        createdByName: currentUser.name,
-        createdAt: now,
-      }
-      updates[`expenses/${expenseId}`] = expense
-      postedExpenses.push(expense)
-      Object.values(
-        buildExpenseLedgerEntries({ expenseId, date: returnDate, category, amount, paymentMethod: 'cash' })
-      ).forEach((entry) => {
-        updates[`ledgerEntries/${entry.id}`] = entry
-      })
-      return expenseId
-    }
-
+    // Informational cost figures only — see createProductReturn.
     const manufacturingExpenseAmount = totals.manufRateTotal - totals.rawRateTotal
-    const manufacturingExpenseId = postWriteOffExpense('Factory Expense', manufacturingExpenseAmount)
     const rawMaterialExpenseAmount = totals.rawRateTotal * 0.3
-    const rawMaterialExpenseId = postWriteOffExpense('Raw Material', rawMaterialExpenseAmount)
 
     const updatedReturn: ProductReturnRecord = {
       id: existing.id,
@@ -5591,9 +5512,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       items,
       reason: input.reason?.trim() ?? '',
       ...totals,
-      ...(manufacturingExpenseId ? { manufacturingExpenseId } : {}),
       manufacturingExpenseAmount,
-      ...(rawMaterialExpenseId ? { rawMaterialExpenseId } : {}),
       rawMaterialExpenseAmount,
       processedBy: existing.processedBy,
       processedByName: existing.processedByName,
@@ -5607,16 +5526,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'sales',
       `Edited product return ${existing.returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName}.`
     )
-
-    if (postedExpenses.length) {
-      const expensesAfterWrite = { ...data.expenses }
-      postedExpenses.forEach((expense) => {
-        expensesAfterWrite[expense.id] = expense
-      })
-      for (const expense of postedExpenses) {
-        await checkBudgetOverrun(data.budgets, expensesAfterWrite, writeNotification, expense.category, expense.date)
-      }
-    }
   }
 
   async function deleteProductReturn(productReturnId: string) {
@@ -5651,39 +5560,36 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('product_return_deleted', 'sales', `Deleted product return ${productReturn.returnNumber}.`)
   }
 
-  // One-off backfill for the 2026-09 formula change (manufacturing expense
-  // net of raw material, raw material write-off 10% -> 30%): walks every
-  // existing ProductReturnRecord, reverses+reposts its write-off expenses at
-  // the new amounts if they don't already match, and updates the record's
-  // snapshot fields. Safe to run more than once — records already at the new
-  // formula are left untouched. Returns how many records were changed.
+  // One-off cleanup for the 2026-09-10 change: product returns used to post
+  // "Factory Expense"/"Raw Material" write-offs as real ExpenseRecords,
+  // which double-counted against companyProfit (already the return's full
+  // P&L hit) and inflated Company Earnings' Total Expenses with no matching
+  // manual entry. createProductReturn/updateProductReturn no longer post
+  // these, but records saved before the change still have live
+  // ExpenseRecords linked via manufacturingExpenseId/rawMaterialExpenseId —
+  // this walks every ProductReturnRecord, reverses+deletes any such expense
+  // (ledger entries included), and clears the id fields. Safe to run more
+  // than once — a record with no linked expense id is left untouched.
+  // Returns how many records were cleaned up.
   async function recalculateProductReturnExpenses() {
     if (!data || !currentUser) {
-      throw new Error('You need to log in before recalculating product returns.')
+      throw new Error('You need to log in before cleaning up product returns.')
     }
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const updates: Record<string, unknown> = {}
-    const postedExpenses: ExpenseRecord[] = []
     let changed = 0
 
     for (const productReturn of toArray(data.productReturns)) {
-      const expectedManufacturing = productReturn.manufRateTotal - productReturn.rawRateTotal
-      const expectedRawMaterial = productReturn.rawRateTotal * 0.3
-      const alreadyCorrect =
-        Math.abs(productReturn.manufacturingExpenseAmount - expectedManufacturing) < 0.005 &&
-        Math.abs(productReturn.rawMaterialExpenseAmount - expectedRawMaterial) < 0.005
-      if (alreadyCorrect) {
+      const linkedExpenseIds = [productReturn.manufacturingExpenseId, productReturn.rawMaterialExpenseId].filter(
+        (expenseId): expenseId is string => Boolean(expenseId && data.expenses[expenseId])
+      )
+      if (!linkedExpenseIds.length) {
         continue
       }
 
-      // Reverse the old write-off expenses (same shape deleteProductReturn/
-      // updateProductReturn use) before posting the recalculated ones.
-      ;[productReturn.manufacturingExpenseId, productReturn.rawMaterialExpenseId].forEach((expenseId) => {
-        if (!expenseId || !data.expenses[expenseId]) {
-          return
-        }
+      linkedExpenseIds.forEach((expenseId) => {
         updates[`expenses/${expenseId}`] = null
         const active = getActiveLedgerEntries(data.ledgerEntries, expenseId)
         Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
@@ -5691,43 +5597,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         })
       })
 
-      function postWriteOffExpense(category: string, amount: number): string | undefined {
-        if (amount <= 0) {
-          return undefined
-        }
-        const expenseId = createId('expense')
-        const expense: ExpenseRecord = {
-          id: expenseId,
-          category,
-          amount,
-          note: `${category} write-off for product return ${productReturn.returnNumber} (${productReturn.recipientName}) — recalculated.`,
-          date: productReturn.date,
-          paymentMethod: 'cash',
-          approvalStatus: 'pending',
-          approvedBy: '',
-          approvedByName: '',
-          approvedAt: '',
-          createdBy: currentUser!.id,
-          createdByName: currentUser!.name,
-          createdAt: now,
-        }
-        updates[`expenses/${expenseId}`] = expense
-        postedExpenses.push(expense)
-        Object.values(
-          buildExpenseLedgerEntries({ expenseId, date: productReturn.date, category, amount, paymentMethod: 'cash' })
-        ).forEach((entry) => {
-          updates[`ledgerEntries/${entry.id}`] = entry
-        })
-        return expenseId
-      }
-
-      const manufacturingExpenseId = postWriteOffExpense('Factory Expense', expectedManufacturing)
-      const rawMaterialExpenseId = postWriteOffExpense('Raw Material', expectedRawMaterial)
-
-      updates[`productReturns/${productReturn.id}/manufacturingExpenseAmount`] = expectedManufacturing
-      updates[`productReturns/${productReturn.id}/rawMaterialExpenseAmount`] = expectedRawMaterial
-      updates[`productReturns/${productReturn.id}/manufacturingExpenseId`] = manufacturingExpenseId ?? null
-      updates[`productReturns/${productReturn.id}/rawMaterialExpenseId`] = rawMaterialExpenseId ?? null
+      updates[`productReturns/${productReturn.id}/manufacturingExpenseId`] = null
+      updates[`productReturns/${productReturn.id}/rawMaterialExpenseId`] = null
       changed += 1
     }
 
@@ -5739,18 +5610,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'product_return_updated',
       'sales',
-      `Recalculated write-off expenses for ${changed} product return(s) under the updated manufacturing/raw-material formula.`
+      `Removed write-off expenses posted by ${changed} older product return(s) — they no longer count against Total Expenses.`
     )
-
-    if (postedExpenses.length) {
-      const expensesAfterWrite = { ...data.expenses }
-      postedExpenses.forEach((expense) => {
-        expensesAfterWrite[expense.id] = expense
-      })
-      for (const expense of postedExpenses) {
-        await checkBudgetOverrun(data.budgets, expensesAfterWrite, writeNotification, expense.category, expense.date)
-      }
-    }
 
     return changed
   }
