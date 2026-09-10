@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { ListChecks, Plus, Trash2, UserCheck } from 'lucide-react'
+import { ListChecks, Pencil, Plus, Trash2, UserCheck } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Badge } from '@/components/ui/badge'
@@ -65,13 +65,13 @@ function SectionHeader({
 }
 
 export default function ExpensesPage() {
-  const { data, users, hasPermission, saveExpense, updateExpenseApproval, deleteExpense } = useERP()
-  const canApproveExpense = hasPermission('finance:edit')
+  const { data, users, saveExpense, deleteExpense } = useERP()
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
   const [feedback, setFeedback] = useState<string | null>(null)
   const [expenseForm, setExpenseForm] = useState(emptyExpenseForm)
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
 
   const expenses = useMemo(
     () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
@@ -115,12 +115,31 @@ export default function ExpensesPage() {
         paymentMethod: expenseForm.paymentMethod,
         employeeId: expenseForm.category === EXPENSE_SALARY_CATEGORY ? expenseForm.employeeId || undefined : undefined,
       }
-      await saveExpense(input)
+      await saveExpense(input, editingExpenseId ?? undefined)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
-      setFeedback('Expense recorded.')
+      setFeedback(editingExpenseId ? 'Expense updated.' : 'Expense recorded.')
+      setEditingExpenseId(null)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record expense.')
     }
+  }
+
+  function handleEditExpense(expense: (typeof expenses)[number]) {
+    setFeedback(null)
+    setEditingExpenseId(expense.id)
+    setExpenseForm({
+      category: expense.category,
+      amount: String(expense.amount),
+      note: expense.note ?? '',
+      date: expense.date.slice(0, 10),
+      paymentMethod: expense.paymentMethod ?? 'cash',
+      employeeId: expense.employeeId ?? '',
+    })
+  }
+
+  function handleCancelEditExpense() {
+    setEditingExpenseId(null)
+    setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
   }
 
   async function handleDeleteExpense(expenseId: string) {
@@ -128,20 +147,13 @@ export default function ExpensesPage() {
 
     try {
       await deleteExpense(expenseId)
+      if (editingExpenseId === expenseId) {
+        setEditingExpenseId(null)
+        setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
+      }
       setFeedback('Expense removed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete expense.')
-    }
-  }
-
-  async function handleExpenseApproval(expenseId: string, approvalStatus: 'approved' | 'rejected') {
-    setFeedback(null)
-
-    try {
-      await updateExpenseApproval(expenseId, approvalStatus)
-      setFeedback(approvalStatus === 'approved' ? 'Expense approved.' : 'Expense rejected.')
-    } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to update expense approval.')
     }
   }
 
@@ -185,7 +197,7 @@ export default function ExpensesPage() {
           <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
             <Card className="border-border/70 shadow-sm">
               <CardHeader>
-                <CardTitle>Record expense</CardTitle>
+                <CardTitle>{editingExpenseId ? 'Edit expense' : 'Record expense'}</CardTitle>
                 <CardDescription>Daily or monthly running costs (rent, transport, utilities, etc.).</CardDescription>
               </CardHeader>
               <CardContent>
@@ -269,10 +281,17 @@ export default function ExpensesPage() {
                       placeholder="Short note about this expense"
                     />
                   </div>
-                  <Button type="submit" className="rounded-xl">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Save expense
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button type="submit" className="rounded-xl">
+                      <Plus className="mr-2 h-4 w-4" />
+                      {editingExpenseId ? 'Update expense' : 'Save expense'}
+                    </Button>
+                    {editingExpenseId ? (
+                      <Button type="button" variant="outline" className="rounded-xl" onClick={handleCancelEditExpense}>
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </div>
                 </form>
               </CardContent>
             </Card>
@@ -281,7 +300,7 @@ export default function ExpensesPage() {
               <CardHeader>
                 <CardTitle>Expenses this period</CardTitle>
                 <CardDescription>
-                  Total: {formatCurrency(expenseTotal, currency)} · every entry sits at Pending until someone with Finance edit access approves or rejects it.
+                  Total: {formatCurrency(expenseTotal, currency)}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -322,26 +341,15 @@ export default function ExpensesPage() {
                           </TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-2">
-                              {expense.approvalStatus === 'pending' && canApproveExpense ? (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="rounded-lg"
-                                    onClick={() => void handleExpenseApproval(expense.id, 'approved')}
-                                  >
-                                    Approve
-                                  </Button>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="rounded-lg text-destructive hover:text-destructive"
-                                    onClick={() => void handleExpenseApproval(expense.id, 'rejected')}
-                                  >
-                                    Reject
-                                  </Button>
-                                </>
-                              ) : null}
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9"
+                                onClick={() => handleEditExpense(expense)}
+                                aria-label="Edit expense"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
                               <Button
                                 variant="outline"
                                 size="icon"
