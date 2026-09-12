@@ -698,23 +698,26 @@ export function computeLoanMonthlySchedule(data: ERPData | null, loanAccountId: 
 
 // ---- Expense Management --------------------------------------------------
 // Per-employee running total of every সেলারি-category expense tagged with
-// that employee (ExpenseRecord.employeeId) — Section 5 of the Loan/Cash
-// Maintenance spec: a quick spot-check of how much salary money an employee
-// has actually received, against a payslip/cheque history. A rejected
-// expense was never actually paid out, so it's excluded here the same way
-// buildCompanyEarningsSummary excludes it from total expense.
+// that employee (ExpenseRecord.employeeName — free text, no employee master)
+// — Section 5 of the Loan/Cash Maintenance spec: a quick spot-check of how
+// much salary money an employee has actually received, against a
+// payslip/cheque history. A rejected expense was never actually paid out,
+// so it's excluded here the same way buildCompanyEarningsSummary excludes it
+// from total expense. Grouped by a case-insensitive, trimmed name so "রহিম"
+// and "রহিম " land in the same row.
 export function computeEmployeeSalaryTotals(data: ERPData | null) {
-  const rows = new Map<string, { employeeId: string; employeeName: string; total: number; count: number }>()
+  const rows = new Map<string, { employeeName: string; total: number; count: number }>()
   toArray(data?.expenses)
-    .filter((entry) => entry.employeeId && entry.approvalStatus !== 'rejected')
+    .filter((entry) => entry.employeeName?.trim() && entry.approvalStatus !== 'rejected')
     .forEach((entry) => {
-      const employeeId = entry.employeeId as string
-      const existing = rows.get(employeeId)
+      const employeeName = entry.employeeName!.trim()
+      const key = employeeName.toLowerCase()
+      const existing = rows.get(key)
       if (existing) {
         existing.total += entry.amount
         existing.count += 1
       } else {
-        rows.set(employeeId, { employeeId, employeeName: entry.employeeName ?? '', total: entry.amount, count: 1 })
+        rows.set(key, { employeeName, total: entry.amount, count: 1 })
       }
     })
   return Array.from(rows.values()).sort((left, right) => right.total - left.total)

@@ -1325,7 +1325,10 @@ export type ExpenseRecord = {
   // history be pulled back out later (Finance page's Salary History
   // section, backed by computeEmployeeSalaryTotals in utils.ts), since
   // sometimes salary is paid by checking past history/cheques rather than
-  // from memory.
+  // from memory. Free text — there's no separate employee master, staff
+  // don't need a system login just to be salary-tracked — so history groups
+  // by employeeName rather than an id; employeeId only ever appears on a
+  // record saved before that change and is otherwise unused.
   employeeId?: string
   employeeName?: string
   // Only meaningful on an EXPENSE_LOAN_REPAYMENT_CATEGORY entry (2026-09-12
@@ -1716,9 +1719,9 @@ export type ExpenseInput = {
   note?: string
   date?: string
   paymentMethod?: ExpensePaymentMethod
-  // Only kept when category is EXPENSE_SALARY_CATEGORY — see
-  // ExpenseRecord.employeeId.
-  employeeId?: string
+  // Only kept when category is EXPENSE_SALARY_CATEGORY — free text (no
+  // separate employee master exists), see ExpenseRecord.employeeName.
+  employeeName?: string
   // Only kept when category is EXPENSE_LOAN_REPAYMENT_CATEGORY — see
   // ExpenseRecord.loanAccountId.
   loanAccountId?: string

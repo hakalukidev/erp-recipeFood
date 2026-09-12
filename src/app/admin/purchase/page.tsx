@@ -343,13 +343,8 @@ export default function PurchasePage() {
     () => vendors.map((vendor) => ({ value: vendor.id, label: vendor.name, sublabel: vendor.phone })),
     [vendors]
   )
-  const materialOptions: ComboboxOption[] = useMemo(
-    () =>
-      materials.map((material) => ({
-        value: material.id,
-        label: material.name,
-        sublabel: `${CATEGORY_LABEL[material.category]} · ${UNIT_LABEL[material.unit]}`,
-      })),
+  const materialNameSuggestions = useMemo(
+    () => Array.from(new Set(materials.map((material) => material.name))).sort((a, b) => a.localeCompare(b)),
     [materials]
   )
   const rawMaterialOptions: ComboboxOption[] = useMemo(
@@ -717,12 +712,17 @@ export default function PurchasePage() {
     setPurchaseLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
   }
 
-  function selectLineMaterial(key: string, materialId: string) {
-    const material = materials.find((item) => item.id === materialId)
+  // Free-text material name field, backed by a <datalist> of already-known
+  // names for suggestions. Typing a name that exactly matches an existing
+  // material links straight to it (so its unit/stock apply); an unmatched
+  // name is created in Materials & Stock at save time, which is also what
+  // makes it show up as a suggestion the next time someone types it.
+  function handleLineMaterialNameChange(key: string, typedName: string) {
+    const existing = materials.find((item) => item.name.toLowerCase() === typedName.trim().toLowerCase())
     updatePurchaseLine(key, {
-      materialId,
-      materialName: material?.name ?? '',
-      unit: material?.unit ?? 'kg',
+      materialName: typedName,
+      materialId: existing?.id,
+      unit: existing?.unit ?? 'kg',
     })
   }
 
@@ -742,22 +742,40 @@ export default function PurchasePage() {
       return
     }
 
-    const items = purchaseLines
-      .filter((line) => line.materialId && (Number(line.qty) || 0) > 0)
-      .map((line) => ({
-        materialId: line.materialId,
-        materialName: line.materialName,
-        qty: Number(line.qty) || 0,
-        rate: Number(line.rate) || 0,
-      }))
+    const eligibleLines = purchaseLines.filter((line) => line.materialName.trim() && (Number(line.qty) || 0) > 0)
 
-    if (items.length === 0) {
-      setPurchaseFormError('Pick at least one material and enter a quantity.')
+    if (eligibleLines.length === 0) {
+      setPurchaseFormError('Type at least one material name and enter a quantity.')
       return
     }
 
     setPurchaseSaving(true)
     try {
+      // Names typed fresh (no materialId yet) get created in Materials &
+      // Stock here, once per distinct name, so two lines with the same new
+      // name share one material instead of creating duplicates.
+      const newlyCreatedIds = new Map<string, string>()
+      const items = []
+      for (const line of eligibleLines) {
+        const name = line.materialName.trim()
+        const nameKey = name.toLowerCase()
+        let materialId = line.materialId
+        if (!materialId) {
+          const existing = materials.find((item) => item.name.toLowerCase() === nameKey)
+          materialId =
+            existing?.id ??
+            newlyCreatedIds.get(nameKey) ??
+            (await savePurchaseMaterial({ name, category: 'raw_material', unit: line.unit, stockQty: 0, minStock: 0 }))
+          if (!existing) newlyCreatedIds.set(nameKey, materialId)
+        }
+        items.push({
+          materialId,
+          materialName: name,
+          qty: Number(line.qty) || 0,
+          rate: Number(line.rate) || 0,
+        })
+      }
+
       await createPurchase({
         vendorId: purchaseVendorId,
         date: purchaseDate,
@@ -1795,6 +1813,11 @@ export default function PurchasePage() {
                 absolutely positioned relative to this row, and a horizontally
                 scrolling table clips that popover to a sliver instead of
                 letting it float over the rest of the row. */}
+            <datalist id="purchase-material-suggestions">
+              {materialNameSuggestions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
             <div className="space-y-3">
               {purchaseLines.map((line, index) => (
                 <div key={line.key} className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
@@ -1803,13 +1826,12 @@ export default function PurchasePage() {
                       {index + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <Combobox
-                        options={materialOptions}
-                        value={line.materialId ?? ''}
-                        onChange={(value) => selectLineMaterial(line.key, value)}
-                        placeholder="Select material"
-                        searchPlaceholder="Search materials..."
-                        emptyText="No materials found — add one in Materials & Stock first."
+                      <Input
+                        list="purchase-material-suggestions"
+                        value={line.materialName}
+                        onChange={(event) => handleLineMaterialNameChange(line.key, event.target.value)}
+                        placeholder="Type material name"
+                        className="bg-background"
                       />
                     </div>
                     <Button

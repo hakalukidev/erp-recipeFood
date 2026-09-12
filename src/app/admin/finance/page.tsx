@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { ListChecks, Pencil, Plus, Printer, Tags, Trash2, UserCheck } from 'lucide-react'
+import { ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ExportMenu } from '@/components/admin/ExportMenu'
@@ -155,7 +155,7 @@ const emptyExpenseForm = {
   note: '',
   date: dateInputValue(),
   paymentMethod: 'cash' as 'cash' | 'bank',
-  employeeId: '',
+  employeeName: '',
   loanAccountId: '',
 }
 
@@ -182,7 +182,7 @@ function SectionHeader({
 }
 
 export default function ExpensesPage() {
-  const { data, users, saveExpense, deleteExpense } = useERP()
+  const { data, saveExpense, deleteExpense } = useERP()
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
@@ -196,9 +196,15 @@ export default function ExpensesPage() {
     [data?.expenses]
   )
   const currency = data?.settings.currency
-  const employeeOptions: ComboboxOption[] = useMemo(
-    () => users.map((user) => ({ value: user.id, label: user.name, sublabel: user.title || user.loginId })),
-    [users]
+  // Free-text employee name, not a Users/login lookup — see
+  // ExpenseRecord.employeeName in types.ts. Suggestions are every distinct
+  // name already used on a সেলারি entry, for a <datalist>.
+  const employeeNameSuggestions = useMemo(
+    () =>
+      Array.from(new Set(expenses.map((expense) => expense.employeeName).filter((name): name is string => !!name?.trim()))).sort(
+        (left, right) => left.localeCompare(right)
+      ),
+    [expenses]
   )
   const loanAccountOptions: ComboboxOption[] = useMemo(
     () =>
@@ -250,10 +256,15 @@ export default function ExpensesPage() {
 
   // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
   const salaryTotals = useMemo(() => computeEmployeeSalaryTotals(data ?? null), [data])
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
+  const [salaryNameQuery, setSalaryNameQuery] = useState('')
+  const filteredSalaryTotals = useMemo(() => {
+    const query = salaryNameQuery.trim().toLowerCase()
+    return query ? salaryTotals.filter((row) => row.employeeName.toLowerCase().includes(query)) : salaryTotals
+  }, [salaryTotals, salaryNameQuery])
+  const [selectedEmployeeName, setSelectedEmployeeName] = useState('')
   const selectedEmployeeEntries = useMemo(
-    () => expenses.filter((expense) => expense.employeeId === selectedEmployeeId),
-    [expenses, selectedEmployeeId]
+    () => expenses.filter((expense) => expense.employeeName?.trim().toLowerCase() === selectedEmployeeName.toLowerCase()),
+    [expenses, selectedEmployeeName]
   )
 
   async function handleExpenseSubmit(event: FormEvent<HTMLFormElement>) {
@@ -267,7 +278,7 @@ export default function ExpensesPage() {
         note: expenseForm.note,
         date: expenseForm.date,
         paymentMethod: expenseForm.paymentMethod,
-        employeeId: expenseForm.category === EXPENSE_SALARY_CATEGORY ? expenseForm.employeeId || undefined : undefined,
+        employeeName: expenseForm.category === EXPENSE_SALARY_CATEGORY ? expenseForm.employeeName.trim() || undefined : undefined,
         loanAccountId:
           expenseForm.category === EXPENSE_LOAN_REPAYMENT_CATEGORY ? expenseForm.loanAccountId || undefined : undefined,
       }
@@ -275,6 +286,10 @@ export default function ExpensesPage() {
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
       setFeedback(editingExpenseId ? 'Expense updated.' : 'Expense recorded.')
       setEditingExpenseId(null)
+      // The "Expenses this period" list below is narrowed by this filter —
+      // reset it so a newly recorded expense is never hidden by whatever
+      // category someone happened to be filtering by before.
+      setSelectedCategory(ALL_CATEGORIES)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record expense.')
     }
@@ -289,7 +304,7 @@ export default function ExpensesPage() {
       note: expense.note ?? '',
       date: expense.date.slice(0, 10),
       paymentMethod: expense.paymentMethod ?? 'cash',
-      employeeId: expense.employeeId ?? '',
+      employeeName: expense.employeeName ?? '',
       loanAccountId: expense.loanAccountId ?? '',
     })
   }
@@ -446,7 +461,7 @@ export default function ExpensesPage() {
                     <Select
                       value={expenseForm.category}
                       onValueChange={(value) =>
-                        setExpenseForm((current) => ({ ...current, category: value, employeeId: '', loanAccountId: '' }))
+                        setExpenseForm((current) => ({ ...current, category: value, employeeName: '', loanAccountId: '' }))
                       }
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
@@ -462,13 +477,17 @@ export default function ExpensesPage() {
                       <p className="text-sm font-medium text-foreground">
                         Employee <span className="font-normal text-muted-foreground">(optional)</span>
                       </p>
-                      <Combobox
-                        options={employeeOptions}
-                        value={expenseForm.employeeId}
-                        onChange={(value) => setExpenseForm((current) => ({ ...current, employeeId: value }))}
-                        placeholder="Select employee"
-                        searchPlaceholder="Search employee"
+                      <Input
+                        list="salary-employee-suggestions"
+                        value={expenseForm.employeeName}
+                        onChange={(event) => setExpenseForm((current) => ({ ...current, employeeName: event.target.value }))}
+                        placeholder="Type employee name"
                       />
+                      <datalist id="salary-employee-suggestions">
+                        {employeeNameSuggestions.map((name) => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
                     </div>
                   ) : null}
                   {expenseForm.category === EXPENSE_LOAN_REPAYMENT_CATEGORY ? (
@@ -625,6 +644,15 @@ export default function ExpensesPage() {
           />
           <Card className="border-border/70 shadow-sm">
             <CardContent className="space-y-4 pt-6">
+              <div className="relative sm:max-w-xs">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={salaryNameQuery}
+                  onChange={(event) => setSalaryNameQuery(event.target.value)}
+                  placeholder="Search employee name..."
+                  className="pl-9"
+                />
+              </div>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -635,21 +663,23 @@ export default function ExpensesPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {salaryTotals.map((row) => (
+                    {filteredSalaryTotals.map((row) => (
                       <TableRow
-                        key={row.employeeId}
-                        className={cn('cursor-pointer', selectedEmployeeId === row.employeeId && 'bg-muted/40')}
-                        onClick={() => setSelectedEmployeeId(row.employeeId === selectedEmployeeId ? '' : row.employeeId)}
+                        key={row.employeeName}
+                        className={cn('cursor-pointer', selectedEmployeeName === row.employeeName && 'bg-muted/40')}
+                        onClick={() => setSelectedEmployeeName(row.employeeName === selectedEmployeeName ? '' : row.employeeName)}
                       >
                         <TableCell className="font-medium">{row.employeeName}</TableCell>
                         <TableCell className="text-right tabular-nums">{row.count}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
                       </TableRow>
                     ))}
-                    {salaryTotals.length === 0 ? (
+                    {filteredSalaryTotals.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
-                          No salary entries tagged to an employee yet — pick an employee when recording a সেলারি expense above.
+                          {salaryTotals.length === 0
+                            ? 'No salary entries tagged to an employee yet — type a name when recording a সেলারি expense above.'
+                            : 'No employee matches this search.'}
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -657,7 +687,7 @@ export default function ExpensesPage() {
                 </Table>
               </div>
 
-              {selectedEmployeeId ? (
+              {selectedEmployeeName ? (
                 <div className="overflow-x-auto rounded-xl border border-border/60">
                   <Table>
                     <TableHeader>

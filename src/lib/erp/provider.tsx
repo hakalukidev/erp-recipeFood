@@ -4215,9 +4215,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const expenseDate = input.date?.trim() || now
     // Only a সেলারি-category expense can carry the employee tag (Loan/Cash
     // Maintenance spec's Section 5, salary history) — dropped otherwise even
-    // if one was somehow passed in.
-    const employee =
-      category === EXPENSE_SALARY_CATEGORY && input.employeeId?.trim() ? data.users[input.employeeId.trim()] : null
+    // if one was somehow passed in. Free text, not a Users lookup — see
+    // ExpenseRecord.employeeName in types.ts.
+    const employeeName =
+      category === EXPENSE_SALARY_CATEGORY && input.employeeName?.trim() ? input.employeeName.trim() : undefined
     // Only an EXPENSE_LOAN_REPAYMENT_CATEGORY entry can carry the loan tag
     // (2026-09-12 client request) — see the ExpenseRecord.loanAccountId
     // comment in types.ts for why this also auto-posts a LoanTransactionRecord.
@@ -4246,11 +4247,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       approvedBy: existingExpense?.approvedBy ?? '',
       approvedByName: existingExpense?.approvedByName ?? '',
       approvedAt: existingExpense?.approvedAt ?? '',
-      ...(employee
-        ? { employeeId: employee.id, employeeName: employee.name }
-        : existingExpense?.employeeId
-          ? { employeeId: existingExpense.employeeId, employeeName: existingExpense.employeeName }
-          : {}),
+      ...(employeeName ? { employeeName } : {}),
       ...(loanAccount
         ? { loanAccountId: loanAccount.id, loanMemberName: loanAccount.memberName, loanTransactionId: loanTxnId ?? undefined }
         : {}),
