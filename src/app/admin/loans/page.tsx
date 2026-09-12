@@ -4,8 +4,11 @@ import { useMemo, useState } from 'react'
 import {
   ArrowDownCircle,
   ArrowUpCircle,
+  CalendarClock,
   HandCoins,
+  Landmark,
   Pencil,
+  Plus,
   Scale,
   Search,
   Trash2,
@@ -39,8 +42,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import { CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
-import type { CashMaintenanceRecord, LoanAccountRecord, LoanTransactionRecord, LoanTransactionType } from '@/lib/erp/types'
-import { computeLoanBalance, formatCurrency, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import type { CashMaintenanceRecord, InvestorRecord, LoanAccountRecord, LoanTransactionRecord, LoanTransactionType } from '@/lib/erp/types'
+import {
+  computeLoanBalance,
+  computeLoanMonthlySchedule,
+  formatCurrency,
+  formatDate,
+  sortByCreatedAtDesc,
+  toArray,
+} from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function todayIso() {
@@ -85,6 +95,9 @@ const emptyCashForm = {
 }
 type CashFormState = typeof emptyCashForm
 
+const emptyInvestorForm = { name: '', location: '', mobile: '', products: '', amount: '', note: '' }
+type InvestorFormState = typeof emptyInvestorForm
+
 function SectionHeader({
   icon: Icon,
   title,
@@ -113,6 +126,8 @@ export default function LoanAndCashMaintenancePage() {
     deleteLoanTransaction,
     saveCashMaintenance,
     deleteCashMaintenance,
+    saveInvestor,
+    deleteInvestor,
   } = useERP()
 
   const currency = data?.settings.currency
@@ -120,6 +135,7 @@ export default function LoanAndCashMaintenancePage() {
   const loanAccounts = useMemo(() => sortByCreatedAtDesc(toArray(data?.loanAccounts)), [data?.loanAccounts])
   const loanTransactions = useMemo(() => sortByCreatedAtDesc(toArray(data?.loanTransactions)), [data?.loanTransactions])
   const cashEntries = useMemo(() => sortByCreatedAtDesc(toArray(data?.cashMaintenance)), [data?.cashMaintenance])
+  const investors = useMemo(() => sortByCreatedAtDesc(toArray(data?.investors)), [data?.investors])
   // Expenses (P&L chart) feed the reconciliation check below alongside Cash
   // Maintenance — both are real cash out, just posted to two different
   // charts (see CashMaintenanceRecord comment in types.ts).
@@ -190,6 +206,21 @@ export default function LoanAndCashMaintenancePage() {
     }
   }
 
+  // ---- Monthly Schedule (2026-09-12 client request) ------------------------
+  // Toggled per loan member — click "Monthly schedule" on a member row to
+  // show/hide a Sept→Dec-style running table for that one member, derived
+  // fresh from computeLoanMonthlySchedule (never stored, see utils.ts).
+  const [scheduleAccountId, setScheduleAccountId] = useState<string | null>(null)
+  const scheduleAccount = scheduleAccountId ? loanAccounts.find((account) => account.id === scheduleAccountId) : null
+  const monthlySchedule = useMemo(
+    () => (scheduleAccountId ? computeLoanMonthlySchedule(data ?? null, scheduleAccountId) : []),
+    [data, scheduleAccountId]
+  )
+
+  function toggleSchedule(accountId: string) {
+    setScheduleAccountId((current) => (current === accountId ? null : accountId))
+  }
+
   // ---- Loan Transactions (withdrawal / repayment) --------------------------
   const [transactionDialogOpen, setTransactionDialogOpen] = useState(false)
   const [transactionForm, setTransactionForm] = useState<LoanTransactionFormState>(emptyLoanTransactionForm)
@@ -235,6 +266,81 @@ export default function LoanAndCashMaintenancePage() {
       await deleteLoanTransaction(transaction.id)
     } catch (reason) {
       setTransactionError(reason instanceof Error ? reason.message : 'Unable to delete transaction.')
+    }
+  }
+
+  // ---- Investors -------------------------------------------------------------
+  const [investorQuery, setInvestorQuery] = useState('')
+  const [investorDialogOpen, setInvestorDialogOpen] = useState(false)
+  const [editingInvestorId, setEditingInvestorId] = useState<string | null>(null)
+  const [investorForm, setInvestorForm] = useState<InvestorFormState>(emptyInvestorForm)
+  const [investorSaving, setInvestorSaving] = useState(false)
+  const [investorError, setInvestorError] = useState<string | null>(null)
+
+  const filteredInvestors = useMemo(() => {
+    const normalized = investorQuery.trim().toLowerCase()
+    if (!normalized) return investors
+    return investors.filter((investor) =>
+      [investor.name, investor.location, investor.mobile, investor.products].join(' ').toLowerCase().includes(normalized)
+    )
+  }, [investors, investorQuery])
+
+  const totalInvested = useMemo(() => investors.reduce((sum, investor) => sum + investor.amount, 0), [investors])
+
+  function openCreateInvestor() {
+    setEditingInvestorId(null)
+    setInvestorForm(emptyInvestorForm)
+    setInvestorError(null)
+    setInvestorDialogOpen(true)
+  }
+
+  function openEditInvestor(investor: InvestorRecord) {
+    setEditingInvestorId(investor.id)
+    setInvestorForm({
+      name: investor.name,
+      location: investor.location,
+      mobile: investor.mobile,
+      products: investor.products,
+      amount: String(investor.amount),
+      note: investor.note,
+    })
+    setInvestorError(null)
+    setInvestorDialogOpen(true)
+  }
+
+  async function handleSaveInvestor() {
+    setInvestorError(null)
+    const amount = Number(investorForm.amount) || 0
+    if (amount <= 0) {
+      setInvestorError('Investment amount must be greater than zero.')
+      return
+    }
+    setInvestorSaving(true)
+    try {
+      await saveInvestor(
+        {
+          name: investorForm.name,
+          location: investorForm.location || undefined,
+          mobile: investorForm.mobile,
+          products: investorForm.products || undefined,
+          amount,
+          note: investorForm.note || undefined,
+        },
+        editingInvestorId ?? undefined
+      )
+      setInvestorDialogOpen(false)
+    } catch (reason) {
+      setInvestorError(reason instanceof Error ? reason.message : 'Unable to save investor.')
+    } finally {
+      setInvestorSaving(false)
+    }
+  }
+
+  async function handleDeleteInvestor(investor: InvestorRecord) {
+    try {
+      await deleteInvestor(investor.id)
+    } catch (reason) {
+      setInvestorError(reason instanceof Error ? reason.message : 'Unable to delete investor.')
     }
   }
 
@@ -460,6 +566,10 @@ export default function LoanAndCashMaintenancePage() {
                               <DropdownMenuItem onClick={() => openCreateTransaction('repayment', account.id)}>
                                 <ArrowDownCircle className="mr-2 h-4 w-4" /> Record repayment
                               </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => toggleSchedule(account.id)}>
+                                <CalendarClock className="mr-2 h-4 w-4" />
+                                {scheduleAccountId === account.id ? 'Hide monthly schedule' : 'Monthly schedule'}
+                              </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => openEditAccount(account)}>
                                 <Pencil className="mr-2 h-4 w-4" /> Edit
                               </DropdownMenuItem>
@@ -485,6 +595,68 @@ export default function LoanAndCashMaintenancePage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Monthly Schedule */}
+        {scheduleAccount ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <SectionHeader
+                icon={CalendarClock}
+                title={`Monthly Schedule — ${scheduleAccount.memberName}`}
+                description="Every calendar month from the first transaction through today — a month's closing balance is next month's opening, carrying straight across a year boundary."
+              />
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Month</TableHead>
+                      <TableHead className="text-right">Opening</TableHead>
+                      <TableHead className="text-right">Withdrawn</TableHead>
+                      <TableHead className="text-right">Repaid</TableHead>
+                      <TableHead className="text-right">Closing</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {monthlySchedule.map((row, index) => {
+                      const isLastRow = index === monthlySchedule.length - 1
+                      const paidOff = isLastRow && row.closing <= 0
+                      return (
+                        <TableRow key={row.period}>
+                          <TableCell className="font-medium">{row.monthLabel}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.opening, currency)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-amber-700 dark:text-amber-300">
+                            {row.withdrawals > 0 ? formatCurrency(row.withdrawals, currency) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-emerald-700 dark:text-emerald-300">
+                            {row.repayments > 0 ? formatCurrency(row.repayments, currency) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {paidOff ? (
+                              <Badge variant="outline" className="border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300">
+                                Paid off
+                              </Badge>
+                            ) : (
+                              formatCurrency(row.closing, currency)
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                    {monthlySchedule.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                          No transactions recorded for this member yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {/* Loan Transactions */}
         <Card className="border-border/70 shadow-sm">
@@ -540,6 +712,87 @@ export default function LoanAndCashMaintenancePage() {
                     <TableRow>
                       <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                         No loan transactions recorded yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Investors */}
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <SectionHeader
+              icon={Landmark}
+              title="Investors"
+              description="Who has invested in the business, and how much — each investment also posts to the Cash Maintenance chart below."
+            />
+            <div className="flex flex-wrap gap-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={investorQuery}
+                  onChange={(event) => setInvestorQuery(event.target.value)}
+                  className="pl-9"
+                  placeholder="Search investor, location, or product"
+                />
+              </div>
+              <Button onClick={openCreateInvestor}>
+                <Plus className="mr-2 h-4 w-4" /> Add Investor
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {investorError ? <p className="mb-3 text-sm text-destructive">{investorError}</p> : null}
+            <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+              <span className="text-muted-foreground">Total invested</span>
+              <p className="mt-1 text-lg font-semibold">{formatCurrency(totalInvested, currency)}</p>
+            </div>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Investor</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead>Mobile</TableHead>
+                    <TableHead>Products</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredInvestors.map((investor) => (
+                    <TableRow key={investor.id}>
+                      <TableCell className="font-medium">{investor.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{investor.location || '—'}</TableCell>
+                      <TableCell>{investor.mobile || '—'}</TableCell>
+                      <TableCell className="max-w-[200px] truncate text-muted-foreground">{investor.products || '—'}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(investor.amount, currency)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditInvestor(investor)} aria-label={`Edit ${investor.name}`}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9 text-destructive hover:text-destructive"
+                            onClick={() => handleDeleteInvestor(investor)}
+                            aria-label={`Delete ${investor.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {filteredInvestors.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                        <Landmark className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                        No investors on file yet.
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -864,6 +1117,63 @@ export default function LoanAndCashMaintenancePage() {
             </Button>
             <Button onClick={handleSaveCash} disabled={cashSaving}>
               {cashSaving ? 'Saving…' : 'Save entry'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Investor dialog */}
+      <Dialog open={investorDialogOpen} onOpenChange={setInvestorDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingInvestorId ? 'Edit investor' : 'Add investor'}</DialogTitle>
+            <DialogDescription>Name, mobile, and amount are required; location, products, and note are optional.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {investorError ? <p className="text-sm text-destructive">{investorError}</p> : null}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Investor name</label>
+              <Input value={investorForm.name} onChange={(event) => setInvestorForm((current) => ({ ...current, name: event.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Mobile</label>
+                <Input value={investorForm.mobile} onChange={(event) => setInvestorForm((current) => ({ ...current, mobile: event.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Location</label>
+                <Input value={investorForm.location} onChange={(event) => setInvestorForm((current) => ({ ...current, location: event.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Products</label>
+              <Input
+                value={investorForm.products}
+                onChange={(event) => setInvestorForm((current) => ({ ...current, products: event.target.value }))}
+                placeholder="Which product(s) this investment is tied to, if any"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Amount</label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={investorForm.amount}
+                onChange={(event) => setInvestorForm((current) => ({ ...current, amount: event.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Note</label>
+              <Textarea value={investorForm.note} onChange={(event) => setInvestorForm((current) => ({ ...current, note: event.target.value }))} rows={2} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInvestorDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveInvestor} disabled={investorSaving}>
+              {investorSaving ? 'Saving…' : 'Save investor'}
             </Button>
           </DialogFooter>
         </DialogContent>

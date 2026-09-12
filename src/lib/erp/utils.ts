@@ -1,7 +1,10 @@
 import type {
+  AccountType,
   ActivityRecord,
+  ChartOfAccountRecord,
   DealerCategoryRecord,
   ERPData,
+  LedgerAccount,
   OrderRecord,
   ProductRecord,
   PurchaseMaterialRecord,
@@ -311,11 +314,24 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
     return { year: String(year), earning, expense, net: earning - expense }
   })
 
+  // 2026-09-12 client request — "গড় প্রফিট রেসিও": (Total Profit) ÷ (Total
+  // Dealer Value Sales), where Dealer Value Sales is the total at the rate
+  // Depot actually sold to Dealer (RateCardRecord.dealerRateTotal), net of
+  // returned goods at that same rate (ProductReturnRecord.dealerRateTotal)
+  // — kept net-of-returns the same way totalEarning above already is, so
+  // the ratio's numerator and denominator are on the same basis.
+  const totalDealerValueSales =
+    rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0) -
+    productReturns.reduce((sum, item) => sum + item.dealerRateTotal, 0)
+  const avgProfitRatioPercent = totalDealerValueSales > 0 ? (totalEarning / totalDealerValueSales) * 100 : 0
+
   return {
     totalEarning,
     totalExpense,
     totalReturns: productReturns.reduce((sum, item) => sum + item.companyProfit, 0),
     netProfit: totalEarning - totalExpense,
+    totalDealerValueSales,
+    avgProfitRatioPercent,
     monthly,
     yearly,
   }
@@ -612,6 +628,74 @@ export function computeLoanBalance(data: ERPData | null, loanAccountId: string) 
   return { totalWithdrawn, totalRepaid, balance: totalWithdrawn - totalRepaid }
 }
 
+export type LoanMonthlyScheduleRow = {
+  period: string // 'YYYY-MM'
+  monthLabel: string // e.g. "September 2026"
+  opening: number
+  withdrawals: number
+  repayments: number
+  closing: number
+}
+
+// 2026-09-12 client request — a month-by-month schedule (Sept, Oct, Nov...)
+// per loan member, where a month's closing balance carries straight into
+// the next month's opening, including across a year boundary (December's
+// closing becomes next January's opening — no special-cased "new year"
+// branch needed, it falls out of the running-balance loop below). Like
+// Budget's Actual, this is never stored — always derived fresh from
+// LoanTransactionRecord (see computeLoanBalance above for the same
+// all-time total, just without the month-by-month breakdown). Spans every
+// month from the account's first transaction through the current month
+// (so an account with no activity this month still shows its running
+// balance instead of stopping at its last transaction).
+export function computeLoanMonthlySchedule(data: ERPData | null, loanAccountId: string): LoanMonthlyScheduleRow[] {
+  const transactions = toArray(data?.loanTransactions)
+    .filter((entry) => entry.loanAccountId === loanAccountId)
+    .sort((left, right) => left.date.localeCompare(right.date))
+  if (!transactions.length) {
+    return []
+  }
+
+  const firstPeriod = transactions[0].date.slice(0, 7)
+  const lastTransactionPeriod = transactions[transactions.length - 1].date.slice(0, 7)
+  const currentPeriod = new Date().toISOString().slice(0, 7)
+  const endPeriod = lastTransactionPeriod > currentPeriod ? lastTransactionPeriod : currentPeriod
+
+  const periods: string[] = []
+  let [year, month] = firstPeriod.split('-').map(Number)
+  const [endYear, endMonth] = endPeriod.split('-').map(Number)
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    periods.push(`${year}-${String(month).padStart(2, '0')}`)
+    month += 1
+    if (month > 12) {
+      month = 1
+      year += 1
+    }
+  }
+
+  let runningBalance = 0
+  return periods.map((period) => {
+    const opening = runningBalance
+    const monthTransactions = transactions.filter((entry) => entry.date.slice(0, 7) === period)
+    const withdrawals = monthTransactions
+      .filter((entry) => entry.type === 'withdrawal')
+      .reduce((sum, entry) => sum + entry.amount, 0)
+    const repayments = monthTransactions
+      .filter((entry) => entry.type === 'repayment')
+      .reduce((sum, entry) => sum + entry.amount, 0)
+    const closing = opening + withdrawals - repayments
+    runningBalance = closing
+
+    const [periodYear, periodMonth] = period.split('-').map(Number)
+    const monthLabel = new Date(periodYear, periodMonth - 1, 1).toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    })
+
+    return { period, monthLabel, opening, withdrawals, repayments, closing }
+  })
+}
+
 // ---- Expense Management --------------------------------------------------
 // Per-employee running total of every সেলারি-category expense tagged with
 // that employee (ExpenseRecord.employeeId) — Section 5 of the Loan/Cash
@@ -729,6 +813,214 @@ export async function exportPdf(filename: string, title: string, headers: string
   })
 
   doc.save(filename)
+}
+
+// ---- Accounting Module — General Ledger / Trial Balance / Balance Sheet --
+// (2026-09-12 client request, "একাউন্টিং বিভাগ") The Automatic Accounting
+// Engine writes every LedgerEntryRecord under one of two schemes (see the
+// LedgerAccount comment in types.ts): a fixed `account` key for the system
+// postings it already knows how to make (Sales, Purchase, Dealer, Cash,
+// etc.), or `account:'manual'` + `accountRef:<ChartOfAccountRecord id>` for
+// anything posted through a Journal Entry / Bank transaction. This resolves
+// either scheme back to the one ChartOfAccountRecord a given entry actually
+// belongs to, so the General Ledger below never has to special-case which
+// scheme produced a row.
+export function resolveLedgerAccountRecord(
+  chartOfAccounts: Record<string, ChartOfAccountRecord>,
+  entry: { account: LedgerAccount; accountRef?: string }
+): ChartOfAccountRecord | undefined {
+  if (entry.account === 'manual') {
+    return entry.accountRef ? chartOfAccounts[entry.accountRef] : undefined
+  }
+  return Object.values(chartOfAccounts).find((account) => account.ledgerAccount === entry.account)
+}
+
+export type GeneralLedgerEntryRow = {
+  id: string
+  date: string
+  billNumber: string
+  description: string
+  debit: number
+  credit: number
+  runningBalance: number
+}
+
+export type GeneralLedgerAccountSummary = {
+  accountId: string
+  accountCode: string
+  accountName: string
+  accountType: AccountType
+  openingBalance: number
+  entries: GeneralLedgerEntryRow[]
+  totalDebit: number
+  totalCredit: number
+  closingBalance: number
+}
+
+// One row per Chart of Accounts entry, in code order, each carrying its own
+// running balance (openingBalance, then +debit/-credit per posting in date
+// order) — the same "derive, don't store" shape as computeLoanBalance/
+// computeLoanMonthlySchedule above: never persisted, always recomputed live
+// off ledgerEntries + journalEntries' manual lines.
+export function buildGeneralLedger(data: ERPData | null): GeneralLedgerAccountSummary[] {
+  if (!data) {
+    return []
+  }
+
+  const accounts = Object.values(data.chartOfAccounts).sort((left, right) => left.code.localeCompare(right.code))
+  const summaries = new Map<string, GeneralLedgerAccountSummary>()
+  accounts.forEach((account) => {
+    summaries.set(account.id, {
+      accountId: account.id,
+      accountCode: account.code,
+      accountName: account.name,
+      accountType: account.type,
+      openingBalance: account.openingBalance,
+      entries: [],
+      totalDebit: 0,
+      totalCredit: 0,
+      closingBalance: account.openingBalance,
+    })
+  })
+
+  const ledgerEntries = Object.values(data.ledgerEntries).sort(
+    (left, right) => left.date.localeCompare(right.date) || left.createdAt.localeCompare(right.createdAt)
+  )
+  ledgerEntries.forEach((entry) => {
+    const account = resolveLedgerAccountRecord(data.chartOfAccounts, entry)
+    if (!account) {
+      // No Chart of Accounts row backs this entry yet (e.g. the standard
+      // chart hasn't been loaded) — skip rather than crash; the Chart of
+      // Accounts tab's "Load standard chart" action is what fixes this.
+      return
+    }
+    const summary = summaries.get(account.id)
+    if (!summary) return
+    summary.entries.push({
+      id: entry.id,
+      date: entry.date,
+      billNumber: entry.billNumber,
+      description: entry.description,
+      debit: entry.debit,
+      credit: entry.credit,
+      runningBalance: 0,
+    })
+    summary.totalDebit += entry.debit
+    summary.totalCredit += entry.credit
+  })
+
+  summaries.forEach((summary) => {
+    let running = summary.openingBalance
+    summary.entries.forEach((row) => {
+      running += row.debit - row.credit
+      row.runningBalance = running
+    })
+    summary.closingBalance = running
+  })
+
+  return Array.from(summaries.values())
+}
+
+export type TrialBalanceRow = {
+  accountId: string
+  accountCode: string
+  accountName: string
+  accountType: AccountType
+  debit: number
+  credit: number
+}
+
+// Every account with any activity (or a non-zero opening balance), split
+// into a Debit or Credit column by the sign of its closing balance — a
+// positive (net-debit) balance goes in Debit, negative (net-credit) in
+// Credit. The two column totals always match, since every ledger posting is
+// itself a balanced debit/credit pair.
+export function buildTrialBalance(data: ERPData | null): { rows: TrialBalanceRow[]; totalDebit: number; totalCredit: number } {
+  const ledger = buildGeneralLedger(data)
+  const rows: TrialBalanceRow[] = ledger
+    .filter((account) => account.closingBalance !== 0 || account.entries.length > 0)
+    .map((account) => ({
+      accountId: account.accountId,
+      accountCode: account.accountCode,
+      accountName: account.accountName,
+      accountType: account.accountType,
+      debit: account.closingBalance > 0 ? account.closingBalance : 0,
+      credit: account.closingBalance < 0 ? -account.closingBalance : 0,
+    }))
+  const totalDebit = rows.reduce((sum, row) => sum + row.debit, 0)
+  const totalCredit = rows.reduce((sum, row) => sum + row.credit, 0)
+  return { rows, totalDebit, totalCredit }
+}
+
+export type BalanceSheetLine = { accountId: string; code: string; name: string; amount: number }
+
+export type BalanceSheetSummary = {
+  assets: BalanceSheetLine[]
+  liabilities: BalanceSheetLine[]
+  equity: BalanceSheetLine[]
+  totalAssets: number
+  totalLiabilities: number
+  // Equity accounts on file (Share Capital, etc.), before folding in the
+  // current period's result.
+  totalEquityAccounts: number
+  // Revenue minus Expense across the whole ledger, folded into Equity as
+  // "Retained Earnings (current period)" the same way a real balance sheet
+  // rolls P&L into equity at period close — except here it's always live,
+  // never actually closed out, so the sheet balances at any moment without
+  // a separate year-end closing step.
+  currentPeriodNetProfit: number
+  totalEquity: number
+  totalLiabilitiesAndEquity: number
+  isBalanced: boolean
+}
+
+export function buildBalanceSheet(data: ERPData | null): BalanceSheetSummary {
+  const ledger = buildGeneralLedger(data)
+  const toLine = (account: GeneralLedgerAccountSummary, amount: number): BalanceSheetLine => ({
+    accountId: account.accountId,
+    code: account.accountCode,
+    name: account.accountName,
+    amount,
+  })
+
+  const assets = ledger
+    .filter((account) => account.accountType === 'asset' && account.closingBalance !== 0)
+    .map((account) => toLine(account, account.closingBalance))
+  // Liabilities/Equity/Revenue are credit-normal accounts — their
+  // closingBalance (computed as +debit/-credit) is negative when they carry
+  // their normal balance, so it's flipped to a positive magnitude here.
+  const liabilities = ledger
+    .filter((account) => account.accountType === 'liability' && account.closingBalance !== 0)
+    .map((account) => toLine(account, -account.closingBalance))
+  const equity = ledger
+    .filter((account) => account.accountType === 'equity' && account.closingBalance !== 0)
+    .map((account) => toLine(account, -account.closingBalance))
+  const revenue = ledger
+    .filter((account) => account.accountType === 'revenue')
+    .reduce((sum, account) => sum - account.closingBalance, 0)
+  const expense = ledger
+    .filter((account) => account.accountType === 'expense')
+    .reduce((sum, account) => sum + account.closingBalance, 0)
+  const currentPeriodNetProfit = revenue - expense
+
+  const totalAssets = assets.reduce((sum, line) => sum + line.amount, 0)
+  const totalLiabilities = liabilities.reduce((sum, line) => sum + line.amount, 0)
+  const totalEquityAccounts = equity.reduce((sum, line) => sum + line.amount, 0)
+  const totalEquity = totalEquityAccounts + currentPeriodNetProfit
+  const totalLiabilitiesAndEquity = totalLiabilities + totalEquity
+
+  return {
+    assets,
+    liabilities,
+    equity,
+    totalAssets,
+    totalLiabilities,
+    totalEquityAccounts,
+    currentPeriodNetProfit,
+    totalEquity,
+    totalLiabilitiesAndEquity,
+    isBalanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 1,
+  }
 }
 
 export function activitySummary(activity: ActivityRecord) {

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import dynamic from 'next/dynamic'
-import { PiggyBank, ReceiptText, TrendingUp, Undo2 } from 'lucide-react'
+import { Percent, PiggyBank, ReceiptText, TrendingUp, Undo2 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -29,7 +29,7 @@ export function CompanyEarningsScreen() {
   return (
     <AdminShell active="Company Earnings">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
@@ -77,6 +77,20 @@ export function CompanyEarningsScreen() {
                   {formatCurrency(summary.netProfit, currency)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">Earning minus expenses</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="flex items-start gap-3 p-5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                <Percent className="h-4 w-4" />
+              </span>
+              <div>
+                <p className="text-sm text-muted-foreground">Avg profit ratio</p>
+                <p className="mt-1 text-2xl font-semibold tracking-tight">{summary.avgProfitRatioPercent.toFixed(2)}%</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Total profit ÷ total dealer value sales ({formatCurrency(summary.totalDealerValueSales, currency)})
+                </p>
               </div>
             </CardContent>
           </Card>

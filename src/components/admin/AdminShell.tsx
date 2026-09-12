@@ -12,7 +12,9 @@ import {
   CheckCheck,
   FileBarChart,
   HandCoins,
+  Handshake,
   LayoutDashboard,
+  Library,
   Lock,
   LogOut,
   Menu,
@@ -114,10 +116,17 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Purchase',
-        description: 'Vendor list, raw/packaging material stock, and daily purchase entries with vendor due tracking',
+        description: 'Raw/packaging material stock and daily purchase entries with vendor due tracking',
         href: '/admin/purchase',
         icon: Truck,
         permission: 'purchase:view',
+      },
+      {
+        label: 'Vendor',
+        description: 'Vendor directory — name, address, phone, and running due',
+        href: '/admin/vendors',
+        icon: Handshake,
+        permission: 'vendor:view',
       },
       {
         label: 'Invoice',
@@ -155,11 +164,18 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'finance:view',
       },
       {
-        label: 'Sales Reports',
-        description: 'Invoice reports — dealer-wise and product-wise sales, split by Commission-based vs Others',
+        label: 'Reports',
+        description: 'Reports Hub — Sales, Expense, Purchase, Vendor, and Loan reports, each exportable/printable',
         href: '/admin/reports',
         icon: FileBarChart,
         permission: 'reports:view',
+      },
+      {
+        label: 'Accounting',
+        description: 'Chart of Accounts, Journal, Bank, General Ledger, Trial Balance, and Balance Sheet',
+        href: '/admin/accounting',
+        icon: Library,
+        permission: 'accounting:view',
       },
     ],
   },
@@ -500,7 +516,7 @@ function useGlobalSearchResults(query: string): SearchResult[] {
       (vendor) => vendor.name.toLowerCase().includes(term) || vendor.phone.toLowerCase().includes(term)
     )
     vendors.slice(0, limit).forEach((vendor) =>
-      results.push({ id: vendor.id, category: 'Vendor', title: vendor.name, subtitle: vendor.phone, href: '/admin/purchase' })
+      results.push({ id: vendor.id, category: 'Vendor', title: vendor.name, subtitle: vendor.phone, href: '/admin/vendors' })
     )
 
     const batches = toArray(data.batches).filter(

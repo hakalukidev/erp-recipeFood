@@ -53,6 +53,7 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
   { code: '5015', name: 'Repair', type: 'expense', ledgerAccount: 'repair' },
   { code: '5016', name: 'Utility', type: 'expense', ledgerAccount: 'utility' },
   { code: '5017', name: 'Travel', type: 'expense', ledgerAccount: 'travel' },
+  { code: '5018', name: 'Loan Repayment (Operational)', type: 'expense', ledgerAccount: 'loan_repayment' },
 ]
 
 // The Expense Category list — the Finance page's "Record expense" form uses
@@ -73,6 +74,15 @@ export const EXPENSE_CATEGORIES = [
   'বিদ্যুৎ বিল',
   'সেলারি',
   'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)',
+  // 2026-09-12 client request: a loan repayment recorded here (as opposed to
+  // the same-named category on the Cash Maintenance chart below) is treated
+  // as a direct operational expense — it hits Company Earnings' net profit
+  // like any other Expense head, and auto-posts a matching
+  // LoanTransactionRecord so it also shows on the Loan & Investment ledger
+  // (see saveExpense in provider.tsx). Use the Cash Maintenance chart
+  // instead for a repayment that should stay a pure balance-sheet cash
+  // movement, not a P&L deduction.
+  'ঋণ পরিশোধ',
 ] as const
 
 // Free-text expense categories (Finance page) are matched against this map
@@ -91,18 +101,24 @@ export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   'বিদ্যুৎ বিল': 'electricity',
   'সেলারি': 'salary',
   'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)': 'factory_expense',
+  'ঋণ পরিশোধ': 'loan_repayment',
 }
 
 // ---- Cash Maintenance Chart -----------------------------------------------
 // The Loan & Cash Maintenance page's "Record cash entry" category dropdown —
 // the client's own exact "ক্যাশ মেইনটেনেন্স" list: cash movements that never
-// touch Company Earnings' P&L (loan repayment, new market investment, goods/
-// packaging purchase, depot commission, dealer payment for product
-// transport) — deliberately NOT the same list as EXPENSE_CATEGORIES above
-// (Rent, Salary, Transport, etc. stay exclusively in the Expense chart; see
-// CashMaintenanceRecord in types.ts for why the two charts are kept
-// separate, and the Loan & Cash Maintenance page's reconciliation check for
-// where they're summed back together as one "total cash out" figure).
+// touch Company Earnings' P&L (new market investment, goods/packaging
+// purchase, depot commission, dealer payment for product transport) — kept
+// deliberately separate from EXPENSE_CATEGORIES above (Rent, Salary,
+// Transport, etc.; see CashMaintenanceRecord in types.ts for why the two
+// charts are kept separate, and the Loan & Cash Maintenance page's
+// reconciliation check for where they're summed back together as one "total
+// cash out" figure). 'ঋণ পরিশোধ' deliberately appears on BOTH charts as of
+// the 2026-09-12 client request — this list's entry stays a pure cash
+// movement, while the same-named EXPENSE_CATEGORIES entry (see
+// EXPENSE_LOAN_REPAYMENT_CATEGORY) is the one that hits net profit and
+// auto-posts to the Loan & Investment ledger; which one to use is the
+// operator's call per repayment.
 export const CASH_MAINTENANCE_CATEGORIES = [
   'ঋণ পরিশোধ',
   'নতুন মার্কেট ইনভেস্টমেন্ট',
@@ -111,6 +127,17 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'ডিপো কমিশন',
   'ডিলার পেমেন্ট পণ্য পরিবহন',
 ] as const
+
+// Named so provider.tsx's buildPurchaseCashEntries (2026-09-12 client
+// request — a Purchase's paid amount/vendor paydown now hits cash flow) can
+// post to these two without hardcoding the Bangla literal a second time.
+export const CASH_CATEGORY_GOODS_PURCHASE = 'পণ্য ক্রয়'
+export const CASH_CATEGORY_PACKAGING_PURCHASE = 'প্যাকেজিং মেটেরিয়ালস ক্রয়'
+
+// Named so provider.tsx's saveInvestor (2026-09-12 client request — a new
+// investment now hits cash flow) can post to this category without
+// hardcoding the Bangla literal a second time.
+export const CASH_CATEGORY_NEW_MARKET_INVESTMENT = 'নতুন মার্কেট ইনভেস্টমেন্ট'
 
 // The one category that's recorded on the Cash Maintenance chart purely to
 // help the books balance — never subtracted in the cash-out total the
@@ -121,3 +148,8 @@ export const DIRECT_EXPENSE_CATEGORY = 'সরাসরি এক্সপেন
 // per-employee tag (ExpenseRecord.employeeId) that powers the Salary History
 // section of the Finance page.
 export const EXPENSE_SALARY_CATEGORY = 'সেলারি'
+
+// The EXPENSE_CATEGORIES entry an expense must carry to be eligible for the
+// loan-account tag (ExpenseRecord.loanAccountId) that auto-posts a matching
+// LoanTransactionRecord — see the comment on EXPENSE_CATEGORIES above.
+export const EXPENSE_LOAN_REPAYMENT_CATEGORY = 'ঋণ পরিশোধ'

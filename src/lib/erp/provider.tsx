@@ -51,6 +51,7 @@ import type {
   ExpenseInput,
   ExpenseRecord,
   InvestorInput,
+  InvestorRecord,
   JournalEntryInput,
   JournalEntryLine,
   JournalEntryRecord,
@@ -72,6 +73,7 @@ import type {
   ProductionBatchRecord,
   ProductionOutputLine,
   ProductRecord,
+  StockShortfallRecord,
   ProductReturnInput,
   ProductReturnRecord,
   PurchaseInput,
@@ -107,8 +109,12 @@ import type {
   MaterialUsageRecord,
 } from '@/lib/erp/types'
 import {
+  CASH_CATEGORY_GOODS_PURCHASE,
+  CASH_CATEGORY_NEW_MARKET_INVESTMENT,
+  CASH_CATEGORY_PACKAGING_PURCHASE,
   DIRECT_EXPENSE_CATEGORY,
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
+  EXPENSE_LOAN_REPAYMENT_CATEGORY,
   EXPENSE_SALARY_CATEGORY,
   STANDARD_CHART_OF_ACCOUNTS,
 } from '@/lib/erp/standardChartOfAccounts'
@@ -185,6 +191,7 @@ type ERPContextValue = {
   saveExpense: (input: ExpenseInput, expenseId?: string) => Promise<void>
   updateExpenseApproval: (expenseId: string, approvalStatus: ExpenseApprovalStatus) => Promise<void>
   saveInvestor: (input: InvestorInput, investorId?: string) => Promise<void>
+  deleteInvestor: (investorId: string) => Promise<void>
   deleteExpense: (expenseId: string) => Promise<void>
   saveBudget: (input: BudgetInput, budgetId?: string) => Promise<void>
   deleteBudget: (budgetId: string) => Promise<void>
@@ -729,6 +736,65 @@ function buildExpenseLedgerEntries(params: {
   }
 }
 
+// Purchase cash-flow posting (2026-09-12 client request): the cash actually
+// paid out on a purchase — its own `paid` at save time, and any later
+// VendorPaymentRecord paydown of the due — auto-posts a CashMaintenanceRecord
+// so it shows up on the Loan & Cash Maintenance reconciliation, split
+// proportionally across পণ্য ক্রয় ("goods") / প্যাকেজিং মেটেরিয়ালস ক্রয়
+// ("packaging") by how much of the purchase's own line items were raw vs
+// packaging material — a purchase mixing both categories gets one entry per
+// category instead of misclassifying the whole payment as one or the other.
+function buildPurchaseCashEntries(
+  items: PurchaseItem[],
+  amount: number,
+  date: string,
+  note: string,
+  currentUser: { id: string; name: string }
+): Record<string, CashMaintenanceRecord> {
+  if (amount <= 0) {
+    return {}
+  }
+
+  const rawTotal = items.filter((item) => item.category === 'raw_material').reduce((sum, item) => sum + item.amount, 0)
+  const packagingTotal = items
+    .filter((item) => item.category === 'packaging_material')
+    .reduce((sum, item) => sum + item.amount, 0)
+  const grandTotal = rawTotal + packagingTotal
+  const rawShare = grandTotal > 0 ? rawTotal / grandTotal : 1
+  const rawAmount = amount * rawShare
+  const packagingAmount = amount - rawAmount
+
+  const now = new Date().toISOString()
+  const entries: Record<string, CashMaintenanceRecord> = {}
+  if (rawAmount > 0) {
+    const id = createId('cash_maintenance')
+    entries[id] = {
+      id,
+      category: CASH_CATEGORY_GOODS_PURCHASE,
+      amount: rawAmount,
+      date,
+      note,
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+  }
+  if (packagingAmount > 0) {
+    const id = createId('cash_maintenance')
+    entries[id] = {
+      id,
+      category: CASH_CATEGORY_PACKAGING_PURCHASE,
+      amount: packagingAmount,
+      date,
+      note,
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+  }
+  return entries
+}
+
 // Section 37 (Budget Management): "Actual" is never stored on a budget —
 // it's the live sum of expenses matching the budget's category (compared
 // case-insensitively, same as resolveExpenseLedgerAccount above) that fall
@@ -899,6 +965,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     vendorPayments: source.vendorPayments ?? {},
     materialUsages: source.materialUsages ?? {},
     finishedGoods: source.finishedGoods ?? {},
+    stockShortfalls: source.stockShortfalls ?? {},
     productionBatches: source.productionBatches ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
@@ -2180,10 +2247,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('purchase_material_deleted', 'purchase', `Deleted material ${material.name}.`)
   }
 
-  // One procurement transaction — adds to each line's material stock and
-  // opens (or fully settles) that much due against the vendor. See the
-  // PurchaseRecord comment in types.ts for why this never touches the
-  // ledger/Automatic Accounting Engine.
+  // One procurement transaction — adds to each line's material stock,
+  // opens (or fully settles) that much due against the vendor, and posts
+  // whatever was actually paid to the Cash Maintenance chart (see
+  // buildPurchaseCashEntries). See the PurchaseRecord comment in types.ts
+  // for why this still never touches the full ledger/Automatic Accounting
+  // Engine.
   async function createPurchase(input: PurchaseInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a purchase.')
@@ -2236,6 +2305,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const date = input.date?.trim() || now.slice(0, 10)
     const purchaseNumber = `PUR-${Date.now().toString().slice(-8)}`
 
+    const cashEntries = buildPurchaseCashEntries(
+      items,
+      paid,
+      date,
+      `Purchase ${purchaseNumber} — ${vendorName}`,
+      currentUser
+    )
+    const cashMaintenanceIds = Object.keys(cashEntries)
+
     const purchase: PurchaseRecord = {
       id,
       purchaseNumber,
@@ -2247,12 +2325,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       paid,
       due,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
     }
 
     const updates: Record<string, unknown> = { [`purchases/${id}`]: purchase }
+    Object.entries(cashEntries).forEach(([entryId, entry]) => {
+      updates[`cashMaintenance/${entryId}`] = entry
+    })
 
     // Purchased qty adds straight onto each material's running stock — a
     // material can appear on more than one line (unlikely but not
@@ -2306,12 +2388,21 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`purchaseMaterials/${materialId}/updatedAt`] = now
     })
 
+    // Drop the Cash Maintenance entries this purchase's own `paid` posted.
+    purchase.cashMaintenanceIds?.forEach((entryId) => {
+      updates[`cashMaintenance/${entryId}`] = null
+    })
+
     // A purchase with payments already recorded against it takes those down
-    // with it too, same cascade-delete shape used elsewhere in this file.
+    // with it too, same cascade-delete shape used elsewhere in this file —
+    // including each payment's own Cash Maintenance entries.
     Object.values(data.vendorPayments)
       .filter((payment) => payment.purchaseId === purchaseId)
       .forEach((payment) => {
         updates[`vendorPayments/${payment.id}`] = null
+        payment.cashMaintenanceIds?.forEach((entryId) => {
+          updates[`cashMaintenance/${entryId}`] = null
+        })
       })
 
     await update(ref(db, 'erp'), updates)
@@ -2346,6 +2437,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const nextDue = purchase.due - amount
     const nextPaid = purchase.paid + amount
 
+    const cashEntries = buildPurchaseCashEntries(
+      purchase.items,
+      amount,
+      date,
+      `Vendor payment ${receiptNumber} — ${purchase.vendorName} (${purchase.purchaseNumber})`,
+      currentUser
+    )
+    const cashMaintenanceIds = Object.keys(cashEntries)
+
     const payment: VendorPaymentRecord = {
       id,
       receiptNumber,
@@ -2356,16 +2456,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
     }
 
-    await update(ref(db, 'erp'), {
+    const updates: Record<string, unknown> = {
       [`vendorPayments/${id}`]: payment,
       [`purchases/${purchase.id}/paid`]: nextPaid,
       [`purchases/${purchase.id}/due`]: nextDue,
+    }
+    Object.entries(cashEntries).forEach(([entryId, entry]) => {
+      updates[`cashMaintenance/${entryId}`] = entry
     })
+
+    await update(ref(db, 'erp'), updates)
     await writeActivity(
       'vendor_payment_recorded',
       'purchase',
@@ -2636,6 +2742,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (!finishedGoods) return
       updates[`finishedGoods/${finishedGoodsId}/stockQty`] = finishedGoods.stockQty + delta
       updates[`finishedGoods/${finishedGoodsId}/updatedAt`] = now
+      // "পুরনো ডিলার ইনভয়েসের stock reconciliation" (2026-09-12): this
+      // freshly produced stock auto-covers whatever open shortfalls earlier
+      // invoices left against this same Finished Goods item.
+      resolveFinishedGoodsShortfalls(updates, data, finishedGoodsId, delta, id, date, now)
     })
 
     await update(ref(db, 'erp'), updates)
@@ -2670,6 +2780,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const updates: Record<string, unknown> = { [`productionBatches/${productionBatchId}`]: null }
+
+    // Un-cover whatever shortfalls this batch had resolved before reversing
+    // its stock effect below.
+    reverseFinishedGoodsShortfallResolutions(updates, data, productionBatchId, now)
 
     const rawMaterial = data.purchaseMaterials[batch.rawMaterialId]
     if (rawMaterial) {
@@ -4104,6 +4218,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // if one was somehow passed in.
     const employee =
       category === EXPENSE_SALARY_CATEGORY && input.employeeId?.trim() ? data.users[input.employeeId.trim()] : null
+    // Only an EXPENSE_LOAN_REPAYMENT_CATEGORY entry can carry the loan tag
+    // (2026-09-12 client request) — see the ExpenseRecord.loanAccountId
+    // comment in types.ts for why this also auto-posts a LoanTransactionRecord.
+    const loanAccount =
+      category === EXPENSE_LOAN_REPAYMENT_CATEGORY && input.loanAccountId?.trim()
+        ? data.loanAccounts[input.loanAccountId.trim()]
+        : null
+    if (category === EXPENSE_LOAN_REPAYMENT_CATEGORY && input.loanAccountId?.trim() && !loanAccount) {
+      throw new Error('Pick a valid loan account for this repayment.')
+    }
+    // Carries forward the previous loan transaction id on an edit that keeps
+    // the loan tag, so the same LoanTransactionRecord is updated in place
+    // instead of a duplicate being created every time this expense is edited.
+    const loanTxnId = loanAccount ? existingExpense?.loanTransactionId ?? createId('loan_txn') : null
     const expense: ExpenseRecord = {
       id,
       category,
@@ -4123,6 +4251,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         : existingExpense?.employeeId
           ? { employeeId: existingExpense.employeeId, employeeName: existingExpense.employeeName }
           : {}),
+      ...(loanAccount
+        ? { loanAccountId: loanAccount.id, loanMemberName: loanAccount.memberName, loanTransactionId: loanTxnId ?? undefined }
+        : {}),
       createdBy: existingExpense?.createdBy ?? currentUser.id,
       createdByName: existingExpense?.createdByName ?? currentUser.name,
       createdAt: existingExpense?.createdAt ?? now,
@@ -4143,6 +4274,26 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     ).forEach((entry) => {
       updates[`ledgerEntries/${entry.id}`] = entry
     })
+
+    if (loanAccount && loanTxnId) {
+      updates[`loanTransactions/${loanTxnId}`] = {
+        id: loanTxnId,
+        loanAccountId: loanAccount.id,
+        memberName: loanAccount.memberName,
+        type: 'repayment',
+        amount: input.amount,
+        date: expenseDate,
+        note: expense.note || `Recorded from Expense — ${category}`,
+        createdBy: existingExpense?.createdBy ?? currentUser.id,
+        createdByName: existingExpense?.createdByName ?? currentUser.name,
+        createdAt: existingExpense?.createdAt ?? now,
+      }
+    } else if (existingExpense?.loanTransactionId) {
+      // Category was switched away from ঋণ পরিশোধ, or the loan tag was
+      // cleared, on an edit — drop the loan transaction this expense used to
+      // own so it doesn't linger on the Loan & Investment ledger unowned.
+      updates[`loanTransactions/${existingExpense.loanTransactionId}`] = null
+    }
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -4550,7 +4701,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   async function saveInvestor(input: InvestorInput, investorId?: string) {
-    if (!data) return
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording an investor.')
+    }
     const name = input.name.trim()
     const mobile = input.mobile.trim()
     if (!name) throw new Error('Investor name is required.')
@@ -4560,7 +4713,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const existing = investorId ? data.investors[investorId] : null
     const id = existing?.id ?? createId('investor')
     const now = new Date().toISOString()
-    const investor = {
+    // 2026-09-12 client request: hits cash flow the same way a Purchase's
+    // paid amount does — one CashMaintenanceRecord per investor, kept in
+    // sync (not re-created) as the investor's `amount` is edited, since
+    // `amount` is a running total on the investor, not a per-transaction
+    // ledger entry.
+    const cashMaintenanceId = existing?.cashMaintenanceId ?? createId('cash_maintenance')
+    const investor: InvestorRecord = {
       id,
       name,
       location: input.location?.trim() ?? '',
@@ -4568,11 +4727,45 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       products: input.products?.trim() ?? '',
       amount: input.amount,
       note: input.note?.trim() ?? '',
+      cashMaintenanceId,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
-    await update(ref(getDatabaseOrThrow(), 'erp/investors'), { [id]: investor })
+    const previousCashEntry = data.cashMaintenance[cashMaintenanceId]
+    const cashEntry: CashMaintenanceRecord = {
+      id: cashMaintenanceId,
+      category: CASH_CATEGORY_NEW_MARKET_INVESTMENT,
+      amount: input.amount,
+      date: previousCashEntry?.date ?? now.slice(0, 10),
+      note: `Investment from ${name}`,
+      createdBy: previousCashEntry?.createdBy ?? currentUser.id,
+      createdByName: previousCashEntry?.createdByName ?? currentUser.name,
+      createdAt: previousCashEntry?.createdAt ?? now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp'), {
+      [`investors/${id}`]: investor,
+      [`cashMaintenance/${cashMaintenanceId}`]: cashEntry,
+    })
     await writeActivity(existing ? 'investor_updated' : 'investor_created', 'finance', `${existing ? 'Updated' : 'Added'} investor ${name}.`)
+  }
+
+  async function deleteInvestor(investorId: string) {
+    if (!data) {
+      return
+    }
+
+    const investor = data.investors[investorId]
+    if (!investor) {
+      throw new Error('Investor not found.')
+    }
+
+    const updates: Record<string, unknown> = { [`investors/${investorId}`]: null }
+    if (investor.cashMaintenanceId) {
+      updates[`cashMaintenance/${investor.cashMaintenanceId}`] = null
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity('investor_deleted', 'finance', `Deleted investor ${investor.name}.`)
   }
 
   async function deleteExpense(expenseId: string) {
@@ -4592,6 +4785,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
       updates[`ledgerEntries/${entry.id}`] = entry
     })
+    if (expense.loanTransactionId) {
+      updates[`loanTransactions/${expense.loanTransactionId}`] = null
+    }
 
     await update(ref(db, 'erp'), updates)
     await writeActivity('expense_deleted', 'finance', `Deleted ${expense.category} expense entry.`)
@@ -5159,6 +5355,145 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  // Section: Stock Shortfall (2026-09-12 client request, "auto-link
+  // matching") — tracks how much of a Finished Goods item's negative stock
+  // a SPECIFIC rate card is responsible for, keyed to (rateCardId,
+  // finishedGoodsId). Mirrors applyRateCardStockDeltas' old-vs-new diffing
+  // so editing an invoice only moves the shortfall by the difference, the
+  // same way it only moves stockQty by the difference. `shortfallDelta` is
+  // the single unifying number for create/increase (positive — this save
+  // pushed stock further negative) and edit-down/delete (negative — this
+  // save restored stock, shrinking whatever this invoice used to owe) —
+  // see StockShortfallRecord in types.ts for the full picture and
+  // resolveFinishedGoodsShortfalls below for the Production side.
+  function applyFinishedGoodsShortfallDeltas(
+    updates: Record<string, unknown>,
+    erpData: ERPData,
+    rateCardId: string,
+    invoiceNo: string,
+    date: string,
+    oldPieces: Map<string, number>,
+    newPieces: Map<string, number>,
+    now: string
+  ) {
+    const ids = new Set<string>([...oldPieces.keys(), ...newPieces.keys()])
+    ids.forEach((finishedGoodsId) => {
+      const record = erpData.finishedGoods[finishedGoodsId]
+      if (!record) return
+      const delta = (newPieces.get(finishedGoodsId) ?? 0) - (oldPieces.get(finishedGoodsId) ?? 0)
+      if (delta === 0) return
+      const beforeQty = record.stockQty
+      const afterQty = beforeQty - delta
+      const shortfallDelta = Math.max(0, -afterQty) - Math.max(0, -beforeQty)
+      if (shortfallDelta === 0) return
+
+      const existing = Object.values(erpData.stockShortfalls).find(
+        (row) => row.rateCardId === rateCardId && row.finishedGoodsId === finishedGoodsId
+      )
+
+      if (shortfallDelta > 0) {
+        if (existing) {
+          updates[`stockShortfalls/${existing.id}/shortfallQty`] = existing.shortfallQty + shortfallDelta
+          updates[`stockShortfalls/${existing.id}/remainingQty`] = existing.remainingQty + shortfallDelta
+          updates[`stockShortfalls/${existing.id}/status`] = 'open'
+          updates[`stockShortfalls/${existing.id}/updatedAt`] = now
+        } else {
+          const shortfallId = createId('shortfall')
+          const entry: StockShortfallRecord = {
+            id: shortfallId,
+            finishedGoodsId,
+            finishedGoodsName: record.name,
+            rateCardId,
+            invoiceNo,
+            date,
+            shortfallQty: shortfallDelta,
+            remainingQty: shortfallDelta,
+            status: 'open',
+            resolutions: [],
+            createdAt: now,
+            updatedAt: now,
+          }
+          updates[`stockShortfalls/${shortfallId}`] = entry
+        }
+      } else if (existing) {
+        // Editing this invoice down, or deleting it, restores stock —
+        // shrink (or drop entirely) the shortfall it's responsible for.
+        // Capped at what's still open; if Production already resolved part
+        // of it, this can't claw that back below zero.
+        const reduceBy = Math.min(-shortfallDelta, existing.remainingQty)
+        const nextRemaining = existing.remainingQty - reduceBy
+        const nextShortfall = Math.max(0, existing.shortfallQty - reduceBy)
+        if (nextRemaining <= 0 && existing.resolutions.length === 0) {
+          updates[`stockShortfalls/${existing.id}`] = null
+        } else {
+          updates[`stockShortfalls/${existing.id}/shortfallQty`] = nextShortfall
+          updates[`stockShortfalls/${existing.id}/remainingQty`] = nextRemaining
+          updates[`stockShortfalls/${existing.id}/status`] = nextRemaining <= 0 ? 'resolved' : 'open'
+          updates[`stockShortfalls/${existing.id}/updatedAt`] = now
+        }
+      }
+    })
+  }
+
+  // The Production side of the same feature — newly produced Finished
+  // Goods stock auto-covers the oldest open shortfalls first (FIFO), same
+  // "earliest claim first" shape as a dealer's due netting down as
+  // collections come in. Only ever consumes up to `producedQty`; any
+  // leftover production beyond what a shortfall needed is just normal
+  // surplus stock, untouched here.
+  function resolveFinishedGoodsShortfalls(
+    updates: Record<string, unknown>,
+    erpData: ERPData,
+    finishedGoodsId: string,
+    producedQty: number,
+    productionBatchId: string,
+    date: string,
+    now: string
+  ) {
+    let remaining = producedQty
+    const openShortfalls = Object.values(erpData.stockShortfalls)
+      .filter((row) => row.finishedGoodsId === finishedGoodsId && row.status === 'open' && row.remainingQty > 0)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+
+    for (const shortfall of openShortfalls) {
+      if (remaining <= 0) break
+      const covered = Math.min(remaining, shortfall.remainingQty)
+      const nextRemaining = shortfall.remainingQty - covered
+      updates[`stockShortfalls/${shortfall.id}/remainingQty`] = nextRemaining
+      updates[`stockShortfalls/${shortfall.id}/status`] = nextRemaining <= 0 ? 'resolved' : 'open'
+      updates[`stockShortfalls/${shortfall.id}/resolutions`] = [
+        ...shortfall.resolutions,
+        { productionBatchId, qty: covered, date },
+      ]
+      updates[`stockShortfalls/${shortfall.id}/updatedAt`] = now
+      remaining -= covered
+    }
+  }
+
+  // Reverses resolveFinishedGoodsShortfalls — deleting a production batch
+  // un-covers whatever shortfalls it had resolved, restoring their
+  // remainingQty and dropping back to 'open'.
+  function reverseFinishedGoodsShortfallResolutions(
+    updates: Record<string, unknown>,
+    erpData: ERPData,
+    productionBatchId: string,
+    now: string
+  ) {
+    Object.values(erpData.stockShortfalls).forEach((shortfall) => {
+      const matches = shortfall.resolutions.filter((resolution) => resolution.productionBatchId === productionBatchId)
+      if (!matches.length) return
+      const restored = matches.reduce((sum, resolution) => sum + resolution.qty, 0)
+      const nextRemaining = shortfall.remainingQty + restored
+      const nextResolutions = shortfall.resolutions.filter(
+        (resolution) => resolution.productionBatchId !== productionBatchId
+      )
+      updates[`stockShortfalls/${shortfall.id}/remainingQty`] = nextRemaining
+      updates[`stockShortfalls/${shortfall.id}/status`] = nextRemaining > 0 ? 'open' : 'resolved'
+      updates[`stockShortfalls/${shortfall.id}/resolutions`] = nextResolutions
+      updates[`stockShortfalls/${shortfall.id}/updatedAt`] = now
+    })
+  }
+
   async function saveRateCard(input: RateCardInput, rateCardId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -5229,6 +5564,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       newPieces.finishedGoodsPieces,
       now
     )
+    applyFinishedGoodsShortfallDeltas(
+      updates,
+      data,
+      id,
+      invoiceNo,
+      rateCard.date,
+      oldPieces.finishedGoodsPieces,
+      newPieces.finishedGoodsPieces,
+      now
+    )
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -5257,6 +5602,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const empty = new Map<string, number>()
     applyRateCardStockDeltas(updates, 'products', data.products, pieces.productPieces, empty, now)
     applyRateCardStockDeltas(updates, 'finishedGoods', data.finishedGoods, pieces.finishedGoodsPieces, empty, now)
+    applyFinishedGoodsShortfallDeltas(
+      updates,
+      data,
+      rateCardId,
+      rateCard.invoiceNo,
+      rateCard.date,
+      pieces.finishedGoodsPieces,
+      empty,
+      now
+    )
 
     await update(ref(db, 'erp'), updates)
     await writeActivity('ratecard_deleted', 'sales', `Deleted rate card ${rateCard.invoiceNo}.`)
@@ -5667,6 +6022,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveExpense,
       updateExpenseApproval,
       saveInvestor,
+      deleteInvestor,
       deleteExpense,
       saveBudget,
       deleteBudget,

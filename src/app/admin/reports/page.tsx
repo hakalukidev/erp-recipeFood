@@ -1,5 +1,5 @@
-import { SalesReportsScreen } from '@/components/admin/SalesReportsScreen';
+import { ReportsHubScreen } from '@/components/admin/ReportsHubScreen';
 
-export default function SalesReportsPage() {
-  return <SalesReportsScreen />;
+export default function ReportsPage() {
+  return <ReportsHubScreen />;
 }

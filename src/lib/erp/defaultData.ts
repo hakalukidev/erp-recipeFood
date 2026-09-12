@@ -1,6 +1,10 @@
 import type { ERPData, PermissionDefinition } from '@/lib/erp/types'
 
-export type ModuleAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export'
+// 'company'/'depot'/'dealer' (2026-09-12 client request) back the
+// invoice-voucher module only — which of the three printable vouchers on
+// the Invoice page (rate-card/page.tsx) a role can see/print, independent
+// of the page-level products:view permission that gates the page itself.
+export type ModuleAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export' | 'company' | 'depot' | 'dealer'
 
 // Exported so the Role & Permission Matrix (Section 63 — RoleManagementSection.tsx)
 // renders the exact same module x action grid these ids are built from.
@@ -11,6 +15,9 @@ export const ACTION_LABELS: Record<ModuleAction, string> = {
   delete: 'Delete',
   approve: 'Approve',
   export: 'Export',
+  company: 'Company Voucher',
+  depot: 'Depot Voucher',
+  dealer: 'Dealer Voucher',
 }
 
 export const MODULE_DEFINITIONS: Array<{
@@ -20,10 +27,13 @@ export const MODULE_DEFINITIONS: Array<{
 }> = [
   { module: 'dashboard', label: 'Dashboard', actions: ['view'] },
   { module: 'products', label: 'Inventory', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'invoice-voucher', label: 'Invoice', actions: ['company', 'depot', 'dealer'] },
   { module: 'orders', label: 'Sales & orders', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { module: 'dealers', label: 'Dealers', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'purchase', label: 'Purchase', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'vendor', label: 'Vendor', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'accounting', label: 'Accounting', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'reports', label: 'Reports', actions: ['view', 'export'] },
   { module: 'users', label: 'Users & roles', actions: ['view', 'create', 'edit', 'delete'] },
 ]
@@ -93,10 +103,13 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:approve', 'orders:export',
           'dealers:view', 'dealers:export',
           'purchase:view', 'purchase:export',
+          'vendor:view', 'vendor:export',
           'finance:view', 'finance:export',
+          'accounting:view', 'accounting:export',
           'reports:view', 'reports:export',
           'users:view',
         ]),
@@ -108,10 +121,13 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:approve', 'orders:export',
           'dealers:view', 'dealers:export',
           'purchase:view', 'purchase:export',
+          'vendor:view', 'vendor:export',
           'finance:view', 'finance:export',
+          'accounting:view', 'accounting:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -122,9 +138,11 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:create', 'products:edit', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:create', 'orders:edit', 'orders:export',
           'dealers:view', 'dealers:create', 'dealers:edit', 'dealers:export',
           'purchase:view', 'purchase:create', 'purchase:edit', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:edit', 'vendor:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -135,9 +153,11 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'finance:view', 'finance:create', 'finance:edit', 'finance:delete', 'finance:export',
+          'accounting:view', 'accounting:create', 'accounting:edit', 'accounting:delete', 'accounting:export',
           'orders:view', 'orders:approve', 'orders:export',
           'dealers:view',
           'purchase:view', 'purchase:create', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -147,11 +167,48 @@ export function createDefaultERPData(): ERPData {
         description: 'Tracks revenue, dues, expenses, and financial reporting.',
         permissions: toPermissionSet([
           'dashboard:view',
+          'products:view',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'finance:view', 'finance:create', 'finance:edit', 'finance:export',
+          'accounting:view', 'accounting:create', 'accounting:edit', 'accounting:export',
           'reports:view', 'reports:export',
           'orders:view',
           'dealers:view',
           'purchase:view', 'purchase:create', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:export',
+        ]),
+      },
+      // Section 63 / 2026-09-12 client request — the client's own
+      // "ব্যবহারিক রোল" pair. Account Officer sees the Depot/Dealer
+      // vouchers on the Invoice page but deliberately NOT the Company
+      // voucher (invoice-voucher:company omitted), plus Product Return,
+      // Expense, Vendor, Purchase, and Sales Reports.
+      account_officer: {
+        id: 'account_officer',
+        name: 'Account Officer',
+        description: 'Invoice (Depot/Dealer vouchers only), Product Return, Expense, Vendor, Purchase, and Sales Reports.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'orders:view',
+          'products:view', 'products:create',
+          'invoice-voucher:depot', 'invoice-voucher:dealer',
+          'finance:view', 'finance:create', 'finance:export',
+          'purchase:view', 'purchase:create', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:export',
+          'reports:view', 'reports:export',
+        ]),
+      },
+      // Only Vendor + Purchase input — both live on the same page
+      // (/admin/purchase + /admin/vendors) so this one permission pair per
+      // module is the whole role.
+      purchase_manager: {
+        id: 'purchase_manager',
+        name: 'Purchase Manager',
+        description: 'Vendor and Purchase department input only.',
+        permissions: toPermissionSet([
+          'dashboard:view',
+          'purchase:view', 'purchase:create',
+          'vendor:view', 'vendor:create',
         ]),
       },
       sales_manager: {
@@ -161,6 +218,7 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:create', 'orders:edit', 'orders:delete', 'orders:approve', 'orders:export',
           'dealers:view', 'dealers:create', 'dealers:edit', 'dealers:delete', 'dealers:export',
           'reports:view', 'reports:export',
@@ -173,6 +231,7 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:create', 'orders:edit', 'orders:export',
           'dealers:view', 'dealers:create', 'dealers:edit', 'dealers:export',
           'reports:view',
@@ -185,8 +244,10 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:create', 'products:edit', 'products:delete', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view',
           'purchase:view', 'purchase:create', 'purchase:edit', 'purchase:delete', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:edit', 'vendor:delete', 'vendor:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -197,8 +258,10 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:create', 'products:edit',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view',
           'purchase:view', 'purchase:create', 'purchase:edit',
+          'vendor:view', 'vendor:create', 'vendor:edit',
         ]),
       },
       production_manager: {
@@ -208,7 +271,9 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:create', 'products:edit', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'purchase:view', 'purchase:create', 'purchase:edit', 'purchase:export',
+          'vendor:view', 'vendor:create', 'vendor:edit', 'vendor:export',
           'reports:view', 'reports:export',
         ]),
       },
@@ -219,6 +284,7 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:edit',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'reports:view',
         ]),
       },
@@ -239,10 +305,13 @@ export function createDefaultERPData(): ERPData {
         permissions: toPermissionSet([
           'dashboard:view',
           'products:view', 'products:export',
+          'invoice-voucher:company', 'invoice-voucher:depot', 'invoice-voucher:dealer',
           'orders:view', 'orders:export',
           'dealers:view', 'dealers:export',
           'purchase:view', 'purchase:export',
+          'vendor:view', 'vendor:export',
           'finance:view', 'finance:export',
+          'accounting:view', 'accounting:export',
           'reports:view', 'reports:export',
           'users:view',
         ]),
@@ -566,6 +635,7 @@ export function createDefaultERPData(): ERPData {
     vendorPayments: {},
     materialUsages: {},
     finishedGoods: {},
+    stockShortfalls: {},
     productionBatches: {},
     qualityChecks: {},
     qcHolds: {},

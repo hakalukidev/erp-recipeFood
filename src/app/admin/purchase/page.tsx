@@ -4,13 +4,12 @@ import { useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Boxes,
+  CheckCircle2,
   Edit,
   Factory,
   Layers,
-  MapPin,
   Minus,
   Package,
-  Phone,
   Plus,
   Printer,
   Search,
@@ -63,7 +62,6 @@ import type {
 } from '@/lib/erp/types'
 import {
   computeMaterialAvailablePieces,
-  computeVendorDue,
   createId,
   formatDate,
   sortByCreatedAtDesc,
@@ -96,25 +94,6 @@ const CATEGORY_LABEL: Record<PurchaseMaterialCategory, string> = {
 const PACKAGING_TYPES: PackagingType[] = ['Packet', 'Pouch', 'Carton', 'Bottle', 'Sack', 'Sticker', 'Other']
 
 const UNIT_LABEL: Record<PurchaseMaterialUnit, string> = { kg: 'Kg', pcs: 'Pcs' }
-
-// ---- Vendor dialog ---------------------------------------------------------
-type VendorFormState = {
-  name: string
-  proprietorName: string
-  phone: string
-  address: string
-}
-
-const emptyVendorForm: VendorFormState = { name: '', proprietorName: '', phone: '', address: '' }
-
-function formFromVendor(vendor: VendorRecord): VendorFormState {
-  return {
-    name: vendor.name,
-    proprietorName: vendor.proprietorName ?? '',
-    phone: vendor.phone,
-    address: vendor.address,
-  }
-}
 
 // ---- Material dialog --------------------------------------------------------
 type MaterialFormState = {
@@ -309,21 +288,18 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord) 
   `
 }
 
-type SectionId = 'purchases' | 'materials' | 'production' | 'finishedGoods' | 'vendors'
+type SectionId = 'purchases' | 'materials' | 'production' | 'finishedGoods'
 
 const SECTIONS: Array<{ id: SectionId; label: string; description: string }> = [
   { id: 'purchases', label: 'Purchase Entry', description: 'Daily buys from vendors — Kg, rate, paid, due' },
   { id: 'materials', label: 'Materials & Stock', description: 'Raw + packaging material stock and low-stock alerts' },
   { id: 'production', label: 'Production Entry', description: 'Raw material repacked into Finished Goods pack sizes' },
   { id: 'finishedGoods', label: 'Finished Goods', description: 'Production output stock, ready for Rate Card invoicing' },
-  { id: 'vendors', label: 'Vendors', description: 'Vendor directory and running due' },
 ]
 
 export default function PurchasePage() {
   const {
     data,
-    saveVendor,
-    deleteVendor,
     savePurchaseMaterial,
     deletePurchaseMaterial,
     createPurchase,
@@ -346,6 +322,18 @@ export default function PurchasePage() {
   const finishedGoodsList = useMemo(() => sortByCreatedAtDesc(toArray(data?.finishedGoods)), [data?.finishedGoods])
   const finishedGoodsById = useMemo(() => new Map(finishedGoodsList.map((item) => [item.id, item])), [finishedGoodsList])
   const productionBatches = useMemo(() => sortByCreatedAtDesc(toArray(data?.productionBatches)), [data?.productionBatches])
+  // "পুরনো ডিলার ইনভয়েসের stock reconciliation" (2026-09-12) — negative
+  // stock a Rate Card invoice caused, auto-linked/resolved against later
+  // Production output. Open ones first, then resolved ones (newest first
+  // within each group) so what still needs producing surfaces at the top.
+  const stockShortfalls = useMemo(() => {
+    const rows = sortByCreatedAtDesc(toArray(data?.stockShortfalls))
+    return [...rows].sort((left, right) => (left.status === right.status ? 0 : left.status === 'open' ? -1 : 1))
+  }, [data?.stockShortfalls])
+  const openShortfallCount = useMemo(
+    () => stockShortfalls.filter((row) => row.status === 'open').length,
+    [stockShortfalls]
+  )
 
   const [section, setSection] = useState<SectionId>('purchases')
   const [query, setQuery] = useState('')
@@ -388,68 +376,6 @@ export default function PurchasePage() {
     }
     return options.sort((a, b) => a.label.localeCompare(b.label))
   }, [data?.products])
-
-  // ---- Vendors --------------------------------------------------------------
-  const [vendorDialogOpen, setVendorDialogOpen] = useState(false)
-  const [editingVendor, setEditingVendor] = useState<VendorRecord | null>(null)
-  const [vendorForm, setVendorForm] = useState<VendorFormState>(emptyVendorForm)
-
-  const vendorDueById = useMemo(() => {
-    const map = new Map<string, number>()
-    vendors.forEach((vendor) => map.set(vendor.id, computeVendorDue(data ?? null, vendor.id)))
-    return map
-  }, [data, vendors])
-
-  const filteredVendors = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    if (!normalized) return vendors
-    return vendors.filter((vendor) =>
-      [vendor.name, vendor.proprietorName ?? '', vendor.phone, vendor.address].join(' ').toLowerCase().includes(normalized)
-    )
-  }, [vendors, query])
-
-  function openCreateVendorDialog() {
-    setEditingVendor(null)
-    setVendorForm(emptyVendorForm)
-    setFeedback(null)
-    setVendorDialogOpen(true)
-  }
-
-  function openEditVendorDialog(vendor: VendorRecord) {
-    setEditingVendor(vendor)
-    setVendorForm(formFromVendor(vendor))
-    setFeedback(null)
-    setVendorDialogOpen(true)
-  }
-
-  async function handleSaveVendor() {
-    setFeedback(null)
-    try {
-      await saveVendor(
-        {
-          name: vendorForm.name,
-          proprietorName: vendorForm.proprietorName,
-          phone: vendorForm.phone,
-          address: vendorForm.address,
-        },
-        editingVendor?.id
-      )
-      setVendorDialogOpen(false)
-      setFeedback(editingVendor ? 'Vendor details updated.' : 'New vendor added.')
-    } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to save vendor.')
-    }
-  }
-
-  async function handleDeleteVendor(vendor: VendorRecord) {
-    setFeedback(null)
-    try {
-      await deleteVendor(vendor.id)
-      setFeedback(`${vendor.name} removed from the vendor list.`)
-    } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete vendor.')
-    }
-  }
 
   // ---- Materials & stock ------------------------------------------------------
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false)
@@ -890,19 +816,6 @@ export default function PurchasePage() {
     printWindow.document.write(html)
     printWindow.document.close()
   }
-
-  const vendorExportHeaders = ['Vendor Name', 'Proprietor', 'Phone', 'Address', 'Current Due']
-  const vendorExportRows = useMemo(
-    () =>
-      filteredVendors.map((vendor) => [
-        vendor.name,
-        vendor.proprietorName ?? '',
-        vendor.phone,
-        vendor.address,
-        (vendorDueById.get(vendor.id) ?? 0).toFixed(2),
-      ]),
-    [filteredVendors, vendorDueById]
-  )
 
   const materialExportHeaders = ['Material', 'Category', 'Type', 'Unit', 'Stock', 'Available Pieces', 'Min Stock']
   const materialExportRows = useMemo(
@@ -1600,111 +1513,59 @@ export default function PurchasePage() {
                 </div>
               </CardContent>
             </Card>
-          </div>
-        ) : null}
 
-        {section === 'vendors' ? (
-          <div className="space-y-6">
-            <Card className="w-full max-w-xs border-border/70 shadow-sm">
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">Vendors</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{vendors.length.toLocaleString('en-BD')}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Total vendors on file</p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/70 shadow-sm">
-              <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <CardTitle>Vendor list</CardTitle>
-                  <CardDescription>
-                    Search by vendor/proprietor name, phone, or address. Current due is the live sum of every unpaid
-                    purchase against them.
-                  </CardDescription>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      className="pl-9"
-                      placeholder="Search by vendor/proprietor name, phone, or address"
-                    />
-                  </div>
-                  <Button onClick={openCreateVendorDialog} className="h-10 rounded-xl">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add vendor
-                  </Button>
-                  <ExportMenu filenameBase="vendors" title="Vendors" headers={vendorExportHeaders} rows={vendorExportRows} />
-                </div>
+            <Card className={cn('border-border/70 shadow-sm', openShortfallCount > 0 && 'border-destructive/50 bg-destructive/5')}>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-4.5 w-4.5" />
+                  Stock shortfalls
+                </CardTitle>
+                <CardDescription>
+                  A Rate Card invoice can bill out a Finished Goods item before it's actually been produced — stock
+                  goes negative and the shortfall is tracked here against that invoice. Recording a Production batch
+                  for the same item auto-covers the oldest open shortfall first; {openShortfallCount > 0
+                    ? `${openShortfallCount} still ${openShortfallCount === 1 ? 'needs' : 'need'} producing.`
+                    : 'none are currently open.'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Vendor name</TableHead>
-                        <TableHead>Proprietor</TableHead>
-                        <TableHead>Mobile</TableHead>
-                        <TableHead>Address</TableHead>
-                        <TableHead className="text-right">Current Due</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
+                        <TableHead>Finished Goods</TableHead>
+                        <TableHead>Invoice</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Shortfall</TableHead>
+                        <TableHead className="text-right">Remaining</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredVendors.map((vendor) => (
-                        <TableRow key={vendor.id}>
-                          <TableCell className="min-w-56">
-                            <div className="flex items-center gap-3">
-                              <Avatar className="h-10 w-10">
-                                <AvatarFallback className="bg-muted text-muted-foreground">
-                                  <Truck className="h-4 w-4" />
-                                </AvatarFallback>
-                              </Avatar>
-                              <p className="font-semibold">{vendor.name}</p>
-                            </div>
-                          </TableCell>
-                          <TableCell className="min-w-40">{vendor.proprietorName || 'N/A'}</TableCell>
-                          <TableCell className="min-w-44">
-                            <div className="flex items-center gap-2">
-                              <Phone className="h-4 w-4 text-muted-foreground" />
-                              <span>{vendor.phone || 'N/A'}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="min-w-48">
-                            <div className="flex items-center gap-2">
-                              <MapPin className="h-4 w-4 text-muted-foreground" />
-                              <span>{vendor.address || 'N/A'}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <span className={cn((vendorDueById.get(vendor.id) ?? 0) > 0 && 'font-semibold text-destructive')}>
-                              {formatAmount(vendorDueById.get(vendor.id) ?? 0)}
-                            </span>
-                          </TableCell>
+                      {stockShortfalls.map((row) => (
+                        <TableRow key={row.id}>
+                          <TableCell className="font-medium">{row.finishedGoodsName}</TableCell>
+                          <TableCell className="text-muted-foreground">{row.invoiceNo}</TableCell>
+                          <TableCell className="text-muted-foreground">{row.date}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatQty(row.shortfallQty)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatQty(row.remainingQty)}</TableCell>
                           <TableCell>
-                            <div className="flex justify-end gap-2">
-                              <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditVendorDialog(vendor)} aria-label={`Edit ${vendor.name}`}>
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-9 w-9 text-destructive hover:text-destructive"
-                                onClick={() => handleDeleteVendor(vendor)}
-                                aria-label={`Delete ${vendor.name}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
+                            {row.status === 'open' ? (
+                              <Badge variant="destructive" className="gap-1">
+                                <AlertTriangle className="h-3 w-3" /> Awaiting production
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="gap-1 text-emerald-600">
+                                <CheckCircle2 className="h-3 w-3" /> Resolved
+                              </Badge>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
-                      {filteredVendors.length === 0 ? (
+                      {stockShortfalls.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">
-                            No vendors found.
+                          <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                            No invoice has ever sold a Finished Goods item ahead of its stock.
                           </TableCell>
                         </TableRow>
                       ) : null}
@@ -1716,66 +1577,6 @@ export default function PurchasePage() {
           </div>
         ) : null}
       </div>
-
-      {/* ---- Vendor dialog ---- */}
-      <Dialog open={vendorDialogOpen} onOpenChange={setVendorDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editingVendor ? 'Edit vendor' : 'Add new vendor'}</DialogTitle>
-            <DialogDescription>Vendor name is required; proprietor name, mobile number, and address are optional.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Vendor name<span className="ml-0.5 text-rose-500">*</span>
-              </p>
-              <Input
-                value={vendorForm.name}
-                onChange={(event) => setVendorForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="e.g. M/S. Karim Traders"
-              />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Proprietor name <span className="font-normal text-muted-foreground">(optional)</span>
-              </p>
-              <Input
-                value={vendorForm.proprietorName}
-                onChange={(event) => setVendorForm((current) => ({ ...current, proprietorName: event.target.value }))}
-                placeholder="e.g. Mr. Karim Hossain"
-              />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Mobile number <span className="font-normal text-muted-foreground">(optional)</span>
-              </p>
-              <Input
-                value={vendorForm.phone}
-                onChange={(event) => setVendorForm((current) => ({ ...current, phone: event.target.value }))}
-                placeholder="e.g. 01711-000000"
-              />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">
-                Address <span className="font-normal text-muted-foreground">(optional)</span>
-              </p>
-              <Input
-                value={vendorForm.address}
-                onChange={(event) => setVendorForm((current) => ({ ...current, address: event.target.value }))}
-                placeholder="e.g. Karwan Bazar, Dhaka"
-              />
-            </div>
-            <div className="flex justify-end gap-3">
-              <Button type="button" variant="outline" className="rounded-xl" onClick={() => setVendorDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="button" className="rounded-xl" onClick={() => void handleSaveVendor()}>
-                {editingVendor ? 'Update vendor' : 'Save vendor'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* ---- Material dialog ---- */}
       <Dialog open={materialDialogOpen} onOpenChange={setMaterialDialogOpen}>
@@ -1981,7 +1782,7 @@ export default function PurchasePage() {
                   onChange={setPurchaseVendorId}
                   placeholder="Select a vendor"
                   searchPlaceholder="Search vendors..."
-                  emptyText="No vendors found — add one in the Vendors tab first."
+                  emptyText="No vendors found — add one on the Vendor page first."
                 />
               </div>
               <div className="space-y-1">

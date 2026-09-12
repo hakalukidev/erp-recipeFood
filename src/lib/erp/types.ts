@@ -265,6 +265,7 @@ export type LedgerAccount =
   | 'utility'
   | 'travel'
   | 'mfs'
+  | 'loan_repayment'
   | 'manual'
 
 export type LedgerEntryRecord = {
@@ -803,10 +804,15 @@ export type ProductReturnInput = {
 //      stock without anyone re-typing a running total, and flags what needs
 //      buying next (stockQty <= minStock).
 //
-// Deliberately NOT posted to the ledger/Automatic Accounting Engine — same
-// simplification as CashMaintenanceRecord's "goods/packaging purchase"
-// category (see the comment there): this is a standalone procurement +
-// stock log, not a Chart-of-Accounts-integrated module.
+// Deliberately NOT posted to the full ledger/Automatic Accounting Engine —
+// this is a standalone procurement + stock log, not a Chart-of-Accounts-
+// integrated module. It DOES hit cash flow though (2026-09-12 client
+// request): the cash actually paid out — a purchase's own `paid` at save
+// time, and any later VendorPaymentRecord paydown — auto-posts a
+// CashMaintenanceRecord under পণ্য ক্রয় / প্যাকেজিং মেটেরিয়ালস ক্রয়
+// (split proportionally to the raw-vs-packaging mix of the purchase's line
+// items), so the Loan & Cash Maintenance reconciliation actually sees it —
+// see buildPurchaseCashEntries in provider.tsx.
 export type VendorRecord = {
   id: string
   name: string
@@ -905,6 +911,10 @@ export type PurchaseRecord = {
   paid: number
   due: number
   note?: string
+  // The CashMaintenanceRecord(s) auto-posted for `paid` at save time — see
+  // buildPurchaseCashEntries in provider.tsx. Up to two entries (goods +
+  // packaging) when a purchase mixes both material categories.
+  cashMaintenanceIds?: string[]
   createdBy: string
   createdByName: string
   createdAt: string
@@ -932,6 +942,9 @@ export type VendorPaymentRecord = {
   amount: number
   date: string
   note?: string
+  // Same as PurchaseRecord.cashMaintenanceIds, but for this paydown's amount
+  // — see buildPurchaseCashEntries in provider.tsx.
+  cashMaintenanceIds?: string[]
   createdBy: string
   createdByName: string
   createdAt: string
@@ -1073,6 +1086,48 @@ export type ProductionBatchInput = {
     qtyProduced: number
     unitWeightKg: number
   }>
+}
+
+// ---- Stock Shortfall (Finished Goods) — 2026-09-12 client request --------
+// A dealer invoice (Rate Card) is allowed to sell a Finished Goods item
+// before it's actually been produced — applyRateCardStockDeltas in
+// provider.tsx deliberately takes stock negative rather than blocking the
+// sale. Each bit of negative stock a specific invoice is responsible for is
+// tracked here as an open shortfall; a later Production batch that adds to
+// that same Finished Goods item's stock auto-consumes the oldest open
+// shortfalls first (FIFO) until they're covered — see
+// resolveFinishedGoodsShortfalls / applyFinishedGoodsShortfallDeltas in
+// provider.tsx. Purely a visibility/audit trail — it never changes stockQty
+// itself (that stays just the one running total), it only tracks WHICH
+// invoice(s) a negative figure traces back to and whether production has
+// since covered it. Scoped to Finished Goods only — the main Product List
+// has no Purchase/Production-driven restock path in this app for the same
+// reconciliation to make sense against.
+export type StockShortfallResolution = {
+  productionBatchId: string
+  qty: number
+  date: string
+}
+
+export type StockShortfallStatus = 'open' | 'resolved'
+
+export type StockShortfallRecord = {
+  id: string
+  finishedGoodsId: string
+  finishedGoodsName: string
+  rateCardId: string
+  invoiceNo: string
+  date: string
+  // Current magnitude this invoice is responsible for — shrinks if the
+  // invoice is later edited down or deleted (see
+  // applyFinishedGoodsShortfallDeltas), independent of remainingQty.
+  shortfallQty: number
+  // What's still uncovered by production — 0 once fully resolved.
+  remainingQty: number
+  status: StockShortfallStatus
+  resolutions: StockShortfallResolution[]
+  createdAt: string
+  updatedAt: string
 }
 
 // ---- Quality Control (Section 26) ---------------------------------------
@@ -1273,6 +1328,17 @@ export type ExpenseRecord = {
   // from memory.
   employeeId?: string
   employeeName?: string
+  // Only meaningful on an EXPENSE_LOAN_REPAYMENT_CATEGORY entry (2026-09-12
+  // client request): which loan account this repayment was against.
+  // loanTransactionId is the matching LoanTransactionRecord (type
+  // 'repayment') auto-created/updated alongside this expense — see
+  // saveExpense in provider.tsx — so the same entry shows up on both the
+  // Expense chart (hits Company Earnings' net profit, unlike a Cash
+  // Maintenance 'ঋণ পরিশোধ' entry) and the Loan & Investment ledger, without
+  // retyping it twice.
+  loanAccountId?: string
+  loanMemberName?: string
+  loanTransactionId?: string
   createdBy: string
   createdByName: string
   createdAt: string
@@ -1522,6 +1588,7 @@ export type ERPData = {
   vendorPayments: Record<string, VendorPaymentRecord>
   materialUsages: Record<string, MaterialUsageRecord>
   finishedGoods: Record<string, FinishedGoodsRecord>
+  stockShortfalls: Record<string, StockShortfallRecord>
   productionBatches: Record<string, ProductionBatchRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
@@ -1552,6 +1619,12 @@ export type InvestorRecord = {
   products: string
   amount: number
   note: string
+  // The CashMaintenanceRecord auto-posted (2026-09-12 client request) under
+  // 'নতুন মার্কেট ইনভেস্টমেন্ট' for this investment — kept in sync with
+  // `amount` on every edit rather than one entry per edit, since `amount`
+  // is this investor's current total, not a running ledger. See saveInvestor
+  // in provider.tsx.
+  cashMaintenanceId?: string
   createdAt: string
   updatedAt: string
 }
@@ -1646,6 +1719,9 @@ export type ExpenseInput = {
   // Only kept when category is EXPENSE_SALARY_CATEGORY — see
   // ExpenseRecord.employeeId.
   employeeId?: string
+  // Only kept when category is EXPENSE_LOAN_REPAYMENT_CATEGORY — see
+  // ExpenseRecord.loanAccountId.
+  loanAccountId?: string
 }
 
 export type InvestorInput = {

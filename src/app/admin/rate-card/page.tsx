@@ -740,7 +740,7 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord, dealer?: DealerRecord)
 }
 
 export default function RateCardPage() {
-  const { data, saveRateCard, deleteRateCard } = useERP()
+  const { data, saveRateCard, deleteRateCard, hasPermission } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const finishedGoods = useMemo(() => toArray(data?.finishedGoods), [data?.finishedGoods])
@@ -1058,15 +1058,21 @@ export default function RateCardPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openEditDialog(card)}>Edit</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId)))}>
-                              <Printer className="mr-2 h-4 w-4" /> Print Company voucher
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
-                              <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
-                              <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
-                            </DropdownMenuItem>
+                            {hasPermission('invoice-voucher:company') ? (
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId)))}>
+                                <Printer className="mr-2 h-4 w-4" /> Print Company voucher
+                              </DropdownMenuItem>
+                            ) : null}
+                            {hasPermission('invoice-voucher:depot') ? (
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
+                                <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
+                              </DropdownMenuItem>
+                            ) : null}
+                            {hasPermission('invoice-voucher:dealer') ? (
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
+                                <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
+                              </DropdownMenuItem>
+                            ) : null}
                             {isTradeSales ? (
                               <DropdownMenuItem onClick={() => openPrintWindow(buildRetailInvoiceHtml(card, dealerForId(card.dealerId)))}>
                                 <Printer className="mr-2 h-4 w-4" /> Print Retail Sales voucher

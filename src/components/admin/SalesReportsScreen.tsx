@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react'
 import { BadgePercent, FileBarChart, Package, Printer, Receipt, Search, Store, Tags } from 'lucide-react'
 
-import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -141,7 +140,10 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
 // utils.ts for how the dealer/product/commission-vs-others numbers below are
 // derived, and the "Sale type" field on the Invoice form for how a new
 // invoice gets tagged Commission-based vs Others going forward.
-export function SalesReportsScreen() {
+// Renders just the Sales tab's content — no AdminShell of its own, since
+// this now lives inside the Reports Hub's own AdminShell/tab switcher (see
+// ReportsHubScreen.tsx) alongside Expense/Purchase/Vendor/Loan report tabs.
+export function SalesReportsContent() {
   const { data, classifyRateCardSaleType } = useERP()
   const currency = data?.settings.currency
   const summary = useMemo(() => buildSalesReportSummary(data), [data])
@@ -226,7 +228,6 @@ export function SalesReportsScreen() {
   const hasUnclassified = summary.bySaleType.unclassified > 0
 
   return (
-    <AdminShell active="Sales Reports">
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
@@ -594,6 +595,5 @@ export function SalesReportsScreen() {
           </Card>
         ) : null}
       </div>
-    </AdminShell>
   )
 }
