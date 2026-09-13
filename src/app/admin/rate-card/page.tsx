@@ -12,6 +12,7 @@ import {
   Search,
   Trash2,
   TrendingUp,
+  Wallet,
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
@@ -44,7 +45,16 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { DealerCategoryRecord, DealerRecord, DepotRecord, RateCardLineItem, RateCardRecord, SaleType } from '@/lib/erp/types'
+import type {
+  CollectionMethod,
+  CollectionRecord,
+  DealerCategoryRecord,
+  DealerRecord,
+  DepotRecord,
+  RateCardLineItem,
+  RateCardRecord,
+  SaleType,
+} from '@/lib/erp/types'
 import {
   computeDiscountProductRates,
   createId,
@@ -123,6 +133,7 @@ type RateCardForm = {
   saleType: SaleType
   remarks: string
   items: LineItemForm[]
+  paid: string
 }
 
 function emptyRateCardForm(): RateCardForm {
@@ -135,6 +146,7 @@ function emptyRateCardForm(): RateCardForm {
     saleType: DEFAULT_SALE_TYPE,
     remarks: '',
     items: [emptyLineItem()],
+    paid: '0',
   }
 }
 
@@ -360,13 +372,77 @@ const PARTY_BOX_STYLES = `
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
           .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
+          .section-heading { font-size: 13px; font-weight: 700; margin: 16px 0 6px; }
           @media print { button { display: none; } }
 `
+
+// Payment history table shared by every invoice voucher below — same shape
+// as buildPurchaseVoucherHtml's own payment history in app/admin/purchase/
+// page.tsx, on the receivable side: the initial `paid` at invoice time
+// (which has no CollectionRecord of its own) is added back in as the first
+// row so the total always reconciles.
+function buildCollectionHistoryHtml(rateCard: RateCardRecord, collections: CollectionRecord[]) {
+  const initialPaid = (rateCard.paid ?? 0) - collections.reduce((sum, collection) => sum + collection.amount, 0)
+  const rows: Array<{ date: string; receiptNumber: string; method?: string; note?: string; amount: number }> = []
+  if (initialPaid > 0) {
+    rows.push({ date: rateCard.date, receiptNumber: rateCard.invoiceNo, note: 'Paid at invoice time', amount: initialPaid })
+  }
+  for (const collection of collections) {
+    rows.push({
+      date: collection.collectionDate,
+      receiptNumber: collection.receiptNumber,
+      method: collection.method,
+      note: collection.note,
+      amount: collection.amount,
+    })
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date))
+  if (!rows.length) return ''
+
+  const bodyRows = rows
+    .map(
+      (row, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(formatDate(row.date))}</td>
+        <td>${escapeHtml(row.receiptNumber)}</td>
+        <td>${row.method ? escapeHtml(row.method) : ''}</td>
+        <td>${row.note ? escapeHtml(row.note) : ''}</td>
+        <td class="numeric">${formatAmount(row.amount)}</td>
+      </tr>
+    `
+    )
+    .join('')
+
+  return `
+    <p class="section-heading">Payment History</p>
+    <table class="doc" style="margin-top: 0;">
+      <thead>
+        <tr>
+          <th>SL</th>
+          <th>Date</th>
+          <th>Receipt No</th>
+          <th>Method</th>
+          <th>Note</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>${bodyRows}</tbody>
+      <tr class="totals"><td colspan="5">Total Paid</td><td class="numeric">${formatAmount(rateCard.paid ?? 0)}</td></tr>
+    </table>
+  `
+}
 
 // Depot → Dealer invoice: shows DP (= dealerRate, what the dealer pays) and
 // TP (= tpRate, what the dealer resells at) — the gap between the two is the
 // dealer's own margin (Dealer Margin, mirroring Depot Net Profit above).
-function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord, dealer?: DealerRecord) {
+function buildDealerInvoiceHtml(
+  rateCard: RateCardRecord,
+  isCommission: boolean,
+  depot?: DepotRecord,
+  dealer?: DealerRecord,
+  collections: CollectionRecord[] = []
+) {
   const dealerMargin = rateCard.tpRateTotal - rateCard.dealerRateTotal
   const rows = rateCard.items
     .map(
@@ -411,6 +487,8 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean,
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Goods Amount:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
             <tr><td>Dealer Margin:</td><td class="numeric hl">${formatAmount(dealerMargin)}</td></tr>
+            <tr><td>Paid:</td><td class="numeric">${formatAmount(rateCard.paid ?? 0)}</td></tr>
+            <tr><td>Due:</td><td class="numeric hl">${formatAmount(rateCard.due ?? rateCard.dealerRateTotal)}</td></tr>
           </table>
         </div>
 
@@ -449,6 +527,7 @@ function buildDealerInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean,
             </tr>
           </tbody>
         </table>
+        ${buildCollectionHistoryHtml(rateCard, collections)}
         ${rateCard.remarks ? `<p class="remarks"><strong>মন্তব্য:</strong> ${escapeHtml(rateCard.remarks)}</p>` : ''}
         <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
@@ -740,8 +819,18 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord, dealer?: DealerRecord)
 }
 
 export default function RateCardPage() {
-  const { data, saveRateCard, deleteRateCard, hasPermission } = useERP()
+  const { data, saveRateCard, deleteRateCard, recordCollection, updateCollection, hasPermission } = useERP()
   const rateCards = useMemo(() => sortByCreatedAtDesc(toArray(data?.rateCards)), [data?.rateCards])
+  const collections = useMemo(() => toArray(data?.collections), [data?.collections])
+  const collectionsByRateCardId = useMemo(() => {
+    const map = new Map<string, CollectionRecord[]>()
+    for (const collection of collections) {
+      const existing = map.get(collection.rateCardId)
+      if (existing) existing.push(collection)
+      else map.set(collection.rateCardId, [collection])
+    }
+    return map
+  }, [collections])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const finishedGoods = useMemo(() => toArray(data?.finishedGoods), [data?.finishedGoods])
   const finishedGoodsById = useMemo(() => new Map(finishedGoods.map((item) => [item.id, item])), [finishedGoods])
@@ -818,6 +907,20 @@ export default function RateCardPage() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [showBreakdown, setShowBreakdown] = useState(false)
 
+  // ---- Collection dialog (dealer payment tracking, client request 2026-09-13) ----
+  const [collectionCard, setCollectionCard] = useState<RateCardRecord | null>(null)
+  const [editingCollection, setEditingCollection] = useState<CollectionRecord | null>(null)
+  const [collectionDialogOpen, setCollectionDialogOpen] = useState(false)
+  const [collectionAmount, setCollectionAmount] = useState('0')
+  const [collectionMethod, setCollectionMethod] = useState<CollectionMethod>('cash')
+  const [collectionDate, setCollectionDate] = useState(new Date().toISOString().slice(0, 10))
+  const [collectionNote, setCollectionNote] = useState('')
+  const [collectionSaving, setCollectionSaving] = useState(false)
+  const [collectionError, setCollectionError] = useState<string | null>(null)
+
+  const [collectionHistoryCard, setCollectionHistoryCard] = useState<RateCardRecord | null>(null)
+  const [collectionHistoryDialogOpen, setCollectionHistoryDialogOpen] = useState(false)
+
   const filteredRateCards = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return rateCards
@@ -826,6 +929,14 @@ export default function RateCardPage() {
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
   const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
+  // Collections already on file against the invoice being edited — sit
+  // outside form.paid (see openEditDialog above), needed for an accurate
+  // Due preview while editing.
+  const editingCollectionsTotal = useMemo(
+    () =>
+      editingId ? (collectionsByRateCardId.get(editingId) ?? []).reduce((sum, collection) => sum + collection.amount, 0) : 0,
+    [editingId, collectionsByRateCardId]
+  )
 
   // Sale type selector's options — the live Dealer Category list, plus (only
   // while editing a rate card still holding the pre-dealer-category
@@ -860,6 +971,11 @@ export default function RateCardPage() {
 
   function openEditDialog(card: RateCardRecord) {
     setEditingId(card.id)
+    // `paid` on the form only ever represents the amount entered at
+    // invoice-time — collections already on file sit on top of it (see
+    // saveRateCard in provider.tsx), same paid/collections split
+    // updatePurchase uses for a Purchase's own vendor payments.
+    const collectionsTotal = (collectionsByRateCardId.get(card.id) ?? []).reduce((sum, collection) => sum + collection.amount, 0)
     setForm({
       invoiceNo: card.invoiceNo,
       recipientName: card.recipientName,
@@ -869,6 +985,7 @@ export default function RateCardPage() {
       saleType: card.saleType ?? DEFAULT_SALE_TYPE,
       remarks: card.remarks ?? '',
       items: card.items.map(toLineItemForm),
+      paid: String(Math.max((card.paid ?? 0) - collectionsTotal, 0)),
     })
     setFormError(null)
     setShowBreakdown(false)
@@ -937,6 +1054,7 @@ export default function RateCardPage() {
           saleType: form.saleType,
           remarks: form.remarks.trim() || undefined,
           items,
+          paid: Number(form.paid) || 0,
         },
         editingId ?? undefined
       )
@@ -956,6 +1074,70 @@ export default function RateCardPage() {
       setFeedback(`Deleted rate card ${card.invoiceNo}.`)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete rate card.')
+    }
+  }
+
+  function openCollectionDialog(card: RateCardRecord) {
+    setCollectionCard(card)
+    setEditingCollection(null)
+    setCollectionAmount('0')
+    setCollectionMethod('cash')
+    setCollectionDate(new Date().toISOString().slice(0, 10))
+    setCollectionNote('')
+    setCollectionError(null)
+    setFeedback(null)
+    setCollectionDialogOpen(true)
+  }
+
+  // Edit Option (client request, 2026-09-13) — reuses the same Record
+  // collection dialog, pre-filled from the collection being corrected.
+  function openEditCollectionDialog(card: RateCardRecord, collection: CollectionRecord) {
+    setCollectionCard(card)
+    setEditingCollection(collection)
+    setCollectionAmount(String(collection.amount))
+    setCollectionMethod(collection.method)
+    setCollectionDate(collection.collectionDate)
+    setCollectionNote(collection.note ?? '')
+    setCollectionError(null)
+    setFeedback(null)
+    setCollectionHistoryDialogOpen(false)
+    setCollectionDialogOpen(true)
+  }
+
+  function openCollectionHistoryDialog(card: RateCardRecord) {
+    setCollectionHistoryCard(card)
+    setFeedback(null)
+    setCollectionHistoryDialogOpen(true)
+  }
+
+  async function handleSaveCollection() {
+    if (!collectionCard) return
+    setCollectionError(null)
+    setCollectionSaving(true)
+    try {
+      if (editingCollection) {
+        await updateCollection(editingCollection.id, {
+          amount: Number(collectionAmount) || 0,
+          method: collectionMethod,
+          date: collectionDate,
+          note: collectionNote.trim() || undefined,
+        })
+        setFeedback(`Collection ${editingCollection.receiptNumber} updated against ${collectionCard.invoiceNo}.`)
+      } else {
+        await recordCollection({
+          rateCardId: collectionCard.id,
+          amount: Number(collectionAmount) || 0,
+          method: collectionMethod,
+          collectionDate,
+          note: collectionNote.trim() || undefined,
+        })
+        setFeedback(`Collection recorded against ${collectionCard.invoiceNo}.`)
+      }
+      setCollectionDialogOpen(false)
+    } catch (reason) {
+      setCollectionError(reason instanceof Error ? reason.message : 'Unable to save collection.')
+    } finally {
+      setCollectionSaving(false)
     }
   }
 
@@ -1030,6 +1212,8 @@ export default function RateCardPage() {
                     <TableHead>Sale Type</TableHead>
                     <TableHead className="text-right">Goods Amount</TableHead>
                     <TableHead className="text-right">Depot Net Profit</TableHead>
+                    <TableHead className="text-right">Paid</TableHead>
+                    <TableHead className="text-right">Due</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1049,6 +1233,8 @@ export default function RateCardPage() {
                       </TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal)}</TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal - card.depotRateTotal)}</TableCell>
+                      <TableCell className="text-right text-emerald-600">{formatAmount(card.paid ?? 0)}</TableCell>
+                      <TableCell className="text-right text-destructive">{formatAmount(card.due ?? card.dealerRateTotal)}</TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -1058,6 +1244,15 @@ export default function RateCardPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => openEditDialog(card)}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem disabled={(card.due ?? 0) <= 0} onClick={() => openCollectionDialog(card)}>
+                              <Wallet className="mr-2 h-4 w-4" /> Record collection
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={(collectionsByRateCardId.get(card.id) ?? []).length === 0}
+                              onClick={() => openCollectionHistoryDialog(card)}
+                            >
+                              <Wallet className="mr-2 h-4 w-4" /> Collection history
+                            </DropdownMenuItem>
                             {hasPermission('invoice-voucher:company') ? (
                               <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId)))}>
                                 <Printer className="mr-2 h-4 w-4" /> Print Company voucher
@@ -1069,7 +1264,19 @@ export default function RateCardPage() {
                               </DropdownMenuItem>
                             ) : null}
                             {hasPermission('invoice-voucher:dealer') ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildDealerInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  openPrintWindow(
+                                    buildDealerInvoiceHtml(
+                                      card,
+                                      isCommission,
+                                      depotForDealerId(card.dealerId),
+                                      dealerForId(card.dealerId),
+                                      collectionsByRateCardId.get(card.id) ?? []
+                                    )
+                                  )
+                                }
+                              >
                                 <Printer className="mr-2 h-4 w-4" /> Print Dealer voucher
                               </DropdownMenuItem>
                             ) : null}
@@ -1088,7 +1295,7 @@ export default function RateCardPage() {
                   )})}
                   {filteredRateCards.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                         <Calculator className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         No rate cards yet. Create one to build a Company/Depot/Dealer voucher.
                       </TableCell>
@@ -1533,6 +1740,37 @@ export default function RateCardPage() {
               ) : null}
             </div>
 
+            <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Goods Amount</p>
+                <p className="text-lg font-semibold tabular-nums">{formatAmount(totals.dealerRateTotal)}</p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">
+                  {editingId ? 'Paid at invoice time' : 'Paid now'}
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={Math.max(totals.dealerRateTotal - editingCollectionsTotal, 0)}
+                  value={form.paid}
+                  onChange={(event) => setForm((current) => ({ ...current, paid: event.target.value }))}
+                  className="bg-background"
+                />
+                {editingId && editingCollectionsTotal > 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Plus {formatAmount(editingCollectionsTotal)} already recorded as separate collections — edit those from Collection history.
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Due</p>
+                <p className="text-lg font-semibold text-destructive tabular-nums">
+                  {formatAmount(Math.max(totals.dealerRateTotal - (Number(form.paid) || 0) - editingCollectionsTotal, 0))}
+                </p>
+              </div>
+            </div>
+
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">মন্তব্য / Remarks</label>
               <Textarea
@@ -1551,6 +1789,127 @@ export default function RateCardPage() {
             </Button>
             <Button type="button" onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create rate card'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Record/Edit collection dialog ---- */}
+      <Dialog open={collectionDialogOpen} onOpenChange={setCollectionDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {editingCollection ? `Edit collection ${editingCollection.receiptNumber}` : 'Record collection'} — {collectionCard?.invoiceNo}
+            </DialogTitle>
+            <DialogDescription>
+              {collectionCard
+                ? `${collectionCard.recipientName} — ${formatAmount(
+                    (collectionCard.due ?? 0) + (editingCollection?.amount ?? 0)
+                  )} currently due.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {collectionError ? <p className="text-sm text-destructive">{collectionError}</p> : null}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Amount collected</p>
+              <Input
+                type="number"
+                min={0}
+                max={collectionCard ? (collectionCard.due ?? 0) + (editingCollection?.amount ?? 0) : undefined}
+                value={collectionAmount}
+                onChange={(event) => setCollectionAmount(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Method</p>
+              <Select value={collectionMethod} onValueChange={(value) => setCollectionMethod(value as CollectionMethod)}>
+                <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="bank">Bank</SelectItem>
+                  <SelectItem value="mfs">MFS (bKash/Nagad)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Date</p>
+              <Input type="date" value={collectionDate} onChange={(event) => setCollectionDate(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Note (optional)</p>
+              <Textarea value={collectionNote} onChange={(event) => setCollectionNote(event.target.value)} placeholder="e.g. Collected by SR at dealer point" />
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" className="rounded-xl" onClick={() => setCollectionDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" className="rounded-xl" onClick={() => void handleSaveCollection()} disabled={collectionSaving}>
+                {collectionSaving ? 'Saving…' : editingCollection ? 'Save changes' : 'Record collection'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Collection history dialog ---- */}
+      <Dialog open={collectionHistoryDialogOpen} onOpenChange={setCollectionHistoryDialogOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Collection history — {collectionHistoryCard?.invoiceNo}</DialogTitle>
+            <DialogDescription>
+              {collectionHistoryCard
+                ? `${collectionHistoryCard.recipientName} — ${formatAmount(collectionHistoryCard.paid ?? 0)} collected of ${formatAmount(collectionHistoryCard.dealerRateTotal)} total.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-96 overflow-y-auto rounded-xl border border-border/70">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Receipt No</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(collectionHistoryCard ? collectionsByRateCardId.get(collectionHistoryCard.id) ?? [] : [])
+                  .slice()
+                  .sort((a, b) => a.collectionDate.localeCompare(b.collectionDate))
+                  .map((collection) => (
+                    <TableRow key={collection.id}>
+                      <TableCell>{formatDate(collection.collectionDate)}</TableCell>
+                      <TableCell>{collection.receiptNumber}</TableCell>
+                      <TableCell className="capitalize">{collection.method}</TableCell>
+                      <TableCell className="max-w-40 truncate text-muted-foreground">{collection.note ?? ''}</TableCell>
+                      <TableCell className="text-right">{formatAmount(collection.amount)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => collectionHistoryCard && openEditCollectionDialog(collectionHistoryCard, collection)}
+                        >
+                          Edit
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                {!collectionHistoryCard || (collectionsByRateCardId.get(collectionHistoryCard.id) ?? []).length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                      No collections recorded yet — only the amount paid at invoice time.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" className="rounded-xl" onClick={() => setCollectionHistoryDialogOpen(false)}>
+              Close
             </Button>
           </div>
         </DialogContent>

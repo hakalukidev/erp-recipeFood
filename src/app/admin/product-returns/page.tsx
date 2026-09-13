@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { FileText, Package, Pencil, Plus, Printer, Search, Trash2, Undo2 } from 'lucide-react'
+import { FileText, Package, Pencil, Plus, Printer, RefreshCcw, Search, Trash2, Undo2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
@@ -179,6 +179,32 @@ function partyLabel(entry: ProductReturnRecord) {
   return entry.returnParty === 'depot' ? 'Depot' : 'Dealer'
 }
 
+// Client request (2026-09-13): the Return Value, Company Profit, and
+// Manufacturing + Raw Material cost impact were shown as three separate
+// figures the reader had to mentally combine — this is that combination,
+// spelled out once. Return Value is what actually goes back onto the
+// dealer/depot's account; Company Profit and the manufacturing/raw-material
+// cost are two different lenses on the SAME loss to the company's own
+// books (the informational card already says "Company Profit already
+// covers it" — they're not additive on the company's P&L). This net figure
+// answers a third, simpler question a return needs answering too: of the
+// money that just went back out the door, how much is left once neither of
+// those is still recoverable — i.e. what a resale of the (possibly
+// reprocessed) returned goods would actually need to claw back to make the
+// company whole on this return.
+function netReturnValue(entry: Pick<ProductReturnRecord, 'depotRateTotal' | 'companyProfit' | 'manufacturingExpenseAmount' | 'rawMaterialExpenseAmount'>) {
+  return entry.depotRateTotal - entry.companyProfit - entry.manufacturingExpenseAmount - entry.rawMaterialExpenseAmount
+}
+
+// Fund recovery cross-check (client request, 2026-09-13) — what's still
+// outstanding on this return's Net Value once whatever's already come back
+// from reselling the (reprocessed) goods is accounted for. See
+// ProductReturnRecord.resoldAmount in types.ts for why this stays purely
+// informational rather than posting anywhere.
+function outstandingReturnValue(entry: ProductReturnRecord) {
+  return netReturnValue(entry) - (entry.resoldAmount ?? 0)
+}
+
 // Combined (Company-side) return voucher — every rate column plus the one
 // profit reduction a return actually pulls down (companyProfit, always
 // depotRateTotal - manufRateTotal — see the ProductReturnRecord comment in
@@ -228,6 +254,9 @@ function buildCombinedReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord
           <tr><td>Company Profit (deducted):</td><td class="numeric hl">-${formatAmount(entry.companyProfit)}</td></tr>
           <tr><td>Manufacturing Cost (informational):</td><td class="numeric hl">-${formatAmount(entry.manufacturingExpenseAmount)}</td></tr>
           <tr><td>Raw Material 30% (informational):</td><td class="numeric hl">-${formatAmount(entry.rawMaterialExpenseAmount)}</td></tr>
+          <tr><td>Net Value Remaining (recoverable on resale):</td><td class="numeric hl">${formatAmount(netReturnValue(entry))}</td></tr>
+          ${entry.resoldAmount ? `<tr><td>Recovered via resale (as of ${escapeHtml(formatDate(entry.resoldDate || entry.date))}):</td><td class="numeric">${formatAmount(entry.resoldAmount)}</td></tr>
+          <tr><td>Still Outstanding:</td><td class="numeric hl">${formatAmount(outstandingReturnValue(entry))}</td></tr>` : ''}
         </table>
         <table class="doc">
           <thead>
@@ -341,11 +370,17 @@ function buildDepotReturnHtml(entry: ProductReturnRecord, depot?: DepotRecord) {
 }
 
 // Dealer's own copy — only printed when returnParty is 'dealer' (the goods
-// actually came back from a dealer). Depot Sales Price (dealerRate, what the
-// dealer was actually charged) is shown per line for reference, but per the
-// 2026-09-10 rule (see the ProductReturnRecord.returnParty comment in
-// types.ts) the actual amount credited is always the Depot Purchase Price
-// (depotRate), same as every other copy of this voucher.
+// actually came back from a dealer). The internal ledger still credits the
+// return at Depot Purchase Price everywhere else (Depot copy, Company
+// Earnings, Reports — see the ProductReturnRecord.returnParty comment in
+// types.ts and buildDepotReturnHtml above), but THIS copy goes straight to
+// the dealer, who never paid depotRate in the first place — they paid
+// dealerRate (Depot Sales Price / "DP"). Client request (2026-09-13): the
+// per-line rate shown (dealerRate) and the line/grand total it multiplies
+// out to were mismatched (rate column said dealerRate, amount column
+// silently multiplied by depotRate instead) — a dealer reading their own
+// return slip needs Amount = Qty × the rate printed right next to it, at
+// the rate they actually transact at.
 function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord) {
   const rows = entry.items
     .map(
@@ -355,7 +390,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
         <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty} ${UNIT_LABEL[item.unit]}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
-        <td class="numeric">${formatAmount(item.qty * item.depotRate)}</td>
+        <td class="numeric">${formatAmount(item.qty * item.dealerRate)}</td>
       </tr>
     `
     )
@@ -377,7 +412,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
           ${dealer?.address ? `<tr><td>Address:</td><td>${escapeHtml(dealer.address)}</td></tr>` : ''}
           ${dealer?.phone ? `<tr><td>Mobile:</td><td>${escapeHtml(dealer.phone)}</td></tr>` : ''}
           <tr><td>Date:</td><td>${escapeHtml(entry.date)}</td></tr>
-          <tr><td>Goods Amount (returned at Depot Rate):</td><td class="numeric">${formatAmount(entry.depotRateTotal)}</td></tr>
+          <tr><td>Goods Amount (returned at Dealer Rate):</td><td class="numeric">${formatAmount(entry.dealerRateTotal)}</td></tr>
         </table>
         <table class="doc">
           <thead>
@@ -393,7 +428,7 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
             ${rows}
             <tr class="totals">
               <td colspan="4">Grand Total (Goods Amount returned)</td>
-              <td class="numeric">${formatAmount(entry.depotRateTotal)}</td>
+              <td class="numeric">${formatAmount(entry.dealerRateTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -406,8 +441,14 @@ function buildDealerReturnHtml(entry: ProductReturnRecord, dealer?: DealerRecord
 }
 
 export default function ProductReturnsPage() {
-  const { data, createProductReturn, updateProductReturn, deleteProductReturn, recalculateProductReturnExpenses } =
-    useERP()
+  const {
+    data,
+    createProductReturn,
+    updateProductReturn,
+    deleteProductReturn,
+    recordProductReturnResale,
+    recalculateProductReturnExpenses,
+  } = useERP()
   const [recalculating, setRecalculating] = useState(false)
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const depots = useMemo(() => toArray(data?.depots), [data?.depots])
@@ -501,6 +542,15 @@ export default function ProductReturnsPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+
+  // ---- Resell Return dialog (fund recovery cross-check) --------------------
+  const [resaleEntry, setResaleEntry] = useState<ProductReturnRecord | null>(null)
+  const [resaleDialogOpen, setResaleDialogOpen] = useState(false)
+  const [resaleAmount, setResaleAmount] = useState('0')
+  const [resaleDate, setResaleDate] = useState(new Date().toISOString().slice(0, 10))
+  const [resaleNote, setResaleNote] = useState('')
+  const [resaleSaving, setResaleSaving] = useState(false)
+  const [resaleError, setResaleError] = useState<string | null>(null)
 
   // Dealers whose own category falls under the selected distributor type —
   // plus the currently-picked dealer even if it doesn't match, so re-opening
@@ -699,6 +749,35 @@ export default function ProductReturnsPage() {
     }
   }
 
+  function openResaleDialog(entry: ProductReturnRecord) {
+    setResaleEntry(entry)
+    setResaleAmount(String(entry.resoldAmount ?? 0))
+    setResaleDate(entry.resoldDate || new Date().toISOString().slice(0, 10))
+    setResaleNote(entry.resoldNote ?? '')
+    setResaleError(null)
+    setFeedback(null)
+    setResaleDialogOpen(true)
+  }
+
+  async function handleSaveResale() {
+    if (!resaleEntry) return
+    setResaleError(null)
+    setResaleSaving(true)
+    try {
+      await recordProductReturnResale(resaleEntry.id, {
+        amount: Number(resaleAmount) || 0,
+        date: resaleDate,
+        note: resaleNote.trim() || undefined,
+      })
+      setResaleDialogOpen(false)
+      setFeedback(`Fund recovery updated on ${resaleEntry.returnNumber}.`)
+    } catch (reason_) {
+      setResaleError(reason_ instanceof Error ? reason_.message : 'Unable to record resale.')
+    } finally {
+      setResaleSaving(false)
+    }
+  }
+
   // One-off cleanup button for the 2026-09-10 change: product returns no
   // longer post their manufacturing/raw-material write-off as a real
   // ExpenseRecord (it double-counted against Company Profit and inflated
@@ -736,11 +815,14 @@ export default function ProductReturnsPage() {
     0
   )
   const totalDepotProfit = productReturns.reduce((sum, entry) => sum + (entry.dealerRateTotal - entry.depotRateTotal), 0)
+  const totalNetReturnValue = productReturns.reduce((sum, entry) => sum + netReturnValue(entry), 0)
+  const totalResoldAmount = productReturns.reduce((sum, entry) => sum + (entry.resoldAmount ?? 0), 0)
+  const totalOutstandingReturnValue = totalNetReturnValue - totalResoldAmount
 
   return (
     <AdminShell active="Product Return">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
@@ -774,6 +856,15 @@ export default function ProductReturnsPage() {
               <p className="text-sm text-muted-foreground">Manufacturing + raw material cost impact</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">-{formatAmount(totalWriteOffImpact)}</p>
               <p className="mt-1 text-xs text-muted-foreground">Informational only — not posted to Expenses (Company Profit already covers it)</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Net value outstanding</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">{formatAmount(totalOutstandingReturnValue)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Of {formatAmount(totalNetReturnValue)} recoverable, {formatAmount(totalResoldAmount)} already recovered via resale
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -826,6 +917,7 @@ export default function ProductReturnsPage() {
                     <TableHead className="text-right">Return Value</TableHead>
                     <TableHead className="text-right">Depot Profit</TableHead>
                     <TableHead className="text-right">Company Profit</TableHead>
+                    <TableHead className="text-right">Net Value Outstanding</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -839,6 +931,12 @@ export default function ProductReturnsPage() {
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.depotRateTotal)}</TableCell>
                       <TableCell className="text-right">{formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.companyProfit)}</TableCell>
+                      <TableCell className="text-right">
+                        <span className="text-emerald-600">{formatAmount(outstandingReturnValue(entry))}</span>
+                        {entry.resoldAmount ? (
+                          <p className="text-[11px] text-muted-foreground">recovered {formatAmount(entry.resoldAmount)}</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -871,6 +969,12 @@ export default function ProductReturnsPage() {
                             <DropdownMenuItem onClick={() => openEditDialog(entry)}>
                               <Pencil className="mr-2 h-4 w-4" /> Edit
                             </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={outstandingReturnValue(entry) <= 0 && !entry.resoldAmount}
+                              onClick={() => openResaleDialog(entry)}
+                            >
+                              <RefreshCcw className="mr-2 h-4 w-4" /> Resell Return
+                            </DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(entry)}>
                               <Trash2 className="mr-2 h-4 w-4" /> Delete
                             </DropdownMenuItem>
@@ -881,7 +985,7 @@ export default function ProductReturnsPage() {
                   ))}
                   {filteredReturns.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                         <Undo2 className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         No product returns yet.
                       </TableCell>
@@ -1111,6 +1215,11 @@ export default function ProductReturnsPage() {
                 </div>
               </div>
 
+              <div className="rounded-xl border border-emerald-600/30 bg-emerald-600/5 p-4">
+                <p className="text-xs text-muted-foreground">Net value remaining (recoverable on resale)</p>
+                <p className="text-lg font-semibold text-emerald-600">{formatAmount(netReturnValue(previewTotals))}</p>
+              </div>
+
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Reason (optional)</label>
                 <Textarea
@@ -1143,6 +1252,56 @@ export default function ProductReturnsPage() {
               </Button>
               <Button onClick={handleSave} disabled={saving}>
                 {saving ? 'Saving…' : editingId ? 'Save changes' : 'Record return'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Resell Return dialog (fund recovery cross-check) ---- */}
+      <Dialog open={resaleDialogOpen} onOpenChange={setResaleDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Resell Return — {resaleEntry?.returnNumber}</DialogTitle>
+            <DialogDescription>
+              {resaleEntry
+                ? `Net Value Remaining ${formatAmount(netReturnValue(resaleEntry))} — track how much has actually come back from reselling the reprocessed goods.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Total recovered so far</p>
+              <Input
+                type="number"
+                min={0}
+                max={resaleEntry ? netReturnValue(resaleEntry) : undefined}
+                value={resaleAmount}
+                onChange={(event) => setResaleAmount(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                A running total, not an add-on — update it to whatever has come back in total so far.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Date</p>
+              <Input type="date" value={resaleDate} onChange={(event) => setResaleDate(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Note (optional)</p>
+              <Textarea
+                value={resaleNote}
+                onChange={(event) => setResaleNote(event.target.value)}
+                placeholder="e.g. Reprocessed and sold to local retailers"
+              />
+            </div>
+            {resaleError ? <p className="text-sm text-destructive">{resaleError}</p> : null}
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" className="rounded-xl" onClick={() => setResaleDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" className="rounded-xl" onClick={() => void handleSaveResale()} disabled={resaleSaving}>
+                {resaleSaving ? 'Saving…' : 'Save recovery'}
               </Button>
             </div>
           </div>

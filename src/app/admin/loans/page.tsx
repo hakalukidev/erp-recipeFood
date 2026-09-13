@@ -6,6 +6,7 @@ import {
   ArrowUpCircle,
   CalendarClock,
   HandCoins,
+  History,
   Landmark,
   Pencil,
   Plus,
@@ -73,6 +74,10 @@ function isSameMonth(value: string, target: string) {
   return value.slice(0, 7) === target
 }
 
+function isBeforeDate(value: string, target: string) {
+  return value.slice(0, 10) < target
+}
+
 const CASH_CATEGORY_OPTIONS = [...CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY]
 
 const emptyLoanAccountForm = { memberName: '', phone: '', address: '' }
@@ -84,6 +89,7 @@ const emptyLoanTransactionForm = {
   amount: '',
   date: todayIso(),
   note: '',
+  isOpeningBalance: false,
 }
 type LoanTransactionFormState = typeof emptyLoanTransactionForm
 
@@ -136,6 +142,7 @@ export default function LoanAndCashMaintenancePage() {
   const loanTransactions = useMemo(() => sortByCreatedAtDesc(toArray(data?.loanTransactions)), [data?.loanTransactions])
   const cashEntries = useMemo(() => sortByCreatedAtDesc(toArray(data?.cashMaintenance)), [data?.cashMaintenance])
   const investors = useMemo(() => sortByCreatedAtDesc(toArray(data?.investors)), [data?.investors])
+  const collections = useMemo(() => toArray(data?.collections), [data?.collections])
   // Expenses (P&L chart) feed the reconciliation check below alongside Cash
   // Maintenance — both are real cash out, just posted to two different
   // charts (see CashMaintenanceRecord comment in types.ts).
@@ -144,6 +151,28 @@ export default function LoanAndCashMaintenancePage() {
     [data?.expenses]
   )
   const rateCards = useMemo(() => toArray(data?.rateCards), [data?.rateCards])
+  // Actual cash collected from dealers (client request, 2026-09-13 — the
+  // Reconciliation card below used to sum invoiced value, not cash actually
+  // received, which is why it never matched the manual daily tally): the
+  // amount paid at invoice-creation time (attributed to the invoice's own
+  // date) plus every CollectionRecord since (attributed to its own
+  // collection date) — mirrors saveRateCard/recordCollection's paid/due
+  // split in provider.tsx exactly.
+  const collectedCashRows = useMemo(() => {
+    const collectionsByRateCardId = new Map<string, number>()
+    for (const collection of collections) {
+      collectionsByRateCardId.set(collection.rateCardId, (collectionsByRateCardId.get(collection.rateCardId) ?? 0) + collection.amount)
+    }
+    const rows: Array<{ date: string; amount: number }> = []
+    for (const card of rateCards) {
+      const initialPaid = (card.paid ?? 0) - (collectionsByRateCardId.get(card.id) ?? 0)
+      if (initialPaid > 0) rows.push({ date: card.date, amount: initialPaid })
+    }
+    for (const collection of collections) {
+      rows.push({ date: collection.collectionDate, amount: collection.amount })
+    }
+    return rows
+  }, [rateCards, collections])
 
   const loanAccountOptions: ComboboxOption[] = useMemo(
     () => loanAccounts.map((account) => ({ value: account.id, label: account.memberName, sublabel: account.phone })),
@@ -227,8 +256,13 @@ export default function LoanAndCashMaintenancePage() {
   const [transactionSaving, setTransactionSaving] = useState(false)
   const [transactionError, setTransactionError] = useState<string | null>(null)
 
-  function openCreateTransaction(type: LoanTransactionType, loanAccountId?: string) {
-    setTransactionForm({ ...emptyLoanTransactionForm, type, loanAccountId: loanAccountId ?? '' })
+  function openCreateTransaction(type: LoanTransactionType, loanAccountId?: string, isOpeningBalance?: boolean) {
+    setTransactionForm({
+      ...emptyLoanTransactionForm,
+      type,
+      loanAccountId: loanAccountId ?? '',
+      isOpeningBalance: Boolean(isOpeningBalance),
+    })
     setTransactionError(null)
     setTransactionDialogOpen(true)
   }
@@ -252,6 +286,7 @@ export default function LoanAndCashMaintenancePage() {
         amount,
         date: transactionForm.date,
         note: transactionForm.note || undefined,
+        isOpeningBalance: transactionForm.isOpeningBalance,
       })
       setTransactionDialogOpen(false)
     } catch (reason) {
@@ -426,9 +461,10 @@ export default function LoanAndCashMaintenancePage() {
   // Total cash-out = the Expense chart (P&L costs — Rent, Salary, Transport,
   // etc.) + the Cash Maintenance chart above (excluding direct-expense rows)
   // — both are real cash leaving the business, just posted to two different
-  // charts. Total cash-in = new loan withdrawals + sales money/invoiced
-  // amount, for the same period. A sanity check, not a posted figure — a gap
-  // beyond a few taka flags a likely bookkeeping mismatch.
+  // charts. Total cash-in = new loan withdrawals + sales money actually
+  // collected from dealers (collectedCashRows above), for the same period.
+  // A sanity check, not a posted figure — a gap beyond a few taka flags a
+  // likely bookkeeping mismatch.
   const expenseTotalThisPeriod = useMemo(
     () =>
       expenses
@@ -447,14 +483,43 @@ export default function LoanAndCashMaintenancePage() {
   )
   const salesMoneyThisPeriod = useMemo(
     () =>
-      rateCards
-        .filter((card) => (cashMode === 'daily' ? isSameDate(card.date, cashDate) : isSameMonth(card.date, cashMonth)))
-        .reduce((sum, card) => sum + card.dealerRateTotal, 0),
-    [rateCards, cashMode, cashDate, cashMonth]
+      collectedCashRows
+        .filter((row) => (cashMode === 'daily' ? isSameDate(row.date, cashDate) : isSameMonth(row.date, cashMonth)))
+        .reduce((sum, row) => sum + row.amount, 0),
+    [collectedCashRows, cashMode, cashDate, cashMonth]
   )
   const totalCashIn = loanWithdrawalsThisPeriod + salesMoneyThisPeriod
   const reconciliationGap = totalCashIn - totalCashOut
   const isBalanced = Math.abs(reconciliationGap) < 1
+
+  // Opening/Closing balance (client's daily cash-book request, 2026-09-13:
+  // "গতকালের জমা" carrying into today's tally, ending in a "নিট ক্যাশ
+  // স্থিতি") — derived, not stored, same as every other running balance in
+  // this codebase (computeLoanBalance, Budget's Actual, etc.): the sum of
+  // every cash-in/cash-out source this card already tracks, for everything
+  // dated strictly before the selected period. Assumes the books start at
+  // zero on the very first transaction on file — if the business actually
+  // had cash on hand before that, Opening Balance here will read low by
+  // that fixed amount for every period, consistently.
+  const periodStartDate = cashMode === 'daily' ? cashDate : `${cashMonth}-01`
+  const openingBalance = useMemo(() => {
+    const cashInBefore =
+      loanTransactions
+        .filter((entry) => entry.type === 'withdrawal' && isBeforeDate(entry.date, periodStartDate))
+        .reduce((sum, entry) => sum + entry.amount, 0) +
+      collectedCashRows
+        .filter((row) => isBeforeDate(row.date, periodStartDate))
+        .reduce((sum, row) => sum + row.amount, 0)
+    const cashOutBefore =
+      expenses
+        .filter((expense) => isBeforeDate(expense.date, periodStartDate))
+        .reduce((sum, expense) => sum + expense.amount, 0) +
+      cashEntries
+        .filter((entry) => !entry.isDirectExpense && isBeforeDate(entry.date, periodStartDate))
+        .reduce((sum, entry) => sum + entry.amount, 0)
+    return cashInBefore - cashOutBefore
+  }, [loanTransactions, collectedCashRows, expenses, cashEntries, periodStartDate])
+  const closingBalance = openingBalance + totalCashIn - totalCashOut
 
   return (
     <AdminShell active="Loan & Cash Maintenance">
@@ -511,6 +576,9 @@ export default function LoanAndCashMaintenancePage() {
               <Button variant="outline" onClick={() => openCreateTransaction('withdrawal')}>
                 <ArrowUpCircle className="mr-2 h-4 w-4" /> New Loan Withdrawal
               </Button>
+              <Button variant="outline" onClick={() => openCreateTransaction('withdrawal', undefined, true)}>
+                <History className="mr-2 h-4 w-4" /> Existing Loan
+              </Button>
               <Button onClick={openCreateAccount}>
                 <HandCoins className="mr-2 h-4 w-4" /> Add Loan Member
               </Button>
@@ -562,6 +630,9 @@ export default function LoanAndCashMaintenancePage() {
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => openCreateTransaction('withdrawal', account.id)}>
                                 <ArrowUpCircle className="mr-2 h-4 w-4" /> New withdrawal
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => openCreateTransaction('withdrawal', account.id, true)}>
+                                <History className="mr-2 h-4 w-4" /> Existing loan
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => openCreateTransaction('repayment', account.id)}>
                                 <ArrowDownCircle className="mr-2 h-4 w-4" /> Record repayment
@@ -690,12 +761,14 @@ export default function LoanAndCashMaintenancePage() {
                           variant="outline"
                           className={cn(
                             'rounded-full',
-                            transaction.type === 'withdrawal'
-                              ? 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
-                              : 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
+                            transaction.isOpeningBalance
+                              ? 'border-sky-200 bg-sky-500/10 text-sky-700 dark:border-sky-900 dark:text-sky-300'
+                              : transaction.type === 'withdrawal'
+                                ? 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+                                : 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
                           )}
                         >
-                          {transaction.type === 'withdrawal' ? 'Withdrawal' : 'Repayment'}
+                          {transaction.isOpeningBalance ? 'Existing Loan' : transaction.type === 'withdrawal' ? 'Withdrawal' : 'Repayment'}
                         </Badge>
                       </TableCell>
                       <TableCell>{formatDate(transaction.date)}</TableCell>
@@ -913,11 +986,17 @@ export default function LoanAndCashMaintenancePage() {
           <CardHeader>
             <SectionHeader
               icon={Scale}
-              title="Cash Reconciliation"
-              description="Total cash-in (new loan withdrawals + sales money) vs. total cash-out for the selected period — a gap flags a bookkeeping mismatch."
+              title="Daily Cash Book"
+              description="Opening balance carried from before this period, plus cash-in, minus cash-out — same tally as the manual daily cash sheet, ending in a Net Cash Position."
             />
           </CardHeader>
           <CardContent>
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
+              <span className="font-medium text-foreground">
+                Opening balance ({cashMode === 'daily' ? 'as of yesterday' : 'as of last month'})
+              </span>
+              <span className="tabular-nums font-semibold">{formatCurrency(openingBalance, currency)}</span>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2 rounded-xl border border-border/60 p-4">
                 <p className="text-sm font-medium text-foreground">Cash In</p>
@@ -926,7 +1005,7 @@ export default function LoanAndCashMaintenancePage() {
                   <span className="tabular-nums">{formatCurrency(loanWithdrawalsThisPeriod, currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Sales money (invoiced)</span>
+                  <span className="text-muted-foreground">Sales money (collected)</span>
                   <span className="tabular-nums">{formatCurrency(salesMoneyThisPeriod, currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
@@ -961,6 +1040,15 @@ export default function LoanAndCashMaintenancePage() {
               <span className="font-medium">{isBalanced ? 'Books balanced for this period.' : 'Mismatch found for this period.'}</span>
               <span className="tabular-nums font-semibold">{formatCurrency(reconciliationGap, currency)}</span>
             </div>
+            <div className="mt-3 flex items-center justify-between rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">
+              <span className="font-medium text-foreground">নিট ক্যাশ স্থিতি — Net Cash Position (closing)</span>
+              <span className="text-lg font-semibold tabular-nums">{formatCurrency(closingBalance, currency)}</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Opening + Cash In − Cash Out. &quot;Sales money&quot; is actual cash collected from dealers (invoice-time
+              payment + every Collection recorded on the Invoice page) — not the invoice total, which may still be
+              partly due.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -1002,11 +1090,19 @@ export default function LoanAndCashMaintenancePage() {
       <Dialog open={transactionDialogOpen} onOpenChange={setTransactionDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{transactionForm.type === 'withdrawal' ? 'New loan withdrawal' : 'Record loan repayment'}</DialogTitle>
+            <DialogTitle>
+              {transactionForm.isOpeningBalance
+                ? 'Add existing loan'
+                : transactionForm.type === 'withdrawal'
+                  ? 'New loan withdrawal'
+                  : 'Record loan repayment'}
+            </DialogTitle>
             <DialogDescription>
-              {transactionForm.type === 'withdrawal'
-                ? 'Raises the member’s outstanding balance.'
-                : 'Lowers the member’s outstanding balance — reaches zero once fully repaid.'}
+              {transactionForm.isOpeningBalance
+                ? 'For a loan the member already had outstanding before this system was in use. Set the date to when the loan actually started — the balance and Monthly Schedule both key off it.'
+                : transactionForm.type === 'withdrawal'
+                  ? 'Raises the member’s outstanding balance.'
+                  : 'Lowers the member’s outstanding balance — reaches zero once fully repaid.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1021,22 +1117,26 @@ export default function LoanAndCashMaintenancePage() {
                 searchPlaceholder="Search member"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Type</label>
-              <Select
-                value={transactionForm.type}
-                onValueChange={(value) => setTransactionForm((current) => ({ ...current, type: value as LoanTransactionType }))}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="withdrawal">New withdrawal</SelectItem>
-                  <SelectItem value="repayment">Repayment</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {transactionForm.isOpeningBalance ? null : (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Type</label>
+                <Select
+                  value={transactionForm.type}
+                  onValueChange={(value) => setTransactionForm((current) => ({ ...current, type: value as LoanTransactionType }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="withdrawal">New withdrawal</SelectItem>
+                    <SelectItem value="repayment">Repayment</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Amount</label>
+                <label className="text-xs font-medium text-muted-foreground">
+                  {transactionForm.isOpeningBalance ? 'Outstanding amount' : 'Amount'}
+                </label>
                 <Input
                   type="number"
                   min="0"
@@ -1046,7 +1146,9 @@ export default function LoanAndCashMaintenancePage() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Date</label>
+                <label className="text-xs font-medium text-muted-foreground">
+                  {transactionForm.isOpeningBalance ? 'Loan start date' : 'Date'}
+                </label>
                 <Input type="date" value={transactionForm.date} onChange={(event) => setTransactionForm((current) => ({ ...current, date: event.target.value }))} />
               </div>
             </div>

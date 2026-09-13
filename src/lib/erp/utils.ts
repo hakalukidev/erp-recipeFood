@@ -345,6 +345,16 @@ export type DealerSalesReportRow = {
   commissionAmount: number
   othersAmount: number
   unclassifiedAmount: number
+  // Client request (2026-09-13) — Return Product column: every
+  // ProductReturnRecord with returnParty 'dealer' against this dealer,
+  // at the same dealerRate basis as totalAmount so the two net cleanly.
+  // A 'depot' return isn't tied to one dealer's invoice history, so it
+  // isn't attributed here (it's still netted off the company-wide totals
+  // in buildCompanyEarningsSummary).
+  returnAmount: number
+  // = totalAmount - returnAmount — the "প্রকৃত সেলস অ্যামাউন্ট" (actual
+  // sales amount) the client asked the Total column itself to become.
+  netAmount: number
 }
 
 export type ProductSalesReportRow = {
@@ -369,32 +379,42 @@ export type ProductSalesReportRow = {
 export function buildSalesReportSummary(data: ERPData | null) {
   const rateCards = toArray(data?.rateCards)
   const dealerCategories = toArray(data?.dealerCategories)
+  const productReturns = toArray(data?.productReturns)
 
   const bySaleType = { commission: 0, others: 0, unclassified: 0 }
   const dealerMap = new Map<string, DealerSalesReportRow>()
   const productMap = new Map<string, ProductSalesReportRow>()
+
+  function dealerRowFor(dealerKey: string, dealerName: string) {
+    let row = dealerMap.get(dealerKey)
+    if (!row) {
+      row = {
+        dealerId: dealerKey,
+        dealerName,
+        invoiceCount: 0,
+        totalAmount: 0,
+        commissionAmount: 0,
+        othersAmount: 0,
+        unclassifiedAmount: 0,
+        returnAmount: 0,
+        netAmount: 0,
+      }
+      dealerMap.set(dealerKey, row)
+    }
+    return row
+  }
 
   for (const card of rateCards) {
     const amount = card.dealerRateTotal
     const bucket = !card.saleType ? 'unclassified' : isCommissionSaleType(card.saleType, dealerCategories) ? 'commission' : 'others'
     bySaleType[bucket] += amount
 
-    const dealerKey = card.dealerId || card.recipientName
-    const dealerRow: DealerSalesReportRow = dealerMap.get(dealerKey) ?? {
-      dealerId: dealerKey,
-      dealerName: card.recipientName,
-      invoiceCount: 0,
-      totalAmount: 0,
-      commissionAmount: 0,
-      othersAmount: 0,
-      unclassifiedAmount: 0,
-    }
+    const dealerRow = dealerRowFor(card.dealerId || card.recipientName, card.recipientName)
     dealerRow.invoiceCount += 1
     dealerRow.totalAmount += amount
     if (bucket === 'commission') dealerRow.commissionAmount += amount
     else if (bucket === 'others') dealerRow.othersAmount += amount
     else dealerRow.unclassifiedAmount += amount
-    dealerMap.set(dealerKey, dealerRow)
 
     for (const item of card.items) {
       const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
@@ -414,11 +434,31 @@ export function buildSalesReportSummary(data: ERPData | null) {
     }
   }
 
+  // Return Product column + net sales adjustment (client request,
+  // 2026-09-13) — a dealer return's dealerRateTotal is on the exact same
+  // basis as the invoice totals above, so it nets cleanly off the dealer it
+  // was against. Only 'dealer'-party returns land here — a 'depot' return
+  // isn't attributable to one dealer's own lifting.
+  let totalReturnAmount = 0
+  for (const entry of productReturns) {
+    if (entry.returnParty !== 'dealer') continue
+    const dealerRow = dealerRowFor(entry.dealerId || entry.recipientName, entry.recipientName)
+    dealerRow.returnAmount += entry.dealerRateTotal
+    totalReturnAmount += entry.dealerRateTotal
+  }
+  for (const row of dealerMap.values()) {
+    row.netAmount = row.totalAmount - row.returnAmount
+  }
+
+  const totalAmount = rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0)
+
   return {
     totalInvoices: rateCards.length,
-    totalAmount: rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0),
+    totalAmount,
+    totalReturnAmount,
+    netAmount: totalAmount - totalReturnAmount,
     bySaleType,
-    dealers: Array.from(dealerMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+    dealers: Array.from(dealerMap.values()).sort((a, b) => b.netAmount - a.netAmount),
     products: Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
   }
 }

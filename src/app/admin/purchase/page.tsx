@@ -58,6 +58,7 @@ import type {
   PurchaseMaterialRecord,
   PurchaseMaterialUnit,
   PurchaseRecord,
+  VendorPaymentRecord,
   VendorRecord,
 } from '@/lib/erp/types'
 import {
@@ -223,11 +224,12 @@ const PRINT_STYLES = `
           .numeric { text-align: right; white-space: nowrap; }
           tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
           .remarks { margin-top: 16px; font-size: 12.5px; }
+          .section-heading { font-size: 13px; font-weight: 700; margin: 16px 0 6px; }
           .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
 `
 
-function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord) {
+function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord, payments: VendorPaymentRecord[] = []) {
   const rows = entry.items
     .map(
       (item, index) => `
@@ -242,6 +244,51 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord) 
     `
     )
     .join('')
+
+  // Client request (2026-09-13): show the date-wise payment trail instead of
+  // just the aggregate Paid figure, like a bank statement — VendorPaymentRecord
+  // already carries one row per paydown, this just renders it. The amount paid
+  // at purchase-entry time never gets its own VendorPaymentRecord (it's just
+  // PurchaseRecord.paid at save time), so it's added back in as the first row.
+  const initialPaid = entry.paid - payments.reduce((sum, payment) => sum + payment.amount, 0)
+  const historyRows: Array<{ date: string; receiptNumber: string; note?: string; amount: number }> = []
+  if (initialPaid > 0) {
+    historyRows.push({ date: entry.date, receiptNumber: entry.purchaseNumber, note: 'Paid at purchase time', amount: initialPaid })
+  }
+  for (const payment of payments) {
+    historyRows.push({ date: payment.date, receiptNumber: payment.receiptNumber, note: payment.note, amount: payment.amount })
+  }
+  historyRows.sort((a, b) => a.date.localeCompare(b.date))
+  const paymentRows = historyRows
+    .map(
+      (row, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(formatDate(row.date))}</td>
+        <td>${escapeHtml(row.receiptNumber)}</td>
+        <td>${row.note ? escapeHtml(row.note) : ''}</td>
+        <td class="numeric">${formatAmount(row.amount)}</td>
+      </tr>
+    `
+    )
+    .join('')
+  const paymentHistoryTable = historyRows.length
+    ? `
+        <table class="doc" style="margin-top: 16px;">
+          <thead>
+            <tr>
+              <th>SL</th>
+              <th>Date</th>
+              <th>Receipt No</th>
+              <th>Note</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>${paymentRows}</tbody>
+          <tr class="totals"><td colspan="4">Total Paid</td><td class="numeric">${formatAmount(entry.paid)}</td></tr>
+        </table>
+      `
+    : ''
 
   return `
     <!doctype html>
@@ -280,6 +327,7 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord) 
           <tbody>${rows}</tbody>
           <tr class="totals"><td colspan="5">Total</td><td class="numeric">${formatAmount(entry.totalAmount)}</td></tr>
         </table>
+        ${paymentHistoryTable ? `<p class="section-heading">Payment History</p>${paymentHistoryTable}` : ''}
         ${entry.note ? `<p class="remarks"><strong>Note:</strong> ${escapeHtml(entry.note)}</p>` : ''}
         <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
@@ -303,8 +351,10 @@ export default function PurchasePage() {
     savePurchaseMaterial,
     deletePurchaseMaterial,
     createPurchase,
+    updatePurchase,
     deletePurchase,
     recordVendorPayment,
+    updateVendorPayment,
     createMaterialUsage,
     deleteMaterialUsage,
     saveFinishedGoods,
@@ -318,6 +368,16 @@ export default function PurchasePage() {
   const materials = useMemo(() => sortByCreatedAtDesc(toArray(data?.purchaseMaterials)), [data?.purchaseMaterials])
   const rawMaterials = useMemo(() => materials.filter((material) => material.category === 'raw_material'), [materials])
   const purchases = useMemo(() => sortByCreatedAtDesc(toArray(data?.purchases)), [data?.purchases])
+  const vendorPayments = useMemo(() => toArray(data?.vendorPayments), [data?.vendorPayments])
+  const vendorPaymentsByPurchaseId = useMemo(() => {
+    const map = new Map<string, VendorPaymentRecord[]>()
+    for (const payment of vendorPayments) {
+      const existing = map.get(payment.purchaseId)
+      if (existing) existing.push(payment)
+      else map.set(payment.purchaseId, [payment])
+    }
+    return map
+  }, [vendorPayments])
   const usages = useMemo(() => sortByCreatedAtDesc(toArray(data?.materialUsages)), [data?.materialUsages])
   const finishedGoodsList = useMemo(() => sortByCreatedAtDesc(toArray(data?.finishedGoods)), [data?.finishedGoods])
   const finishedGoodsById = useMemo(() => new Map(finishedGoodsList.map((item) => [item.id, item])), [finishedGoodsList])
@@ -657,6 +717,7 @@ export default function PurchasePage() {
 
   // ---- Purchase entry ---------------------------------------------------------
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false)
+  const [editingPurchase, setEditingPurchase] = useState<PurchaseRecord | null>(null)
   const [purchaseVendorId, setPurchaseVendorId] = useState('')
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10))
   const [purchaseLines, setPurchaseLines] = useState<PurchaseLineDraft[]>([emptyPurchaseLine()])
@@ -666,14 +727,24 @@ export default function PurchasePage() {
   const [purchaseFormError, setPurchaseFormError] = useState<string | null>(null)
 
   const [paymentPurchase, setPaymentPurchase] = useState<PurchaseRecord | null>(null)
+  const [editingPayment, setEditingPayment] = useState<VendorPaymentRecord | null>(null)
   const [paymentAmount, setPaymentAmount] = useState('0')
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10))
   const [paymentNote, setPaymentNote] = useState('')
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
+  const [paymentHistoryPurchase, setPaymentHistoryPurchase] = useState<PurchaseRecord | null>(null)
+  const [paymentHistoryDialogOpen, setPaymentHistoryDialogOpen] = useState(false)
 
   const purchaseTotal = useMemo(
     () => purchaseLines.reduce((sum, line) => sum + (Number(line.qty) || 0) * (Number(line.rate) || 0), 0),
     [purchaseLines]
+  )
+  // Vendor payments already on file against the purchase being edited —
+  // these sit outside `purchasePaid` (see openEditPurchaseDialog above), so
+  // they need adding back in for an accurate Due preview while editing.
+  const editingVendorPaymentsTotal = useMemo(
+    () => (editingPurchase ? (vendorPaymentsByPurchaseId.get(editingPurchase.id) ?? []).reduce((sum, payment) => sum + payment.amount, 0) : 0),
+    [editingPurchase, vendorPaymentsByPurchaseId]
   )
 
   const filteredPurchases = useMemo(() => {
@@ -698,11 +769,42 @@ export default function PurchasePage() {
   )
 
   function openCreatePurchaseDialog() {
+    setEditingPurchase(null)
     setPurchaseVendorId('')
     setPurchaseDate(new Date().toISOString().slice(0, 10))
     setPurchaseLines([emptyPurchaseLine()])
     setPurchasePaid('0')
     setPurchaseNote('')
+    setPurchaseFormError(null)
+    setFeedback(null)
+    setPurchaseDialogOpen(true)
+  }
+
+  // Edit Option (client request, 2026-09-13) — same dialog as New Purchase,
+  // pre-filled from the existing record. `purchasePaid` only ever represents
+  // the amount paid at purchase-creation time (see updatePurchase in
+  // provider.tsx), so it's pre-filled with paid minus whatever's already on
+  // file as separate VendorPaymentRecords, not the raw `paid` total.
+  function openEditPurchaseDialog(purchase: PurchaseRecord) {
+    setEditingPurchase(purchase)
+    setPurchaseVendorId(purchase.vendorId ?? '')
+    setPurchaseDate(purchase.date)
+    setPurchaseLines(
+      purchase.items.map((item) => ({
+        key: createId('line'),
+        materialId: item.materialId,
+        materialName: item.materialName,
+        unit: item.unit,
+        qty: String(item.qty),
+        rate: String(item.rate),
+      }))
+    )
+    const vendorPaymentsTotal = (vendorPaymentsByPurchaseId.get(purchase.id) ?? []).reduce(
+      (sum, payment) => sum + payment.amount,
+      0
+    )
+    setPurchasePaid(String(Math.max(purchase.paid - vendorPaymentsTotal, 0)))
+    setPurchaseNote(purchase.note ?? '')
     setPurchaseFormError(null)
     setFeedback(null)
     setPurchaseDialogOpen(true)
@@ -776,17 +878,24 @@ export default function PurchasePage() {
         })
       }
 
-      await createPurchase({
+      const purchaseInput = {
         vendorId: purchaseVendorId,
         date: purchaseDate,
         items,
         paid: Number(purchasePaid) || 0,
         note: purchaseNote.trim() || undefined,
-      })
+      }
+
+      if (editingPurchase) {
+        await updatePurchase(editingPurchase.id, purchaseInput)
+        setFeedback(`Purchase ${editingPurchase.purchaseNumber} updated — stock and vendor due recalculated.`)
+      } else {
+        await createPurchase(purchaseInput)
+        setFeedback('Purchase recorded — stock and vendor due updated.')
+      }
       setPurchaseDialogOpen(false)
-      setFeedback('Purchase recorded — stock and vendor due updated.')
     } catch (reason) {
-      setPurchaseFormError(reason instanceof Error ? reason.message : 'Unable to record purchase.')
+      setPurchaseFormError(reason instanceof Error ? reason.message : 'Unable to save purchase.')
     } finally {
       setPurchaseSaving(false)
     }
@@ -804,6 +913,7 @@ export default function PurchasePage() {
 
   function openPaymentDialog(purchase: PurchaseRecord) {
     setPaymentPurchase(purchase)
+    setEditingPayment(null)
     setPaymentAmount('0')
     setPaymentDate(new Date().toISOString().slice(0, 10))
     setPaymentNote('')
@@ -811,20 +921,48 @@ export default function PurchasePage() {
     setPaymentDialogOpen(true)
   }
 
+  // Edit Option (client request, 2026-09-13) — reuses the same Record
+  // payment dialog, pre-filled from the payment being corrected.
+  function openEditPaymentDialog(purchase: PurchaseRecord, payment: VendorPaymentRecord) {
+    setPaymentPurchase(purchase)
+    setEditingPayment(payment)
+    setPaymentAmount(String(payment.amount))
+    setPaymentDate(payment.date)
+    setPaymentNote(payment.note ?? '')
+    setFeedback(null)
+    setPaymentHistoryDialogOpen(false)
+    setPaymentDialogOpen(true)
+  }
+
+  function openPaymentHistoryDialog(purchase: PurchaseRecord) {
+    setPaymentHistoryPurchase(purchase)
+    setFeedback(null)
+    setPaymentHistoryDialogOpen(true)
+  }
+
   async function handleRecordPayment() {
     if (!paymentPurchase) return
     setFeedback(null)
     try {
-      await recordVendorPayment({
-        purchaseId: paymentPurchase.id,
-        amount: Number(paymentAmount) || 0,
-        date: paymentDate,
-        note: paymentNote.trim() || undefined,
-      })
+      if (editingPayment) {
+        await updateVendorPayment(editingPayment.id, {
+          amount: Number(paymentAmount) || 0,
+          date: paymentDate,
+          note: paymentNote.trim() || undefined,
+        })
+        setFeedback(`Payment ${editingPayment.receiptNumber} updated against ${paymentPurchase.purchaseNumber}.`)
+      } else {
+        await recordVendorPayment({
+          purchaseId: paymentPurchase.id,
+          amount: Number(paymentAmount) || 0,
+          date: paymentDate,
+          note: paymentNote.trim() || undefined,
+        })
+        setFeedback(`Payment recorded against ${paymentPurchase.purchaseNumber}.`)
+      }
       setPaymentDialogOpen(false)
-      setFeedback(`Payment recorded against ${paymentPurchase.purchaseNumber}.`)
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to record payment.')
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to save payment.')
     }
   }
 
@@ -999,13 +1137,32 @@ export default function PurchasePage() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => openEditPurchaseDialog(purchase)}>
+                                  <Edit className="mr-2 h-4 w-4" /> Edit purchase
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                   disabled={purchase.due <= 0}
                                   onClick={() => openPaymentDialog(purchase)}
                                 >
                                   <Wallet className="mr-2 h-4 w-4" /> Record payment
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => openPrintWindow(buildPurchaseVoucherHtml(purchase, purchase.vendorId ? vendorById.get(purchase.vendorId) : undefined))}>
+                                <DropdownMenuItem
+                                  disabled={(vendorPaymentsByPurchaseId.get(purchase.id) ?? []).length === 0}
+                                  onClick={() => openPaymentHistoryDialog(purchase)}
+                                >
+                                  <Wallet className="mr-2 h-4 w-4" /> Payment history
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    openPrintWindow(
+                                      buildPurchaseVoucherHtml(
+                                        purchase,
+                                        purchase.vendorId ? vendorById.get(purchase.vendorId) : undefined,
+                                        vendorPaymentsByPurchaseId.get(purchase.id) ?? []
+                                      )
+                                    )
+                                  }
+                                >
                                   <Printer className="mr-2 h-4 w-4" /> Print voucher
                                 </DropdownMenuItem>
                                 <DropdownMenuItem className="text-destructive" onClick={() => handleDeletePurchase(purchase)}>
@@ -1784,7 +1941,7 @@ export default function PurchasePage() {
                 <Truck className="h-4.5 w-4.5" />
               </span>
               <div>
-                <DialogTitle>New purchase</DialogTitle>
+                <DialogTitle>{editingPurchase ? `Edit purchase — ${editingPurchase.purchaseNumber}` : 'New purchase'}</DialogTitle>
                 <DialogDescription>Pick the vendor, then add materials with quantity and rate.</DialogDescription>
               </div>
             </div>
@@ -1887,20 +2044,27 @@ export default function PurchasePage() {
                   <p className="text-lg font-semibold">{formatAmount(purchaseTotal)}</p>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs text-muted-foreground">Paid now</label>
+                  <label className="text-xs text-muted-foreground">
+                    {editingPurchase ? 'Paid at purchase time' : 'Paid now'}
+                  </label>
                   <Input
                     type="number"
                     min={0}
-                    max={purchaseTotal}
+                    max={Math.max(purchaseTotal - editingVendorPaymentsTotal, 0)}
                     value={purchasePaid}
                     onChange={(event) => setPurchasePaid(event.target.value)}
                     className="bg-background"
                   />
+                  {editingPurchase && editingVendorPaymentsTotal > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Plus {formatAmount(editingVendorPaymentsTotal)} already recorded as separate vendor payments — edit those from Payment history.
+                    </p>
+                  ) : null}
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Due</p>
                   <p className="text-lg font-semibold text-destructive">
-                    {formatAmount(Math.max(purchaseTotal - (Number(purchasePaid) || 0), 0))}
+                    {formatAmount(Math.max(purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal, 0))}
                   </p>
                 </div>
               </div>
@@ -1918,7 +2082,7 @@ export default function PurchasePage() {
                 Cancel
               </Button>
               <Button onClick={() => void handleSavePurchase()} disabled={purchaseSaving}>
-                {purchaseSaving ? 'Saving…' : 'Record purchase'}
+                {purchaseSaving ? 'Saving…' : editingPurchase ? 'Save changes' : 'Record purchase'}
               </Button>
             </div>
           </div>
@@ -1929,9 +2093,15 @@ export default function PurchasePage() {
       <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Record payment — {paymentPurchase?.purchaseNumber}</DialogTitle>
+            <DialogTitle>
+              {editingPayment ? `Edit payment ${editingPayment.receiptNumber}` : 'Record payment'} — {paymentPurchase?.purchaseNumber}
+            </DialogTitle>
             <DialogDescription>
-              {paymentPurchase ? `${paymentPurchase.vendorName} — ${formatAmount(paymentPurchase.due)} currently due.` : ''}
+              {paymentPurchase
+                ? `${paymentPurchase.vendorName} — ${formatAmount(
+                    paymentPurchase.due + (editingPayment?.amount ?? 0)
+                  )} currently due.`
+                : ''}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1940,7 +2110,7 @@ export default function PurchasePage() {
               <Input
                 type="number"
                 min={0}
-                max={paymentPurchase?.due ?? undefined}
+                max={paymentPurchase ? paymentPurchase.due + (editingPayment?.amount ?? 0) : undefined}
                 value={paymentAmount}
                 onChange={(event) => setPaymentAmount(event.target.value)}
               />
@@ -1958,9 +2128,70 @@ export default function PurchasePage() {
                 Cancel
               </Button>
               <Button type="button" className="rounded-xl" onClick={() => void handleRecordPayment()}>
-                Record payment
+                {editingPayment ? 'Save changes' : 'Record payment'}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Payment history dialog ---- */}
+      <Dialog open={paymentHistoryDialogOpen} onOpenChange={setPaymentHistoryDialogOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Payment history — {paymentHistoryPurchase?.purchaseNumber}</DialogTitle>
+            <DialogDescription>
+              {paymentHistoryPurchase
+                ? `${paymentHistoryPurchase.vendorName} — ${formatAmount(paymentHistoryPurchase.paid)} paid of ${formatAmount(paymentHistoryPurchase.totalAmount)} total.`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-96 overflow-y-auto rounded-xl border border-border/70">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableHead>Date</TableHead>
+                  <TableHead>Receipt No</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(paymentHistoryPurchase ? vendorPaymentsByPurchaseId.get(paymentHistoryPurchase.id) ?? [] : [])
+                  .slice()
+                  .sort((a, b) => a.date.localeCompare(b.date))
+                  .map((payment) => (
+                    <TableRow key={payment.id}>
+                      <TableCell>{formatDate(payment.date)}</TableCell>
+                      <TableCell>{payment.receiptNumber}</TableCell>
+                      <TableCell className="max-w-40 truncate text-muted-foreground">{payment.note ?? ''}</TableCell>
+                      <TableCell className="text-right">{formatAmount(payment.amount)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => paymentHistoryPurchase && openEditPaymentDialog(paymentHistoryPurchase, payment)}
+                        >
+                          <Edit className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                {!paymentHistoryPurchase || (vendorPaymentsByPurchaseId.get(paymentHistoryPurchase.id) ?? []).length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                      No separate vendor payments recorded yet — only the amount paid at purchase time.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" className="rounded-xl" onClick={() => setPaymentHistoryDialogOpen(false)}>
+              Close
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

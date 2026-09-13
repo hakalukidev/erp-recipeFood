@@ -581,6 +581,17 @@ export type RateCardRecord = {
   usableMoneyPercent: number
   usableUDepot: number
   usableUDepotPercent: number
+  // Dealer payment tracking (client request, 2026-09-13 — "পেমেন্ট হিস্ট্রি ও
+  // ব্যাংক স্টেটমেন্ট ভিউ"): `paid` follows the exact same pattern as
+  // PurchaseRecord (paid entered at save time, due = dealerRateTotal - paid),
+  // with further paydowns tracked as CollectionRecord the way
+  // VendorPaymentRecord tracks a purchase paydown. A RateCardRecord saved
+  // before this field existed normalizes to paid: 0 / due: dealerRateTotal
+  // (see normalizeRateCardRecord in provider.tsx) — i.e. nothing collected
+  // yet, which is the safe assumption for a pre-existing unpaid-until-proven
+  // invoice.
+  paid: number
+  due: number
   createdAt: string
   updatedAt: string
 }
@@ -594,6 +605,7 @@ export type RateCardInput = {
   saleType?: SaleType
   items: RateCardLineItem[]
   remarks?: string
+  paid?: number
 }
 
 // ---- Discount Product List -----------------------------------------------
@@ -754,6 +766,20 @@ export type ProductReturnRecord = {
   manufacturingExpenseAmount: number // = manufRateTotal - rawRateTotal
   rawMaterialExpenseId?: string
   rawMaterialExpenseAmount: number // = 30% of rawRateTotal
+  // Fund recovery tracking (client request, 2026-09-13): once the returned
+  // goods are reprocessed/refined and sold again, how much of the Net Value
+  // Remaining (depotRateTotal - companyProfit - manufacturingExpenseAmount -
+  // rawMaterialExpenseAmount, computed in product-returns/page.tsx) has
+  // actually come back — a running cumulative total the operator updates as
+  // recovery happens, not a per-payment ledger. Deliberately NOT posted to
+  // Cash Maintenance (that ledger only ever models cash OUTFLOWS — see
+  // CASH_MAINTENANCE_CATEGORIES in standardChartOfAccounts.ts) or to
+  // Expenses/the General Ledger — informational only, same treatment as
+  // manufacturingExpenseAmount/rawMaterialExpenseAmount above, so it can't
+  // double-post against Company Earnings or the cash reconciliation.
+  resoldAmount?: number
+  resoldDate?: string
+  resoldNote?: string
   processedBy: string
   processedByName: string
   createdAt: string
@@ -1226,31 +1252,38 @@ export type SalesReturnInput = {
 
 // ---- Collection Management (Section 31) ---------------------------------
 // A Sales/Collection Officer recording money collected against a specific
-// outstanding invoice — separate from the `paid` amount entered at invoice
-// creation time (createOrder), which stays cash-only. This is the flow
-// that gets a Cash/Bank/MFS choice and a printable Receipt.
+// outstanding Invoice (RateCardRecord — see rate-card/page.tsx, the only
+// sales document actually reachable from the UI; the OrderRecord Sales
+// Order module this originally targeted was never wired up) — separate
+// from the `paid` amount entered at invoice creation time, which stays
+// cash-only. This is the flow that gets a Cash/Bank/MFS choice and a
+// printable Receipt, mirroring VendorPaymentRecord on the payable side
+// (see recordVendorPayment in provider.tsx) — same paydown-against-a-
+// running-due shape, just on the receivable side.
 export type CollectionMethod = 'cash' | 'bank' | 'mfs'
 
 export type CollectionRecord = {
   id: string
   receiptNumber: string
-  orderId: string
-  billNumber: string
-  dealerId: string
+  rateCardId: string
+  invoiceNo: string
+  dealerId?: string
   dealerName: string
   amount: number
   method: CollectionMethod
   collectionDate: string
+  note?: string
   collectedBy: string
   collectedByName: string
   createdAt: string
 }
 
 export type CollectionInput = {
-  orderId: string
+  rateCardId: string
   amount: number
   method: CollectionMethod
   collectionDate?: string
+  note?: string
 }
 
 export type NotificationRecord = {
@@ -1382,6 +1415,16 @@ export type LoanTransactionRecord = {
   amount: number
   date: string
   note?: string
+  // Client request (2026-09-13) — Existing Loan Entry: set only on a
+  // 'withdrawal' transaction entered via the separate "Existing Loan" action
+  // rather than "New Loan Withdrawal", so a loan the member already had
+  // outstanding before this system existed can be logged (backdated to
+  // whenever it actually started, so computeLoanMonthlySchedule's month range
+  // starts there too) without reading as fresh money the company borrowed
+  // today. Purely a display/labelling flag — it doesn't change how the
+  // balance or monthly schedule is computed (both already just sum
+  // withdrawals vs repayments by date).
+  isOpeningBalance?: boolean
   createdBy: string
   createdByName: string
   createdAt: string
@@ -1393,6 +1436,7 @@ export type LoanTransactionInput = {
   amount: number
   date?: string
   note?: string
+  isOpeningBalance?: boolean
 }
 
 // ---- Cash Maintenance Chart -------------------------------------------------

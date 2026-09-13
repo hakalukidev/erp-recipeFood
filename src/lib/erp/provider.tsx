@@ -33,6 +33,7 @@ import type {
   ChartOfAccountInput,
   ChartOfAccountRecord,
   CollectionInput,
+  CollectionMethod,
   CollectionRecord,
   CommissionPayoutInput,
   CommissionPayoutRecord,
@@ -175,6 +176,10 @@ type ERPContextValue = {
   createStockCount: (input: StockCountInput) => Promise<string>
   createSalesReturn: (input: SalesReturnInput) => Promise<string>
   recordCollection: (input: CollectionInput) => Promise<string>
+  updateCollection: (
+    collectionId: string,
+    input: { amount: number; method: CollectionMethod; date?: string; note?: string }
+  ) => Promise<void>
   releaseQcHold: (qcHoldId: string) => Promise<void>
   scrapQcHold: (qcHoldId: string) => Promise<void>
   createOrder: (input: OrderInput) => Promise<void>
@@ -214,14 +219,17 @@ type ERPContextValue = {
   createProductReturn: (input: ProductReturnInput) => Promise<string>
   updateProductReturn: (productReturnId: string, input: ProductReturnInput) => Promise<void>
   deleteProductReturn: (productReturnId: string) => Promise<void>
+  recordProductReturnResale: (productReturnId: string, input: { amount: number; date?: string; note?: string }) => Promise<void>
   recalculateProductReturnExpenses: () => Promise<number>
   saveVendor: (input: VendorInput, vendorId?: string) => Promise<string>
   deleteVendor: (vendorId: string) => Promise<void>
   savePurchaseMaterial: (input: PurchaseMaterialInput, materialId?: string) => Promise<string>
   deletePurchaseMaterial: (materialId: string) => Promise<void>
   createPurchase: (input: PurchaseInput) => Promise<string>
+  updatePurchase: (purchaseId: string, input: PurchaseInput) => Promise<void>
   deletePurchase: (purchaseId: string) => Promise<void>
   recordVendorPayment: (input: VendorPaymentInput) => Promise<string>
+  updateVendorPayment: (paymentId: string, input: { amount: number; date?: string; note?: string }) => Promise<void>
   createMaterialUsage: (input: MaterialUsageInput) => Promise<string>
   deleteMaterialUsage: (materialUsageId: string) => Promise<void>
   saveFinishedGoods: (input: FinishedGoodsInput, finishedGoodsId?: string) => Promise<string>
@@ -508,6 +516,23 @@ function normalizeProductReturnMap(entries?: Record<string, ProductReturnRecord>
   return Object.fromEntries(
     Object.entries(entries ?? {}).map(([id, entry]) => [id, normalizeProductReturnRecord(entry)])
   )
+}
+
+// Fills in paid/due for a RateCardRecord saved before dealer payment
+// tracking existed (2026-09-13 client request) — nothing collected yet is
+// the safe assumption, so due defaults to the full dealerRateTotal rather
+// than 0.
+function normalizeRateCardRecord(rateCard: RateCardRecord): RateCardRecord {
+  const paid = Number(rateCard.paid ?? 0)
+  return {
+    ...rateCard,
+    paid,
+    due: rateCard.due !== undefined ? Number(rateCard.due) : Math.max(rateCard.dealerRateTotal - paid, 0),
+  }
+}
+
+function normalizeRateCardMap(rateCards?: Record<string, RateCardRecord> | null) {
+  return Object.fromEntries(Object.entries(rateCards ?? {}).map(([id, card]) => [id, normalizeRateCardRecord(card)]))
 }
 
 function normalizeProductRecord(product: ProductRecord): ProductRecord {
@@ -957,7 +982,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     batches: source.batches ?? {},
     stockAdjustments: source.stockAdjustments ?? {},
     stockCounts: source.stockCounts ?? {},
-    rateCards: source.rateCards ?? {},
+    rateCards: normalizeRateCardMap(source.rateCards),
     productReturns: normalizeProductReturnMap(source.productReturns),
     vendors: source.vendors ?? {},
     purchaseMaterials: source.purchaseMaterials ?? {},
@@ -1137,6 +1162,9 @@ function normalizeLoanTransactionInput(input: LoanTransactionInput) {
     amount: Math.max(input.amount ?? 0, 0),
     date: input.date?.trim() || new Date().toISOString().slice(0, 10),
     note: input.note?.trim() ?? '',
+    // Only meaningful on a withdrawal — an opening balance is never "repaid
+    // back" as its own concept, that's just a regular repayment against it.
+    isOpeningBalance: input.type === 'withdrawal' && Boolean(input.isOpeningBalance),
   }
 }
 
@@ -2361,6 +2389,145 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
+  // Client request (2026-09-13): correcting a purchase entry (wrong qty/rate
+  // typed in, wrong material picked) meant deleting it and starting over,
+  // which also nukes any vendor payments recorded against it since (see the
+  // cascade-delete in deletePurchase below). This edits it in place instead.
+  // `paid` here only ever covers the amount entered at purchase-creation
+  // time (mirrors buildPurchaseVoucherHtml's own "Paid at purchase time"
+  // split) — any VendorPaymentRecord already on file is untouched and its
+  // own amount stays layered on top; edit those individually via
+  // updateVendorPayment instead of retyping the running total here.
+  async function updatePurchase(purchaseId: string, input: PurchaseInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before editing a purchase.')
+    }
+    const existing = data.purchases[purchaseId]
+    if (!existing) {
+      throw new Error('Purchase not found.')
+    }
+    if (!input.items.length) {
+      throw new Error('Add at least one material to the purchase.')
+    }
+
+    const vendor = input.vendorId ? data.vendors[input.vendorId] : undefined
+    if (input.vendorId && !vendor) {
+      throw new Error('Vendor not found.')
+    }
+    const vendorName = (vendor?.name || input.vendorName?.trim() || '').trim()
+    if (!vendorName) {
+      throw new Error('Pick or type the vendor this purchase is from.')
+    }
+
+    const items: PurchaseItem[] = input.items.map((requested) => {
+      const name = requested.materialName.trim()
+      if (!name) {
+        throw new Error('Every purchase line needs a material.')
+      }
+      const qty = Number(requested.qty) || 0
+      if (qty <= 0) {
+        throw new Error(`Quantity for ${name} must be greater than zero.`)
+      }
+      const rate = Number(requested.rate) || 0
+      if (rate < 0) {
+        throw new Error(`Rate for ${name} cannot be negative.`)
+      }
+      const material = requested.materialId ? data.purchaseMaterials[requested.materialId] : undefined
+      return {
+        ...(requested.materialId ? { materialId: requested.materialId } : {}),
+        materialName: material?.name ?? name,
+        category: material?.category ?? 'raw_material',
+        unit: material?.unit ?? 'kg',
+        qty,
+        rate,
+        amount: qty * rate,
+      }
+    })
+
+    const totalAmount = items.reduce((sum, item) => sum + item.amount, 0)
+    const vendorPaymentsTotal = Object.values(data.vendorPayments)
+      .filter((payment) => payment.purchaseId === purchaseId)
+      .reduce((sum, payment) => sum + payment.amount, 0)
+    if (vendorPaymentsTotal > totalAmount) {
+      throw new Error(
+        `This purchase already has ${vendorPaymentsTotal.toFixed(2)} in recorded vendor payments — the new total can't be less than that. Edit or delete those payments first.`
+      )
+    }
+    const initialPaid = Math.min(Math.max(Number(input.paid) || 0, 0), totalAmount - vendorPaymentsTotal)
+    const paid = initialPaid + vendorPaymentsTotal
+    const due = totalAmount - paid
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || existing.date
+
+    const updates: Record<string, unknown> = {}
+
+    // Drop the old Cash Maintenance entries this purchase's own `paid`
+    // posted, and the old stock this purchase's items added — same
+    // reverse-then-reapply shape as deletePurchase, just followed by a
+    // recreate instead of stopping there.
+    existing.cashMaintenanceIds?.forEach((entryId) => {
+      updates[`cashMaintenance/${entryId}`] = null
+    })
+    const oldStockDeltas = new Map<string, number>()
+    existing.items.forEach((item) => {
+      if (!item.materialId) return
+      oldStockDeltas.set(item.materialId, (oldStockDeltas.get(item.materialId) ?? 0) + item.qty)
+    })
+    const newStockDeltas = new Map<string, number>()
+    items.forEach((item) => {
+      if (!item.materialId) return
+      newStockDeltas.set(item.materialId, (newStockDeltas.get(item.materialId) ?? 0) + item.qty)
+    })
+    const materialIds = new Set([...oldStockDeltas.keys(), ...newStockDeltas.keys()])
+    materialIds.forEach((materialId) => {
+      const material = data.purchaseMaterials[materialId]
+      if (!material) return
+      const netDelta = (newStockDeltas.get(materialId) ?? 0) - (oldStockDeltas.get(materialId) ?? 0)
+      if (netDelta === 0) return
+      updates[`purchaseMaterials/${materialId}/stockQty`] = material.stockQty + netDelta
+      updates[`purchaseMaterials/${materialId}/updatedAt`] = now
+    })
+
+    const cashEntries = buildPurchaseCashEntries(
+      items,
+      initialPaid,
+      date,
+      `Purchase ${existing.purchaseNumber} — ${vendorName}`,
+      currentUser
+    )
+    const cashMaintenanceIds = Object.keys(cashEntries)
+    Object.entries(cashEntries).forEach(([entryId, entry]) => {
+      updates[`cashMaintenance/${entryId}`] = entry
+    })
+
+    const updatedPurchase: PurchaseRecord = {
+      id: existing.id,
+      purchaseNumber: existing.purchaseNumber,
+      ...(vendor ? { vendorId: vendor.id } : {}),
+      vendorName,
+      date,
+      items,
+      totalAmount,
+      paid,
+      due,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
+      createdBy: existing.createdBy,
+      createdByName: existing.createdByName,
+      createdAt: existing.createdAt,
+    }
+    updates[`purchases/${purchaseId}`] = updatedPurchase
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'purchase_updated',
+      'purchase',
+      `Edited purchase ${existing.purchaseNumber} from ${vendorName} — ${totalAmount.toFixed(2)} total, ${paid.toFixed(2)} paid, ${due.toFixed(2)} due.`
+    )
+  }
+
   async function deletePurchase(purchaseId: string) {
     if (!data) {
       return
@@ -2479,6 +2646,82 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
 
     return id
+  }
+
+  // Client request (2026-09-13): a mistyped payment amount/date meant no way
+  // to fix it short of deleting and re-entering (which shifts its receipt
+  // number and loses the original entry order). Edits the amount/date/note
+  // in place — same reverse-then-reapply shape against the parent purchase's
+  // paid/due and this payment's own Cash Maintenance entries as everywhere
+  // else in this file.
+  async function updateVendorPayment(paymentId: string, input: { amount: number; date?: string; note?: string }) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before editing a vendor payment.')
+    }
+    const existing = data.vendorPayments[paymentId]
+    if (!existing) {
+      throw new Error('Vendor payment not found.')
+    }
+    const purchase = data.purchases[existing.purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
+    }
+
+    const amount = Number(input.amount) || 0
+    if (amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.')
+    }
+    // The due room this payment can grow into is whatever's due today, plus
+    // what this same payment is already contributing.
+    if (amount > purchase.due + existing.amount) {
+      throw new Error('Payment amount cannot exceed the outstanding due.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || existing.date
+    const nextPaid = purchase.paid - existing.amount + amount
+    const nextDue = purchase.due + existing.amount - amount
+
+    const updates: Record<string, unknown> = {
+      [`purchases/${purchase.id}/paid`]: nextPaid,
+      [`purchases/${purchase.id}/due`]: nextDue,
+    }
+
+    existing.cashMaintenanceIds?.forEach((entryId) => {
+      updates[`cashMaintenance/${entryId}`] = null
+    })
+    const cashEntries = buildPurchaseCashEntries(
+      purchase.items,
+      amount,
+      date,
+      `Vendor payment ${existing.receiptNumber} — ${purchase.vendorName} (${purchase.purchaseNumber})`,
+      currentUser
+    )
+    const cashMaintenanceIds = Object.keys(cashEntries)
+    Object.entries(cashEntries).forEach(([entryId, entry]) => {
+      updates[`cashMaintenance/${entryId}`] = entry
+    })
+
+    const updatedPayment: VendorPaymentRecord = {
+      ...existing,
+      amount,
+      date,
+      ...(input.note?.trim() ? { note: input.note.trim() } : { note: undefined }),
+      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : { cashMaintenanceIds: undefined }),
+    }
+    // Drop undefined keys rather than write them literally — Firebase
+    // rejects `undefined` values outright.
+    if (updatedPayment.note === undefined) delete updatedPayment.note
+    if (updatedPayment.cashMaintenanceIds === undefined) delete updatedPayment.cashMaintenanceIds
+    updates[`vendorPayments/${paymentId}`] = updatedPayment
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'vendor_payment_updated',
+      'purchase',
+      `Edited payment ${existing.receiptNumber} to ${purchase.vendorName} against purchase ${purchase.purchaseNumber} — now ${amount.toFixed(2)}, ${nextDue.toFixed(2)} still due.`
+    )
   }
 
   // Stock going back out — production consuming material, or stock issued
@@ -2901,6 +3144,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount: normalized.amount,
       date: normalized.date,
       note: normalized.note,
+      isOpeningBalance: normalized.isOpeningBalance,
       createdBy: existingTransaction?.createdBy ?? currentUser.id,
       createdByName: existingTransaction?.createdByName ?? currentUser.name,
       createdAt: existingTransaction?.createdAt ?? now,
@@ -2910,7 +3154,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       existingTransaction ? 'loan_transaction_updated' : 'loan_transaction_created',
       'finance',
-      `${normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}.`
+      `${normalized.isOpeningBalance ? 'Recorded existing loan balance of' : normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}.`
     )
 
     return id
@@ -3324,49 +3568,58 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  // Section 31 (Collection Management): a Sales/Collection Officer logging
-  // money collected against one specific outstanding invoice — distinct
-  // from the `paid` amount entered at invoice creation (createOrder), which
-  // stays cash-only. This is the flow with a Cash/Bank/MFS choice, and it
-  // generates the receipt the UI prints. Dealer Ledger updates
-  // automatically via the same 'dealer' ledger account (accountRef =
-  // dealerId) every other dealer posting already uses.
+  // Section 31 (Collection Management), repointed at RateCardRecord — the
+  // only sales document actually reachable from the UI (2026-09-13 client
+  // request: "পেমেন্ট হিস্ট্রি ও ব্যাংক স্টেটমেন্ট ভিউ" on the dealer/depot
+  // side, same shape as recordVendorPayment above already gave the purchase
+  // side). A Sales/Collection Officer logging money collected against one
+  // specific outstanding invoice — distinct from the `paid` amount entered
+  // at invoice creation, which stays cash-only. This is the flow with a
+  // Cash/Bank/MFS choice, and it generates the receipt the UI prints. No
+  // ledger/ Cash Maintenance posting — RateCardRecord itself was never
+  // wired into the Automatic Accounting Engine (see saveRateCard), so a
+  // collection against it stays a simple paid/due paydown, mirroring
+  // recordVendorPayment's own payable-side equivalent exactly. Sales money
+  // actually collected (vs. merely invoiced) is read straight off these
+  // records — see the Daily Cash Book's salesCollectedThisPeriod in
+  // app/admin/loans/page.tsx.
   async function recordCollection(input: CollectionInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a collection.')
     }
 
-    const order = data.orders[input.orderId]
-    if (!order) {
+    const rateCard = data.rateCards[input.rateCardId]
+    if (!rateCard) {
       throw new Error('Invoice not found.')
     }
 
-    if (input.amount <= 0) {
+    const amount = Number(input.amount) || 0
+    if (amount <= 0) {
       throw new Error('Collection amount must be greater than zero.')
     }
-
-    if (input.amount > order.due) {
+    if (amount > rateCard.due) {
       throw new Error('Collection amount cannot exceed the outstanding due.')
     }
 
     const db = getDatabaseOrThrow()
     const id = createId('collection')
     const now = new Date().toISOString()
-    const collectionDate = input.collectionDate?.trim() || now
+    const collectionDate = input.collectionDate?.trim() || now.slice(0, 10)
     const receiptNumber = `RCPT-${Date.now().toString().slice(-8)}`
-    const nextDue = order.due - input.amount
-    const nextPaid = order.paid + input.amount
+    const nextDue = rateCard.due - amount
+    const nextPaid = rateCard.paid + amount
 
     const collection: CollectionRecord = {
       id,
       receiptNumber,
-      orderId: order.id,
-      billNumber: order.billNumber,
-      dealerId: order.dealerId,
-      dealerName: order.dealerName,
-      amount: input.amount,
+      rateCardId: rateCard.id,
+      invoiceNo: rateCard.invoiceNo,
+      ...(rateCard.dealerId ? { dealerId: rateCard.dealerId } : {}),
+      dealerName: rateCard.recipientName,
+      amount,
       method: input.method,
       collectionDate,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
       collectedBy: currentUser.id,
       collectedByName: currentUser.name,
       createdAt: now,
@@ -3374,45 +3627,68 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const updates: Record<string, unknown> = {
       [`collections/${id}`]: collection,
-      [`orders/${order.id}/paid`]: nextPaid,
-      [`orders/${order.id}/due`]: nextDue,
-      [`orders/${order.id}/paymentStatus`]: nextDue === 0 ? 'paid' : nextPaid > 0 ? 'partial' : 'unpaid',
+      [`rateCards/${rateCard.id}/paid`]: nextPaid,
+      [`rateCards/${rateCard.id}/due`]: nextDue,
     }
-
-    const debitId = createId('ledger')
-    updates[`ledgerEntries/${debitId}`] = {
-      id: debitId,
-      date: collectionDate,
-      orderId: order.id,
-      billNumber: receiptNumber,
-      account: input.method,
-      accountRef: '',
-      description: `Collection against ${order.billNumber}`,
-      debit: input.amount,
-      credit: 0,
-      createdAt: now,
-    } satisfies LedgerEntryRecord
-    const creditId = createId('ledger')
-    updates[`ledgerEntries/${creditId}`] = {
-      id: creditId,
-      date: collectionDate,
-      orderId: order.id,
-      billNumber: receiptNumber,
-      account: 'dealer',
-      accountRef: order.dealerId,
-      description: `Collection against ${order.billNumber}`,
-      debit: 0,
-      credit: input.amount,
-      createdAt: now,
-    } satisfies LedgerEntryRecord
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
       'collection_recorded',
       'finance',
-      `Collected ${input.amount} against ${order.billNumber} (${order.dealerName}) via ${input.method}.`
+      `Collected ${amount.toFixed(2)} against ${rateCard.invoiceNo} (${rateCard.recipientName}) via ${input.method} — ${nextDue.toFixed(2)} still due.`
     )
     return id
+  }
+
+  // Edit Option (client request, 2026-09-13) — mirrors updateVendorPayment
+  // exactly, just on the receivable side.
+  async function updateCollection(collectionId: string, input: { amount: number; method: CollectionMethod; date?: string; note?: string }) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before editing a collection.')
+    }
+    const existing = data.collections[collectionId]
+    if (!existing) {
+      throw new Error('Collection not found.')
+    }
+    const rateCard = data.rateCards[existing.rateCardId]
+    if (!rateCard) {
+      throw new Error('Invoice not found.')
+    }
+
+    const amount = Number(input.amount) || 0
+    if (amount <= 0) {
+      throw new Error('Collection amount must be greater than zero.')
+    }
+    if (amount > rateCard.due + existing.amount) {
+      throw new Error('Collection amount cannot exceed the outstanding due.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const date = input.date?.trim() || existing.collectionDate
+    const nextPaid = rateCard.paid - existing.amount + amount
+    const nextDue = rateCard.due + existing.amount - amount
+
+    const updatedCollection: CollectionRecord = {
+      ...existing,
+      amount,
+      method: input.method,
+      collectionDate: date,
+    }
+    if (input.note?.trim()) updatedCollection.note = input.note.trim()
+    else delete updatedCollection.note
+
+    const updates: Record<string, unknown> = {
+      [`collections/${collectionId}`]: updatedCollection,
+      [`rateCards/${rateCard.id}/paid`]: nextPaid,
+      [`rateCards/${rateCard.id}/due`]: nextDue,
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'collection_updated',
+      'finance',
+      `Edited collection ${existing.receiptNumber} against ${rateCard.invoiceNo} — now ${amount.toFixed(2)}, ${nextDue.toFixed(2)} still due.`
+    )
   }
 
   async function createOrder(input: OrderInput) {
@@ -5532,6 +5808,25 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const id = existing?.id ?? createId('ratecard')
     const now = new Date().toISOString()
     const totals = computeRateCardTotals(items)
+
+    // Dealer payment tracking (client request, 2026-09-13) — same
+    // paid/collections split as updatePurchase uses for a Purchase's own
+    // vendor payments: `paid` here only ever covers the amount entered on
+    // this form, any CollectionRecord already on file sits on top of it.
+    const collectionsTotal = existing
+      ? Object.values(data.collections)
+          .filter((collection) => collection.rateCardId === existing.id)
+          .reduce((sum, collection) => sum + collection.amount, 0)
+      : 0
+    if (collectionsTotal > totals.dealerRateTotal) {
+      throw new Error(
+        `This invoice already has ${collectionsTotal.toFixed(2)} in recorded collections — the new total can't be less than that. Edit or delete those collections first.`
+      )
+    }
+    const initialPaid = Math.min(Math.max(Number(input.paid) || 0, 0), totals.dealerRateTotal - collectionsTotal)
+    const paid = initialPaid + collectionsTotal
+    const due = totals.dealerRateTotal - paid
+
     const rateCard: RateCardRecord = {
       id,
       invoiceNo,
@@ -5543,6 +5838,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       items,
       remarks: input.remarks?.trim() ?? '',
       ...totals,
+      paid,
+      due,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -5595,6 +5892,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const updates: Record<string, unknown> = { [`rateCards/${rateCardId}`]: null }
+
+    // An invoice with collections already recorded against it takes those
+    // down with it too — same cascade-delete shape deletePurchase uses for
+    // vendor payments.
+    Object.values(data.collections)
+      .filter((collection) => collection.rateCardId === rateCardId)
+      .forEach((collection) => {
+        updates[`collections/${collection.id}`] = null
+      })
+
     const pieces = rateCardStockPieces(rateCard.items)
     const empty = new Map<string, number>()
     applyRateCardStockDeltas(updates, 'products', data.products, pieces.productPieces, empty, now)
@@ -5912,6 +6219,52 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('product_return_deleted', 'sales', `Deleted product return ${productReturn.returnNumber}.`)
   }
 
+  // Fund recovery cross-check (client request, 2026-09-13): "Resell Return"
+  // records how much has actually come back once the returned goods are
+  // reprocessed/refined and sold again — a single running cumulative figure
+  // the operator updates as recovery happens (not a per-payment ledger like
+  // VendorPaymentRecord/CollectionRecord), capped at the return's own Net
+  // Value Remaining so it can't overstate recovery. See the resoldAmount
+  // comment on ProductReturnRecord in types.ts for why this deliberately
+  // never touches Cash Maintenance, Expenses, or the General Ledger.
+  async function recordProductReturnResale(productReturnId: string, input: { amount: number; date?: string; note?: string }) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a return resale.')
+    }
+    const existing = data.productReturns[productReturnId]
+    if (!existing) {
+      throw new Error('Product return not found.')
+    }
+
+    const amount = Number(input.amount) || 0
+    if (amount < 0) {
+      throw new Error('Recovered amount cannot be negative.')
+    }
+    const netValueRemaining =
+      existing.depotRateTotal - existing.companyProfit - existing.manufacturingExpenseAmount - existing.rawMaterialExpenseAmount
+    if (amount > netValueRemaining) {
+      throw new Error(`Recovered amount can't exceed this return's Net Value Remaining (${netValueRemaining.toFixed(2)}).`)
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || now.slice(0, 10)
+    const note = input.note?.trim()
+
+    const updates: Record<string, unknown> = {
+      [`productReturns/${productReturnId}/resoldAmount`]: amount,
+      [`productReturns/${productReturnId}/resoldDate`]: date,
+      [`productReturns/${productReturnId}/resoldNote`]: note || null,
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'product_return_resold',
+      'sales',
+      `Recorded ${amount.toFixed(2)} recovered so far from reselling returned goods on ${existing.returnNumber} (of ${netValueRemaining.toFixed(2)} recoverable).`
+    )
+  }
+
   // One-off cleanup for the 2026-09-10 change: product returns used to post
   // "Factory Expense"/"Raw Material" write-offs as real ExpenseRecords,
   // which double-counted against companyProfit (already the return's full
@@ -6007,6 +6360,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteCashMaintenance,
       createSalesReturn,
       recordCollection,
+      updateCollection,
       releaseQcHold,
       scrapQcHold,
       createOrder,
@@ -6042,14 +6396,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createProductReturn,
       updateProductReturn,
       deleteProductReturn,
+      recordProductReturnResale,
       recalculateProductReturnExpenses,
       saveVendor,
       deleteVendor,
       savePurchaseMaterial,
       deletePurchaseMaterial,
       createPurchase,
+      updatePurchase,
       deletePurchase,
       recordVendorPayment,
+      updateVendorPayment,
       createMaterialUsage,
       deleteMaterialUsage,
       saveFinishedGoods,

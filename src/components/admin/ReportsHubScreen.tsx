@@ -171,23 +171,76 @@ export function ReportsHubScreen() {
   const currency = data?.settings.currency
   const [section, setSection] = useState<SectionId>('sales')
 
-  // ---- Expense report --------------------------------------------------
+  // ---- Expense report (client request, 2026-09-13) -----------------------
+  // Sector-wise summary + a single combined detail list, always visible —
+  // no date filter needs to be applied first. Merges in Cash Maintenance's
+  // own cash-out categories (পণ্য ক্রয়, প্যাকেজিং মেটেরিয়ালস ক্রয়, etc. —
+  // see CASH_MAINTENANCE_CATEGORIES in standardChartOfAccounts.ts) alongside
+  // the Expense (P&L) chart: a Purchase's paid amount/vendor paydown posts
+  // to Cash Maintenance instead of Expenses (see buildPurchaseCashEntries in
+  // provider.tsx), so without this merge the client's own daily cash tally
+  // — which treats every taka that left the till the same way, purchases
+  // included — never matched what this report showed. A direct-expense Cash
+  // Maintenance row (isDirectExpense) is excluded, same as everywhere else
+  // that chart is summed — it's a pure book-balancing entry, not real spend.
   const [expenseFrom, setExpenseFrom] = useState('')
   const [expenseTo, setExpenseTo] = useState('')
-  const filteredExpenses = useMemo(() => {
-    return sortByCreatedAtDesc(toArray(data?.expenses)).filter((expense) => inRange(expense.date, expenseFrom, expenseTo))
-  }, [data?.expenses, expenseFrom, expenseTo])
-  const expenseTotal = useMemo(() => filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0), [filteredExpenses])
-  const expenseHeaders = ['Date', 'Category', 'Amount', 'Payment method', 'Note']
-  const expenseRows = useMemo(
+
+  type CombinedExpenseRow = {
+    date: string
+    category: string
+    amount: number
+    source: 'Expense' | 'Cash Maintenance'
+    note?: string
+  }
+
+  const combinedExpenseRows = useMemo<CombinedExpenseRow[]>(() => {
+    const fromExpenses: CombinedExpenseRow[] = toArray(data?.expenses)
+      .filter((expense) => expense.approvalStatus !== 'rejected')
+      .map((expense) => ({
+        date: expense.date,
+        category: expense.category,
+        amount: expense.amount,
+        source: 'Expense',
+        note: expense.note,
+      }))
+    const fromCashMaintenance: CombinedExpenseRow[] = toArray(data?.cashMaintenance)
+      .filter((entry) => !entry.isDirectExpense)
+      .map((entry) => ({
+        date: entry.date,
+        category: entry.category,
+        amount: entry.amount,
+        source: 'Cash Maintenance',
+        note: entry.note,
+      }))
+    return [...fromExpenses, ...fromCashMaintenance]
+  }, [data?.expenses, data?.cashMaintenance])
+
+  const filteredExpenses = useMemo(
     () =>
-      filteredExpenses.map((expense) => [
-        expense.date.slice(0, 10),
-        expense.category,
-        expense.amount,
-        expense.paymentMethod ?? 'cash',
-        expense.note ?? '',
-      ]),
+      combinedExpenseRows
+        .filter((row) => inRange(row.date, expenseFrom, expenseTo))
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [combinedExpenseRows, expenseFrom, expenseTo]
+  )
+  const expenseTotal = useMemo(() => filteredExpenses.reduce((sum, row) => sum + row.amount, 0), [filteredExpenses])
+
+  type ExpenseCategorySummaryRow = { category: string; expenseAmount: number; cashAmount: number; total: number }
+  const expenseCategorySummary = useMemo(() => {
+    const map = new Map<string, ExpenseCategorySummaryRow>()
+    for (const row of filteredExpenses) {
+      const existing = map.get(row.category) ?? { category: row.category, expenseAmount: 0, cashAmount: 0, total: 0 }
+      if (row.source === 'Expense') existing.expenseAmount += row.amount
+      else existing.cashAmount += row.amount
+      existing.total += row.amount
+      map.set(row.category, existing)
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total)
+  }, [filteredExpenses])
+
+  const expenseHeaders = ['Date', 'Category', 'Source', 'Amount', 'Note']
+  const expenseRows = useMemo(
+    () => filteredExpenses.map((row) => [formatDate(row.date), row.category, row.source, row.amount, row.note ?? '']),
     [filteredExpenses]
   )
 
@@ -295,61 +348,104 @@ export function ReportsHubScreen() {
         {section === 'sales' ? <SalesReportsContent /> : null}
 
         {section === 'expense' ? (
-          <Card className="border-border/70 shadow-sm">
-            <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader icon={ReceiptText} title="Expense Report" description="Every recorded expense, optionally scoped to a date range." />
-              <div className="flex flex-wrap items-center gap-3">
-                <DateRangeFilter from={expenseFrom} to={expenseTo} onFromChange={setExpenseFrom} onToChange={setExpenseTo} />
-                <ExportMenu filenameBase="expense-report" title="Expense Report" headers={expenseHeaders} rows={expenseRows} />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={expenseRows.length === 0}
-                  onClick={() => openPrintWindow(buildGenericReportHtml('Expense Report', expenseHeaders, expenseRows))}
-                >
-                  Print
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Total for this range</span>
-                <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseTotal, currency)}</p>
-              </div>
-              <div className="overflow-x-auto rounded-2xl border border-border/70">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/40 hover:bg-muted/40">
-                      <TableHead>Date</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Payment</TableHead>
-                      <TableHead>Note</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredExpenses.map((expense) => (
-                      <TableRow key={expense.id}>
-                        <TableCell>{formatDate(expense.date)}</TableCell>
-                        <TableCell className="font-medium">{expense.category}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(expense.amount, currency)}</TableCell>
-                        <TableCell className="capitalize text-muted-foreground">{expense.paymentMethod ?? 'cash'}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
+          <div className="space-y-6">
+            <Card className="border-border/70 shadow-sm">
+              <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <SectionHeader
+                  icon={ReceiptText}
+                  title="Expense Report"
+                  description="Every recorded expense plus Cash Maintenance's own cash-out categories (Product Purchase, Packaging, etc.) — sector-wise summary and full detail together, no filter needed."
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <DateRangeFilter from={expenseFrom} to={expenseTo} onFromChange={setExpenseFrom} onToChange={setExpenseTo} />
+                  <ExportMenu filenameBase="expense-report" title="Expense Report" headers={expenseHeaders} rows={expenseRows} />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={expenseRows.length === 0}
+                    onClick={() => openPrintWindow(buildGenericReportHtml('Expense Report', expenseHeaders, expenseRows))}
+                  >
+                    Print
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Total for this range</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseTotal, currency)}</p>
+                </div>
+
+                <p className="mb-2 text-sm font-medium text-foreground">Sector-wise summary</p>
+                <div className="mb-6 overflow-x-auto rounded-2xl border border-border/70">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead>Category</TableHead>
+                        <TableHead className="text-right">Expense</TableHead>
+                        <TableHead className="text-right">Cash Maintenance</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
                       </TableRow>
-                    ))}
-                    {filteredExpenses.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                          No expenses for this range.
-                        </TableCell>
+                    </TableHeader>
+                    <TableBody>
+                      {expenseCategorySummary.map((row) => (
+                        <TableRow key={row.category}>
+                          <TableCell className="font-medium">{row.category}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {row.expenseAmount > 0 ? formatCurrency(row.expenseAmount, currency) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {row.cashAmount > 0 ? formatCurrency(row.cashAmount, currency) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-semibold">{formatCurrency(row.total, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {expenseCategorySummary.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
+                            No expenses for this range.
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                <p className="mb-2 text-sm font-medium text-foreground">Date-wise detail</p>
+                <div className="overflow-x-auto rounded-2xl border border-border/70">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead>Date</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Source</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Note</TableHead>
                       </TableRow>
-                    ) : null}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredExpenses.map((row, index) => (
+                        <TableRow key={`${row.source}-${row.date}-${index}`}>
+                          <TableCell>{formatDate(row.date)}</TableCell>
+                          <TableCell className="font-medium">{row.category}</TableCell>
+                          <TableCell className="text-muted-foreground">{row.source}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.amount, currency)}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{row.note || '-'}</TableCell>
+                        </TableRow>
+                      ))}
+                      {filteredExpenses.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                            No expenses for this range.
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         ) : null}
 
         {section === 'purchase' ? (

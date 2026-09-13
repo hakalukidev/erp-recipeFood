@@ -236,9 +236,12 @@ export function SalesReportsContent() {
                 <Receipt className="h-4 w-4" />
               </span>
               <div>
-                <p className="text-sm text-muted-foreground">Total sales</p>
-                <p className="mt-1 text-2xl font-semibold tracking-tight">{formatCurrency(summary.totalAmount, currency)}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{summary.totalInvoices.toLocaleString('en-BD')} invoice(s)</p>
+                <p className="text-sm text-muted-foreground">Total sales (net of returns)</p>
+                <p className="mt-1 text-2xl font-semibold tracking-tight">{formatCurrency(summary.netAmount, currency)}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {summary.totalInvoices.toLocaleString('en-BD')} invoice(s) — {formatCurrency(summary.totalAmount, currency)} lifted,{' '}
+                  {formatCurrency(summary.totalReturnAmount, currency)} returned
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -299,14 +302,15 @@ export function SalesReportsContent() {
               <ExportMenu
                 filenameBase="dealer-sales-report"
                 title="Dealer-wise Sales Report"
-                headers={['Dealer', 'Invoices', 'Commission-based', 'Others', 'Unclassified', 'Total']}
+                headers={['Dealer', 'Invoices', 'Commission-based', 'Others', 'Unclassified', 'Return Product', 'Net Sale Amount']}
                 rows={filteredDealers.map((row) => [
                   row.dealerName,
                   row.invoiceCount,
                   row.commissionAmount.toFixed(2),
                   row.othersAmount.toFixed(2),
                   row.unclassifiedAmount.toFixed(2),
-                  row.totalAmount.toFixed(2),
+                  row.returnAmount.toFixed(2),
+                  row.netAmount.toFixed(2),
                 ])}
               />
             </div>
@@ -321,7 +325,8 @@ export function SalesReportsContent() {
                     <TableHead className="text-right">Commission-based</TableHead>
                     <TableHead className="text-right">Others</TableHead>
                     {hasUnclassified ? <TableHead className="text-right">Unclassified</TableHead> : null}
-                    <TableHead className="text-right">Total sale amount</TableHead>
+                    <TableHead className="text-right">Return Product</TableHead>
+                    <TableHead className="text-right">Net Sale Amount</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -334,12 +339,15 @@ export function SalesReportsContent() {
                       {hasUnclassified ? (
                         <TableCell className="text-right">{formatCurrency(row.unclassifiedAmount, currency)}</TableCell>
                       ) : null}
-                      <TableCell className="text-right font-semibold">{formatCurrency(row.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right text-destructive">
+                        {row.returnAmount > 0 ? `-${formatCurrency(row.returnAmount, currency)}` : formatCurrency(0, currency)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">{formatCurrency(row.netAmount, currency)}</TableCell>
                     </TableRow>
                   ))}
                   {filteredDealers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={hasUnclassified ? 6 : 5} className="py-10 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={hasUnclassified ? 7 : 6} className="py-10 text-center text-sm text-muted-foreground">
                         <Store className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         {summary.dealers.length === 0 ? 'No invoiced sales yet.' : 'No dealer matches this search.'}
                       </TableCell>
