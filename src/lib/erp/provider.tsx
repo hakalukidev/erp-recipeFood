@@ -4592,7 +4592,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+    // Client request (2026-09-13): expense approval is stricter than the
+    // general finance:edit permission every finance role already has —
+    // gated on its own finance:approve permission instead, which only
+    // Super Admin gets by default (see MODULE_DEFINITIONS in
+    // defaultData.ts) — another role only gets it if explicitly granted
+    // from the Role & Permission Matrix.
+    if (!hasPermissionCheck(data, currentUser, 'finance:approve')) {
       throw new Error('You do not have permission to approve expenses.')
     }
 

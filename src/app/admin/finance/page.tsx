@@ -1,10 +1,11 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck } from 'lucide-react'
+import { CheckCircle2, ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ExportMenu } from '@/components/admin/ExportMenu'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -182,7 +183,8 @@ function SectionHeader({
 }
 
 export default function ExpensesPage() {
-  const { data, saveExpense, deleteExpense } = useERP()
+  const { data, saveExpense, deleteExpense, updateExpenseApproval, hasPermission } = useERP()
+  const canApproveExpenses = hasPermission('finance:approve')
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
@@ -326,6 +328,21 @@ export default function ExpensesPage() {
       setFeedback('Expense removed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete expense.')
+    }
+  }
+
+  // Client request (2026-09-13) — Pending/Approval workflow: every new
+  // expense already starts at "pending" (see saveExpense in provider.tsx),
+  // this just surfaces it. updateExpenseApproval itself also enforces
+  // finance:approve — canApproveExpenses only controls whether the
+  // buttons render, not the actual authorization.
+  async function handleApproval(expenseId: string, approvalStatus: 'approved' | 'rejected') {
+    setFeedback(null)
+    try {
+      await updateExpenseApproval(expenseId, approvalStatus)
+      setFeedback(`Expense ${approvalStatus}.`)
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to update approval status.')
     }
   }
 
@@ -587,6 +604,7 @@ export default function ExpensesPage() {
                         <TableHead>Category</TableHead>
                         <TableHead>Amount</TableHead>
                         <TableHead>Note</TableHead>
+                        <TableHead>Status</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -598,7 +616,48 @@ export default function ExpensesPage() {
                           <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
                           <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'rounded-full',
+                                expense.approvalStatus === 'approved'
+                                  ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
+                                  : expense.approvalStatus === 'rejected'
+                                    ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                                    : 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+                              )}
+                            >
+                              {expense.approvalStatus === 'approved'
+                                ? 'Approved'
+                                : expense.approvalStatus === 'rejected'
+                                  ? 'Rejected'
+                                  : 'Pending'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
                             <div className="flex justify-end gap-2">
+                              {canApproveExpenses && expense.approvalStatus === 'pending' ? (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9 text-emerald-600 hover:text-emerald-600"
+                                    onClick={() => void handleApproval(expense.id, 'approved')}
+                                    aria-label="Approve expense"
+                                  >
+                                    <CheckCircle2 className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9 text-destructive hover:text-destructive"
+                                    onClick={() => void handleApproval(expense.id, 'rejected')}
+                                    aria-label="Reject expense"
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              ) : null}
                               <Button
                                 variant="outline"
                                 size="icon"
@@ -623,7 +682,7 @@ export default function ExpensesPage() {
                       ))}
                       {filteredExpenses.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                          <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                             No expenses recorded for this period.
                           </TableCell>
                         </TableRow>

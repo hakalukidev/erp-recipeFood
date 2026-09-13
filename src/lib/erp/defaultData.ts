@@ -32,7 +32,15 @@ export const MODULE_DEFINITIONS: Array<{
   { module: 'dealers', label: 'Dealers', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'purchase', label: 'Purchase', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'vendor', label: 'Vendor', actions: ['view', 'create', 'edit', 'delete', 'export'] },
-  { module: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  // 'approve' added 2026-09-13 (client request) — expense approval needs
+  // its own permission, separate from finance:edit, so it can be locked to
+  // Super Admin only while every other finance role keeps recording
+  // expenses normally. Every existing role's explicit permission list below
+  // is left as-is (none list finance:approve), so only super_admin gets it
+  // — it's granted toPermissionSet(ALL_PERMISSION_IDS) — and the
+  // self-heal effect in provider.tsx backfills it onto an already-seeded
+  // Super Admin role on next login, no manual Role Matrix step needed.
+  { module: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { module: 'accounting', label: 'Accounting', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   { module: 'reports', label: 'Reports', actions: ['view', 'export'] },
   { module: 'users', label: 'Users & roles', actions: ['view', 'create', 'edit', 'delete'] },
