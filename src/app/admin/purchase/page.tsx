@@ -195,6 +195,9 @@ function emptyProductionOutput(): ProductionOutputDraft {
 }
 
 // ---- Purchase entry dialog --------------------------------------------------
+// `amount` can be typed directly (client request, 2026-09-14): whichever of
+// rate/amount was edited last is the "basis" — the other one is recomputed
+// from it whenever qty changes, so Amount = Qty x Rate stays true either way.
 type PurchaseLineDraft = {
   key: string
   materialId?: string
@@ -202,10 +205,16 @@ type PurchaseLineDraft = {
   unit: PurchaseMaterialUnit
   qty: string
   rate: string
+  amount: string
+  basis: 'rate' | 'amount'
 }
 
 function emptyPurchaseLine(): PurchaseLineDraft {
-  return { key: createId('line'), materialName: '', unit: 'kg', qty: '0', rate: '0' }
+  return { key: createId('line'), materialName: '', unit: 'kg', qty: '0', rate: '0', amount: '0', basis: 'rate' }
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100
 }
 
 const PRINT_STYLES = `
@@ -737,7 +746,7 @@ export default function PurchasePage() {
   const [paymentHistoryDialogOpen, setPaymentHistoryDialogOpen] = useState(false)
 
   const purchaseTotal = useMemo(
-    () => purchaseLines.reduce((sum, line) => sum + (Number(line.qty) || 0) * (Number(line.rate) || 0), 0),
+    () => purchaseLines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0),
     [purchaseLines]
   )
   // Vendor payments already on file against the purchase being edited —
@@ -810,6 +819,8 @@ export default function PurchasePage() {
         unit: item.unit,
         qty: String(item.qty),
         rate: String(item.rate),
+        amount: String(item.amount),
+        basis: 'rate' as const,
       }))
     )
     const vendorPaymentsTotal = (vendorPaymentsByPurchaseId.get(purchase.id) ?? []).reduce(
@@ -825,6 +836,48 @@ export default function PurchasePage() {
 
   function updatePurchaseLine(key: string, patch: Partial<PurchaseLineDraft>) {
     setPurchaseLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
+  }
+
+  // Qty always recomputes whichever of rate/amount isn't the current basis,
+  // so the relationship Amount = Qty x Rate holds no matter which side the
+  // user is driving.
+  function handleLineQtyChange(key: string, value: string) {
+    setPurchaseLines((current) =>
+      current.map((line) => {
+        if (line.key !== key) return line
+        const qtyNum = Number(value) || 0
+        if (line.basis === 'amount') {
+          const amountNum = Number(line.amount) || 0
+          return { ...line, qty: value, rate: qtyNum > 0 ? String(roundMoney(amountNum / qtyNum)) : line.rate }
+        }
+        const rateNum = Number(line.rate) || 0
+        return { ...line, qty: value, amount: String(roundMoney(qtyNum * rateNum)) }
+      })
+    )
+  }
+
+  function handleLineRateChange(key: string, value: string) {
+    setPurchaseLines((current) =>
+      current.map((line) => {
+        if (line.key !== key) return line
+        const qtyNum = Number(line.qty) || 0
+        const rateNum = Number(value) || 0
+        return { ...line, rate: value, basis: 'rate', amount: String(roundMoney(qtyNum * rateNum)) }
+      })
+    )
+  }
+
+  // Typing Amount directly (client request, 2026-09-14) back-calculates the
+  // per-Kg Rate instead — qty stays what the user entered.
+  function handleLineAmountChange(key: string, value: string) {
+    setPurchaseLines((current) =>
+      current.map((line) => {
+        if (line.key !== key) return line
+        const qtyNum = Number(line.qty) || 0
+        const amountNum = Number(value) || 0
+        return { ...line, amount: value, basis: 'amount', rate: qtyNum > 0 ? String(roundMoney(amountNum / qtyNum)) : line.rate }
+      })
+    )
   }
 
   // Free-text material name field, backed by a <datalist> of already-known
@@ -2026,7 +2079,7 @@ export default function PurchasePage() {
                         type="number"
                         min={0}
                         value={line.qty}
-                        onChange={(event) => updatePurchaseLine(line.key, { qty: event.target.value })}
+                        onChange={(event) => handleLineQtyChange(line.key, event.target.value)}
                         className="bg-background"
                       />
                     </div>
@@ -2036,15 +2089,19 @@ export default function PurchasePage() {
                         type="number"
                         min={0}
                         value={line.rate}
-                        onChange={(event) => updatePurchaseLine(line.key, { rate: event.target.value })}
+                        onChange={(event) => handleLineRateChange(line.key, event.target.value)}
                         className="bg-background"
                       />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs text-muted-foreground">Amount</label>
-                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm font-medium tabular-nums">
-                        {formatAmount((Number(line.qty) || 0) * (Number(line.rate) || 0))}
-                      </p>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={line.amount}
+                        onChange={(event) => handleLineAmountChange(line.key, event.target.value)}
+                        className="bg-background text-right"
+                      />
                     </div>
                   </div>
                 </div>
