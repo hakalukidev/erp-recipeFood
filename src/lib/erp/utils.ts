@@ -629,13 +629,21 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
 
 // ---- Purchase Section (procurement from vendors) --------------------------
 // Same "always derive it live" shape as computeDealerDue above — a vendor's
-// outstanding due is never stored on the vendor, just the running sum of
-// PurchaseRecord.due across every purchase billed to them (each purchase's
-// own due is already kept correct by createPurchase/recordVendorPayment).
+// outstanding due is never stored as its own running total, just the
+// vendor's openingDue (due from before they were entered into the software)
+// plus the running sum of PurchaseRecord.due across every purchase billed to
+// them (each purchase's own due is already kept correct by
+// createPurchase/recordVendorPayment, and can go negative when a purchase's
+// `paid` was entered larger than that purchase's own total to pay down the
+// opening/prior balance in the same transaction).
 export function computeVendorDue(data: ERPData | null, vendorId: string) {
-  return toArray(data?.purchases)
-    .filter((purchase) => purchase.vendorId === vendorId)
-    .reduce((sum, purchase) => sum + purchase.due, 0)
+  const openingDue = data?.vendors[vendorId]?.openingDue ?? 0
+  return (
+    openingDue +
+    toArray(data?.purchases)
+      .filter((purchase) => purchase.vendorId === vendorId)
+      .reduce((sum, purchase) => sum + purchase.due, 0)
+  )
 }
 
 // The pieces a packaging material's current stock is actually good for —

@@ -63,6 +63,7 @@ import type {
 } from '@/lib/erp/types'
 import {
   computeMaterialAvailablePieces,
+  computeVendorDue,
   createId,
   formatDate,
   sortByCreatedAtDesc,
@@ -746,6 +747,18 @@ export default function PurchasePage() {
     () => (editingPurchase ? (vendorPaymentsByPurchaseId.get(editingPurchase.id) ?? []).reduce((sum, payment) => sum + payment.amount, 0) : 0),
     [editingPurchase, vendorPaymentsByPurchaseId]
   )
+  // Vendor's running due from everything else on file (openingDue + every
+  // other purchase's own due) — computeVendorDue already includes the
+  // purchase being edited, so its own current due is subtracted back out to
+  // get "everything but this one" (client request, 2026-09-13: seeing the
+  // vendor's other/prior balance while entering this purchase is what makes
+  // "paid more than this purchase's own total, to pay down the old due"
+  // make sense on screen instead of looking like a typo).
+  const vendorDueExcludingThisPurchase = useMemo(() => {
+    if (!purchaseVendorId) return 0
+    const total = computeVendorDue(data ?? null, purchaseVendorId)
+    return editingPurchase && editingPurchase.vendorId === purchaseVendorId ? total - editingPurchase.due : total
+  }, [data, purchaseVendorId, editingPurchase])
 
   const filteredPurchases = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -755,18 +768,18 @@ export default function PurchasePage() {
     )
   }, [purchases, query])
 
-  const purchaseStats = useMemo(
-    () =>
-      purchases.reduce(
-        (totals, purchase) => ({
-          totalAmount: totals.totalAmount + purchase.totalAmount,
-          totalPaid: totals.totalPaid + purchase.paid,
-          totalDue: totals.totalDue + purchase.due,
-        }),
-        { totalAmount: 0, totalPaid: 0, totalDue: 0 }
-      ),
-    [purchases]
-  )
+  const purchaseStats = useMemo(() => {
+    const openingDueTotal = vendors.reduce((sum, vendor) => sum + (vendor.openingDue ?? 0), 0)
+    const fromPurchases = purchases.reduce(
+      (totals, purchase) => ({
+        totalAmount: totals.totalAmount + purchase.totalAmount,
+        totalPaid: totals.totalPaid + purchase.paid,
+        totalDue: totals.totalDue + purchase.due,
+      }),
+      { totalAmount: 0, totalPaid: 0, totalDue: 0 }
+    )
+    return { ...fromPurchases, totalDue: fromPurchases.totalDue + openingDueTotal }
+  }, [purchases, vendors])
 
   function openCreatePurchaseDialog() {
     setEditingPurchase(null)
@@ -1128,7 +1141,10 @@ export default function PurchasePage() {
                           </TableCell>
                           <TableCell className="text-right">{formatAmount(purchase.totalAmount)}</TableCell>
                           <TableCell className="text-right text-emerald-600">{formatAmount(purchase.paid)}</TableCell>
-                          <TableCell className="text-right text-destructive">{formatAmount(purchase.due)}</TableCell>
+                          <TableCell className={cn('text-right', purchase.due > 0 ? 'text-destructive' : 'text-emerald-600')}>
+                            {formatAmount(Math.abs(purchase.due))}
+                            {purchase.due < 0 ? ' (extra)' : ''}
+                          </TableCell>
                           <TableCell className="text-right">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
@@ -2050,7 +2066,6 @@ export default function PurchasePage() {
                   <Input
                     type="number"
                     min={0}
-                    max={Math.max(purchaseTotal - editingVendorPaymentsTotal, 0)}
                     value={purchasePaid}
                     onChange={(event) => setPurchasePaid(event.target.value)}
                     className="bg-background"
@@ -2059,15 +2074,47 @@ export default function PurchasePage() {
                     <p className="text-[11px] text-muted-foreground">
                       Plus {formatAmount(editingVendorPaymentsTotal)} already recorded as separate vendor payments — edit those from Payment history.
                     </p>
-                  ) : null}
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      Can be more than the total amount — the extra pays down this vendor&apos;s older due below.
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Due</p>
-                  <p className="text-lg font-semibold text-destructive">
-                    {formatAmount(Math.max(purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal, 0))}
-                  </p>
+                  <p className="text-xs text-muted-foreground">Due (this purchase)</p>
+                  {(() => {
+                    const thisDue = purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal
+                    return (
+                      <p className={cn('text-lg font-semibold', thisDue > 0 ? 'text-destructive' : 'text-emerald-600')}>
+                        {formatAmount(Math.abs(thisDue))}
+                        {thisDue < 0 ? ' (extra)' : ''}
+                      </p>
+                    )
+                  })()}
                 </div>
               </div>
+
+              {purchaseVendorId ? (
+                <div className="grid gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Previous due (opening + earlier purchases)</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatAmount(vendorDueExcludingThisPurchase)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total due (after saving this purchase)</p>
+                    {(() => {
+                      const totalDue =
+                        vendorDueExcludingThisPurchase + purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal
+                      return (
+                        <p className={cn('text-lg font-semibold tabular-nums', totalDue > 0 ? 'text-destructive' : 'text-emerald-600')}>
+                          {formatAmount(Math.abs(totalDue))}
+                          {totalDue < 0 ? ' (extra)' : ''}
+                        </p>
+                      )
+                    })()}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Note (optional)</label>

@@ -111,6 +111,7 @@ import type {
 } from '@/lib/erp/types'
 import {
   CASH_CATEGORY_GOODS_PURCHASE,
+  CASH_CATEGORY_LOAN_REPAYMENT,
   CASH_CATEGORY_NEW_MARKET_INVESTMENT,
   CASH_CATEGORY_PACKAGING_PURCHASE,
   DIRECT_EXPENSE_CATEGORY,
@@ -2162,6 +2163,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const vendor = {
       id,
       ...normalized,
+      // Preserve the existing opening due on an edit that doesn't pass one
+      // (e.g. a future caller that only touches name/phone) rather than
+      // silently resetting it to zero.
+      openingDue: input.openingDue !== undefined ? Math.max(input.openingDue, 0) : existingVendor?.openingDue ?? 0,
       createdAt: existingVendor?.createdAt ?? now,
       updatedAt: now,
     }
@@ -2324,7 +2329,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
 
     const totalAmount = items.reduce((sum, item) => sum + item.amount, 0)
-    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), totalAmount)
+    // Not capped at totalAmount (2026-09-13 client request): paying more
+    // than this purchase's own total is exactly how an existing/opening
+    // vendor balance (VendorRecord.openingDue, or due left over from an
+    // earlier purchase) gets paid down in the same transaction — the excess
+    // just makes `due` negative, which computeVendorDue's running sum
+    // already nets out correctly against that prior balance.
+    const paid = Math.max(Number(input.paid) || 0, 0)
     const due = totalAmount - paid
 
     const db = getDatabaseOrThrow()
@@ -2453,7 +2464,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         `This purchase already has ${vendorPaymentsTotal.toFixed(2)} in recorded vendor payments — the new total can't be less than that. Edit or delete those payments first.`
       )
     }
-    const initialPaid = Math.min(Math.max(Number(input.paid) || 0, 0), totalAmount - vendorPaymentsTotal)
+    // Not capped at totalAmount - vendorPaymentsTotal (2026-09-13 client
+    // request, same as createPurchase above) — the amount entered at
+    // purchase-creation time can be edited larger than this purchase's own
+    // total to pay down the vendor's opening/prior balance instead.
+    const initialPaid = Math.max(Number(input.paid) || 0, 0)
     const paid = initialPaid + vendorPaymentsTotal
     const due = totalAmount - paid
 
@@ -3136,6 +3151,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = existingTransaction?.id ?? createId('loan_txn')
     const now = new Date().toISOString()
+
+    // A repayment entered directly here (as opposed to one auto-posted from
+    // an Expense — that path writes straight to loanTransactions and never
+    // calls this function, so it's never mistaken for one of these) also
+    // auto-posts/updates a matching CashMaintenanceRecord (ঋণ পরিশোধ) so the
+    // repayment shows up as real cash-out on the Daily Cash Book/Net Cash
+    // Position too, not just as a drop in the member's balance. A withdrawal
+    // needs no such entry — it's already counted as Cash In directly from
+    // loanTransactions (see loanWithdrawalsThisPeriod on the Loan & Cash
+    // Maintenance page).
+    const cashMaintenanceId =
+      normalized.type === 'repayment' ? existingTransaction?.cashMaintenanceId ?? createId('cash_maintenance') : undefined
+
     const transaction: LoanTransactionRecord = {
       id,
       loanAccountId: account.id,
@@ -3145,12 +3173,32 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: normalized.date,
       note: normalized.note,
       isOpeningBalance: normalized.isOpeningBalance,
+      ...(cashMaintenanceId ? { cashMaintenanceId } : {}),
       createdBy: existingTransaction?.createdBy ?? currentUser.id,
       createdByName: existingTransaction?.createdByName ?? currentUser.name,
       createdAt: existingTransaction?.createdAt ?? now,
     }
 
-    await update(ref(db, 'erp/loanTransactions'), { [id]: transaction })
+    const updates: Record<string, unknown> = { [`loanTransactions/${id}`]: transaction }
+
+    if (cashMaintenanceId) {
+      updates[`cashMaintenance/${cashMaintenanceId}`] = {
+        id: cashMaintenanceId,
+        category: CASH_CATEGORY_LOAN_REPAYMENT,
+        amount: normalized.amount,
+        date: normalized.date,
+        note: normalized.note || `Recorded from Loan Chart — ${account.memberName}`,
+        createdBy: existingTransaction?.createdBy ?? currentUser.id,
+        createdByName: existingTransaction?.createdByName ?? currentUser.name,
+        createdAt: existingTransaction?.createdAt ?? now,
+      }
+    } else if (existingTransaction?.cashMaintenanceId) {
+      // Edited from a repayment to a withdrawal — drop the cash entry this
+      // transaction used to own so it doesn't linger unowned.
+      updates[`cashMaintenance/${existingTransaction.cashMaintenanceId}`] = null
+    }
+
+    await update(ref(db, 'erp'), updates)
     await writeActivity(
       existingTransaction ? 'loan_transaction_updated' : 'loan_transaction_created',
       'finance',
@@ -3173,6 +3221,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
       [`loanTransactions/${transactionId}`]: null,
+      ...(transaction.cashMaintenanceId ? { [`cashMaintenance/${transaction.cashMaintenanceId}`]: null } : {}),
     })
     await writeActivity(
       'loan_transaction_deleted',

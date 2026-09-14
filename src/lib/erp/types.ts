@@ -820,7 +820,8 @@ export type ProductReturnInput = {
 //      what rate, how much was deposited against it, and the running amount
 //      still owed to them (see computeVendorDue in utils.ts — mirrors
 //      computeDealerDue's "always derive from the transaction record" shape,
-//      never stored on the vendor itself).
+//      plus the vendor's own openingDue below — never stored as its own
+//      running total on the vendor itself).
 //   2) Material stock — raw material (bought/tracked in Kg) and packaging
 //      material (Packet/Pouch/Carton/Bottle/Sack/Sticker — bought in Kg or
 //      Pcs depending on the item) both live in one PurchaseMaterialRecord
@@ -845,6 +846,15 @@ export type VendorRecord = {
   proprietorName?: string
   address: string
   phone: string
+  // Due already owed to this vendor before they were entered into the
+  // software (2026-09-13 client request) — e.g. migrating a vendor who's
+  // been supplying for years mid-relationship. Folded into computeVendorDue
+  // in utils.ts alongside every PurchaseRecord.due, so a purchase's own
+  // `paid` can be entered larger than that purchase's own total to pay down
+  // this opening balance in the same transaction instead of needing it
+  // pre-zeroed first. Never touched after creation except by editing the
+  // vendor directly — no automatic entry ever adjusts it.
+  openingDue: number
   createdAt: string
   updatedAt: string
 }
@@ -854,6 +864,7 @@ export type VendorInput = {
   proprietorName?: string
   address?: string
   phone?: string
+  openingDue?: number
 }
 
 // 'raw_material' is what gets converted into packaged finished goods (e.g.
@@ -1425,6 +1436,16 @@ export type LoanTransactionRecord = {
   // balance or monthly schedule is computed (both already just sum
   // withdrawals vs repayments by date).
   isOpeningBalance?: boolean
+  // The auto-posted CashMaintenanceRecord (category ঋণ পরিশোধ) mirroring
+  // this transaction — only set on a 'repayment' entered directly here on
+  // the Loan Chart (2026-09-14 client request), so that repayment also
+  // shows up as real cash-out on the Loan & Cash Maintenance page's Daily
+  // Cash Book/Net Cash Position, not just as a drop in the member's
+  // balance. See saveLoanTransaction in provider.tsx. Never set on a
+  // 'withdrawal' (already counted as Cash In directly from loanTransactions)
+  // or on a transaction auto-posted from an Expense (that one already hits
+  // cash-out through the Expense chart instead — see ExpenseRecord.loanTransactionId).
+  cashMaintenanceId?: string
   createdBy: string
   createdByName: string
   createdAt: string

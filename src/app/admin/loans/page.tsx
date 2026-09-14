@@ -404,6 +404,31 @@ export default function LoanAndCashMaintenancePage() {
     [filteredCashEntries]
   )
 
+  // "খাত অনুযায়ী মোট" (client request, 2026-09-13): the flat entry list above
+  // only shows the Cash Maintenance chart's own categories (পণ্য ক্রয়,
+  // প্যাকেজিং, ...); a Purchase's cash-out and an Expense's cash-out never
+  // land in the same table anywhere else in the app, so this merges both —
+  // same category+total shape as the Expense chart's "By category" table on
+  // the Finance page — for the one number a client actually wants: total
+  // spend per sector this period, cash-maintenance and expense combined.
+  const cashCategoryTotals = useMemo(() => {
+    const rows = new Map<string, { category: string; count: number; total: number }>()
+    function add(category: string, amount: number) {
+      const existing = rows.get(category)
+      if (existing) {
+        existing.count += 1
+        existing.total += amount
+      } else {
+        rows.set(category, { category, count: 1, total: amount })
+      }
+    }
+    filteredCashEntries.filter((entry) => !entry.isDirectExpense).forEach((entry) => add(entry.category, entry.amount))
+    expenses
+      .filter((expense) => (cashMode === 'daily' ? isSameDate(expense.date, cashDate) : isSameMonth(expense.date, cashMonth)))
+      .forEach((expense) => add(expense.category, expense.amount))
+    return Array.from(rows.values()).sort((left, right) => right.total - left.total)
+  }, [filteredCashEntries, expenses, cashMode, cashDate, cashMonth])
+
   function openCreateCash() {
     setEditingCashId(null)
     setCashForm(emptyCashForm)
@@ -473,10 +498,17 @@ export default function LoanAndCashMaintenancePage() {
     [expenses, cashMode, cashDate, cashMonth]
   )
   const totalCashOut = cashOutTotal + expenseTotalThisPeriod
+  // isOpeningBalance withdrawals ("Existing Loan") are excluded here (2026-09-14
+  // fix) — that money was borrowed before this system was in use, so whatever
+  // date it's logged under, it was never actual cash received during a period
+  // this reconciliation tracks. Counting it as this-period Cash In was
+  // producing a large false "mismatch" whenever an Existing Loan entry's date
+  // happened to fall inside the selected period (e.g. left at today's default
+  // instead of backdated to when the loan actually started).
   const loanWithdrawalsThisPeriod = useMemo(
     () =>
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal')
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance)
         .filter((entry) => (cashMode === 'daily' ? isSameDate(entry.date, cashDate) : isSameMonth(entry.date, cashMonth)))
         .reduce((sum, entry) => sum + entry.amount, 0),
     [loanTransactions, cashMode, cashDate, cashMonth]
@@ -505,7 +537,7 @@ export default function LoanAndCashMaintenancePage() {
   const openingBalance = useMemo(() => {
     const cashInBefore =
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && isBeforeDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0) +
       collectedCashRows
         .filter((row) => isBeforeDate(row.date, periodStartDate))
@@ -915,7 +947,7 @@ export default function LoanAndCashMaintenancePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {cashError ? <p className="text-sm text-destructive">{cashError}</p> : null}
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
                 <span className="text-muted-foreground">Cash-out total (excl. direct expense)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(cashOutTotal, currency)}</p>
@@ -923,6 +955,47 @@ export default function LoanAndCashMaintenancePage() {
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
                 <span className="text-muted-foreground">Direct-expense entries (for reconciling only)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(directExpenseTotal, currency)}</p>
+              </div>
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                <span className="text-muted-foreground">Total cash-out (Cash Maintenance + Expense)</span>
+                <p className="mt-1 text-lg font-semibold">{formatCurrency(totalCashOut, currency)}</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">By category — কোন খাতে কত গেছে</p>
+              <div className="overflow-x-auto rounded-2xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead>Category</TableHead>
+                      <TableHead className="text-right">Entries</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cashCategoryTotals.map((row) => (
+                      <TableRow key={row.category}>
+                        <TableCell className="font-medium">{row.category}</TableCell>
+                        <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {cashCategoryTotals.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                          No cash-out recorded for this period.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                    <TableRow className="bg-muted/30 font-semibold hover:bg-muted/30">
+                      <TableCell>Total</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {cashCategoryTotals.reduce((sum, row) => sum + row.count, 0)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(totalCashOut, currency)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
               </div>
             </div>
             <div className="overflow-x-auto rounded-2xl border border-border/70">

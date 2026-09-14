@@ -134,6 +134,12 @@ export const CASH_MAINTENANCE_CATEGORIES = [
 export const CASH_CATEGORY_GOODS_PURCHASE = 'পণ্য ক্রয়'
 export const CASH_CATEGORY_PACKAGING_PURCHASE = 'প্যাকেজিং মেটেরিয়ালস ক্রয়'
 
+// Named so provider.tsx's saveLoanTransaction (2026-09-14 client request — a
+// repayment recorded directly on the Loan Chart now hits cash flow too,
+// instead of only ever moving the member's balance) can post to this
+// category without hardcoding the Bangla literal a second time.
+export const CASH_CATEGORY_LOAN_REPAYMENT = 'ঋণ পরিশোধ'
+
 // Named so provider.tsx's saveInvestor (2026-09-12 client request — a new
 // investment now hits cash flow) can post to this category without
 // hardcoding the Bangla literal a second time.

@@ -32,9 +32,10 @@ type VendorFormState = {
   proprietorName: string
   phone: string
   address: string
+  openingDue: string
 }
 
-const emptyVendorForm: VendorFormState = { name: '', proprietorName: '', phone: '', address: '' }
+const emptyVendorForm: VendorFormState = { name: '', proprietorName: '', phone: '', address: '', openingDue: '0' }
 
 function formFromVendor(vendor: VendorRecord): VendorFormState {
   return {
@@ -42,6 +43,7 @@ function formFromVendor(vendor: VendorRecord): VendorFormState {
     proprietorName: vendor.proprietorName ?? '',
     phone: vendor.phone,
     address: vendor.address,
+    openingDue: String(vendor.openingDue ?? 0),
   }
 }
 
@@ -99,6 +101,7 @@ export default function VendorsPage() {
           proprietorName: vendorForm.proprietorName,
           phone: vendorForm.phone,
           address: vendorForm.address,
+          openingDue: Math.max(Number(vendorForm.openingDue) || 0, 0),
         },
         editingVendor?.id
       )
@@ -154,8 +157,8 @@ export default function VendorsPage() {
             <div>
               <CardTitle>Vendor list</CardTitle>
               <CardDescription>
-                Search by vendor/proprietor name, phone, or address. Current due is the live sum of every unpaid
-                purchase against them — record a purchase or a payment from the Purchase page.
+                Search by vendor/proprietor name, phone, or address. Current due is opening due plus the live sum of
+                every unpaid purchase against them — record a purchase or a payment from the Purchase page.
               </CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
@@ -256,7 +259,9 @@ export default function VendorsPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{editingVendor ? 'Edit vendor' : 'Add new vendor'}</DialogTitle>
-            <DialogDescription>Vendor name is required; proprietor name, mobile number, and address are optional.</DialogDescription>
+            <DialogDescription>
+              Vendor name is required; proprietor name, mobile number, address, and opening due are optional.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -298,6 +303,21 @@ export default function VendorsPage() {
                 onChange={(event) => setVendorForm((current) => ({ ...current, address: event.target.value }))}
                 placeholder="e.g. Karwan Bazar, Dhaka"
               />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                Opening due <span className="font-normal text-muted-foreground">(due owed before this vendor was added here)</span>
+              </p>
+              <Input
+                type="number"
+                min={0}
+                value={vendorForm.openingDue}
+                onChange={(event) => setVendorForm((current) => ({ ...current, openingDue: event.target.value }))}
+                placeholder="e.g. 348000"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Only for a vendor with existing history — added once to their running due, never changed automatically.
+              </p>
             </div>
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setVendorDialogOpen(false)}>
