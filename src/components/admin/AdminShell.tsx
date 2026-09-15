@@ -10,6 +10,7 @@ import {
   Boxes,
   Calculator,
   CheckCheck,
+  ChevronDown,
   FileBarChart,
   HandCoins,
   Handshake,
@@ -66,11 +67,12 @@ type NavigationItem = {
 type NavigationGroup = {
   title: string
   items: NavigationItem[]
+  collapsible?: boolean
 }
 
 const navigationGroups: NavigationGroup[] = [
   {
-    title: 'Operations',
+    title: '',
     items: [
       {
         label: 'Dashboard',
@@ -79,6 +81,12 @@ const navigationGroups: NavigationGroup[] = [
         icon: LayoutDashboard,
         permission: 'dashboard:view',
       },
+    ],
+  },
+  {
+    title: 'Master Data',
+    collapsible: true,
+    items: [
       {
         label: 'Product List',
         description: 'Product catalog with name, image, and price, plus stock control',
@@ -115,18 +123,24 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'dealers:view',
       },
       {
-        label: 'Purchase',
-        description: 'Raw/packaging material stock and daily purchase entries with vendor due tracking',
-        href: '/admin/purchase',
-        icon: Truck,
-        permission: 'purchase:view',
-      },
-      {
         label: 'Vendor',
         description: 'Vendor directory — name, address, phone, and running due',
         href: '/admin/vendors',
         icon: Handshake,
         permission: 'vendor:view',
+      },
+    ],
+  },
+  {
+    title: 'Transactions',
+    collapsible: true,
+    items: [
+      {
+        label: 'Purchase',
+        description: 'Raw/packaging material stock and daily purchase entries with vendor due tracking',
+        href: '/admin/purchase',
+        icon: Truck,
+        permission: 'purchase:view',
       },
       {
         label: 'Invoice',
@@ -156,13 +170,12 @@ const navigationGroups: NavigationGroup[] = [
         icon: HandCoins,
         permission: 'finance:view',
       },
-      {
-        label: 'Company Earnings',
-        description: 'Depot-sale profit vs expenses, with a monthly breakdown',
-        href: '/admin/earnings',
-        icon: PiggyBank,
-        permission: 'finance:view',
-      },
+    ],
+  },
+  {
+    title: 'Reports & Accounts',
+    collapsible: true,
+    items: [
       {
         label: 'Reports',
         description: 'Reports Hub — Sales, Expense, Purchase, Vendor, and Loan reports, each exportable/printable',
@@ -176,6 +189,13 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/accounting',
         icon: Library,
         permission: 'accounting:view',
+      },
+      {
+        label: 'Company Earnings',
+        description: 'Depot-sale profit vs expenses, with a monthly breakdown',
+        href: '/admin/earnings',
+        icon: PiggyBank,
+        permission: 'finance:view',
       },
     ],
   },
@@ -226,6 +246,25 @@ function SidebarContent({
     }))
     .filter((group) => group.items.length > 0)
 
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const activeGroup = navigationGroups.find(
+      (group) => group.collapsible && group.items.some((item) => item.label === active)
+    )
+    return new Set(activeGroup ? [activeGroup.title] : [])
+  })
+
+  function toggleGroup(title: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(title)) {
+        next.delete(title)
+      } else {
+        next.add(title)
+      }
+      return next
+    })
+  }
+
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div
@@ -266,13 +305,31 @@ function SidebarContent({
 
       <div className={cn('flex-1 space-y-8 overflow-y-auto overflow-x-hidden py-6', collapsed ? 'px-2' : 'px-4')}>
         <div className="space-y-6">
-          {visibleGroups.map((group) => (
-            <div key={group.title} className="space-y-3">
-              {!collapsed ? (
-                <p className="px-2 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45">
-                  {group.title}
-                </p>
+          {visibleGroups.map((group) => {
+            const isCollapsible = Boolean(group.collapsible) && !collapsed
+            const isOpen = !isCollapsible || openGroups.has(group.title)
+
+            return (
+            <div key={group.title || 'primary'} className="space-y-3">
+              {!collapsed && group.title ? (
+                isCollapsible ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    className="flex w-full items-center justify-between rounded-lg px-2 py-1 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45 transition-colors hover:text-sidebar-foreground/80"
+                  >
+                    <span>{group.title}</span>
+                    <ChevronDown
+                      className={cn('h-3.5 w-3.5 transition-transform', !isOpen && '-rotate-90')}
+                    />
+                  </button>
+                ) : (
+                  <p className="px-2 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45">
+                    {group.title}
+                  </p>
+                )
               ) : null}
+              {isOpen ? (
               <nav className="space-y-2">
                 {group.items.map((item) => {
                   const Icon = item.icon
@@ -320,8 +377,10 @@ function SidebarContent({
                   )
                 })}
               </nav>
+              ) : null}
             </div>
-          ))}
+            )
+          })}
         </div>
 
        

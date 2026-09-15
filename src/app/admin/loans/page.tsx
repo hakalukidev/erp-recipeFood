@@ -143,6 +143,24 @@ export default function LoanAndCashMaintenancePage() {
 
   const loanAccounts = useMemo(() => sortByCreatedAtDesc(toArray(data?.loanAccounts)), [data?.loanAccounts])
   const loanTransactions = useMemo(() => sortByCreatedAtDesc(toArray(data?.loanTransactions)), [data?.loanTransactions])
+  // Repayments posted "as Expense" (client request, 2026-09-15): unlike a
+  // repayment posted "as Cash Maintenance" — which shows up in the Cash
+  // Maintenance Chart section below — one posted as Expense only ever lived
+  // on the separate Finance/Expenses page, invisible from here. Mirrors that
+  // Cash Maintenance Chart section so both paths are visible and editable
+  // on this same page; editing goes through the loan transaction (not a
+  // separate expense form) since saveLoanTransaction is what keeps the
+  // linked expense + ledger entries in sync.
+  const expenseRepayments = useMemo(
+    () =>
+      loanTransactions
+        .filter((transaction) => transaction.type === 'repayment' && transaction.expenseId)
+        .map((transaction) => ({
+          transaction,
+          approvalStatus: data?.expenses?.[transaction.expenseId!]?.approvalStatus ?? 'pending',
+        })),
+    [loanTransactions, data?.expenses]
+  )
   const cashEntries = useMemo(() => sortByCreatedAtDesc(toArray(data?.cashMaintenance)), [data?.cashMaintenance])
   const investors = useMemo(() => sortByCreatedAtDesc(toArray(data?.investors)), [data?.investors])
   const collections = useMemo(() => toArray(data?.collections), [data?.collections])
@@ -255,16 +273,33 @@ export default function LoanAndCashMaintenancePage() {
 
   // ---- Loan Transactions (withdrawal / repayment) --------------------------
   const [transactionDialogOpen, setTransactionDialogOpen] = useState(false)
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null)
   const [transactionForm, setTransactionForm] = useState<LoanTransactionFormState>(emptyLoanTransactionForm)
   const [transactionSaving, setTransactionSaving] = useState(false)
   const [transactionError, setTransactionError] = useState<string | null>(null)
 
   function openCreateTransaction(type: LoanTransactionType, loanAccountId?: string, isOpeningBalance?: boolean) {
+    setEditingTransactionId(null)
     setTransactionForm({
       ...emptyLoanTransactionForm,
       type,
       loanAccountId: loanAccountId ?? '',
       isOpeningBalance: Boolean(isOpeningBalance),
+    })
+    setTransactionError(null)
+    setTransactionDialogOpen(true)
+  }
+
+  function openEditTransaction(transaction: LoanTransactionRecord) {
+    setEditingTransactionId(transaction.id)
+    setTransactionForm({
+      loanAccountId: transaction.loanAccountId,
+      type: transaction.type,
+      amount: String(transaction.amount),
+      date: transaction.date.slice(0, 10),
+      note: transaction.note ?? '',
+      isOpeningBalance: Boolean(transaction.isOpeningBalance),
+      postAs: transaction.expenseId ? 'expense' : 'cash_maintenance',
     })
     setTransactionError(null)
     setTransactionDialogOpen(true)
@@ -283,15 +318,18 @@ export default function LoanAndCashMaintenancePage() {
     }
     setTransactionSaving(true)
     try {
-      await saveLoanTransaction({
-        loanAccountId: transactionForm.loanAccountId,
-        type: transactionForm.type,
-        amount,
-        date: transactionForm.date,
-        note: transactionForm.note || undefined,
-        isOpeningBalance: transactionForm.isOpeningBalance,
-        postAs: transactionForm.postAs,
-      })
+      await saveLoanTransaction(
+        {
+          loanAccountId: transactionForm.loanAccountId,
+          type: transactionForm.type,
+          amount,
+          date: transactionForm.date,
+          note: transactionForm.note || undefined,
+          isOpeningBalance: transactionForm.isOpeningBalance,
+          postAs: transactionForm.postAs,
+        },
+        editingTransactionId ?? undefined
+      )
       setTransactionDialogOpen(false)
     } catch (reason) {
       setTransactionError(reason instanceof Error ? reason.message : 'Unable to record transaction.')
@@ -816,9 +854,20 @@ export default function LoanAndCashMaintenancePage() {
                       <TableCell className="max-w-[220px] truncate text-muted-foreground">{transaction.note || '—'}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatCurrency(transaction.amount, currency)}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTransaction(transaction)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditTransaction(transaction)} aria-label="Edit transaction">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9 text-destructive hover:text-destructive"
+                            onClick={() => handleDeleteTransaction(transaction)}
+                            aria-label="Delete transaction"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -826,6 +875,81 @@ export default function LoanAndCashMaintenancePage() {
                     <TableRow>
                       <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                         No loan transactions recorded yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Loan Repayments posted as Expense */}
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader>
+            <SectionHeader
+              icon={HandCoins}
+              title="Loan Repayments — Posted as Expense"
+              description="Repayments posted as Direct Expense (Operating Cost) instead of Cash Maintenance — these also show on the Finance › Expenses page, but can be edited from here."
+            />
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Member</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Note</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {expenseRepayments.map(({ transaction, approvalStatus }) => (
+                    <TableRow key={transaction.id}>
+                      <TableCell className="font-medium">{transaction.memberName}</TableCell>
+                      <TableCell>{formatDate(transaction.date)}</TableCell>
+                      <TableCell className="max-w-[220px] truncate text-muted-foreground">{transaction.note || '—'}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'rounded-full',
+                            approvalStatus === 'approved'
+                              ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
+                              : approvalStatus === 'rejected'
+                                ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                                : 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+                          )}
+                        >
+                          {approvalStatus === 'approved' ? 'Approved' : approvalStatus === 'rejected' ? 'Rejected' : 'Pending'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(transaction.amount, currency)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditTransaction(transaction)} aria-label="Edit repayment">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9 text-destructive hover:text-destructive"
+                            onClick={() => handleDeleteTransaction(transaction)}
+                            aria-label="Delete repayment"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {expenseRepayments.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                        No repayments posted as Expense yet.
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -1173,18 +1297,22 @@ export default function LoanAndCashMaintenancePage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {transactionForm.isOpeningBalance
-                ? 'Add existing loan'
-                : transactionForm.type === 'withdrawal'
-                  ? 'New loan withdrawal'
-                  : 'Record loan repayment'}
+              {editingTransactionId
+                ? 'Edit loan transaction'
+                : transactionForm.isOpeningBalance
+                  ? 'Add existing loan'
+                  : transactionForm.type === 'withdrawal'
+                    ? 'New loan withdrawal'
+                    : 'Record loan repayment'}
             </DialogTitle>
             <DialogDescription>
-              {transactionForm.isOpeningBalance
-                ? 'For a loan the member already had outstanding before this system was in use. Set the date to when the loan actually started — the balance and Monthly Schedule both key off it.'
-                : transactionForm.type === 'withdrawal'
-                  ? 'Raises the member’s outstanding balance.'
-                  : 'Lowers the member’s outstanding balance — reaches zero once fully repaid.'}
+              {editingTransactionId
+                ? 'Update the details of this transaction.'
+                : transactionForm.isOpeningBalance
+                  ? 'For a loan the member already had outstanding before this system was in use. Set the date to when the loan actually started — the balance and Monthly Schedule both key off it.'
+                  : transactionForm.type === 'withdrawal'
+                    ? 'Raises the member’s outstanding balance.'
+                    : 'Lowers the member’s outstanding balance — reaches zero once fully repaid.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
