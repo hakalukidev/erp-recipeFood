@@ -1438,14 +1438,24 @@ export type LoanTransactionRecord = {
   isOpeningBalance?: boolean
   // The auto-posted CashMaintenanceRecord (category ঋণ পরিশোধ) mirroring
   // this transaction — only set on a 'repayment' entered directly here on
-  // the Loan Chart (2026-09-14 client request), so that repayment also
-  // shows up as real cash-out on the Loan & Cash Maintenance page's Daily
-  // Cash Book/Net Cash Position, not just as a drop in the member's
-  // balance. See saveLoanTransaction in provider.tsx. Never set on a
-  // 'withdrawal' (already counted as Cash In directly from loanTransactions)
-  // or on a transaction auto-posted from an Expense (that one already hits
-  // cash-out through the Expense chart instead — see ExpenseRecord.loanTransactionId).
+  // the Loan Chart and posted as `postAs: 'cash_maintenance'` (the default;
+  // 2026-09-14 client request), so that repayment also shows up as real
+  // cash-out on the Loan & Cash Maintenance page's Daily Cash Book/Net Cash
+  // Position, not just as a drop in the member's balance. See
+  // saveLoanTransaction in provider.tsx. Never set alongside expenseId
+  // below, on a 'withdrawal' (already counted as Cash In directly from
+  // loanTransactions), or on a transaction auto-posted from an Expense
+  // recorded on the Finance page instead (that one owns this transaction the
+  // other way around — see ExpenseRecord.loanTransactionId).
   cashMaintenanceId?: string
+  // The auto-posted ExpenseRecord (category ঋণ পরিশোধ, EXPENSE_LOAN_REPAYMENT_CATEGORY)
+  // mirroring this transaction — only set on a 'repayment' entered here and
+  // posted as `postAs: 'expense'` (2026-09-15 client request: some
+  // repayments are a direct operating cost that should hit Company
+  // Earnings' net profit, not just a balance-sheet cash movement). Mutually
+  // exclusive with cashMaintenanceId above — never both set on the same
+  // transaction.
+  expenseId?: string
   createdBy: string
   createdByName: string
   createdAt: string
@@ -1458,6 +1468,10 @@ export type LoanTransactionInput = {
   date?: string
   note?: string
   isOpeningBalance?: boolean
+  // Only meaningful on a 'repayment' — which chart it posts real cash-out
+  // to. Defaults to 'cash_maintenance' (the pre-2026-09-15 behaviour) when
+  // omitted. See LoanTransactionRecord.cashMaintenanceId/expenseId above.
+  postAs?: 'cash_maintenance' | 'expense'
 }
 
 // ---- Cash Maintenance Chart -------------------------------------------------

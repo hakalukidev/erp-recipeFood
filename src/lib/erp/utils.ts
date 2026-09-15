@@ -337,6 +337,184 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   }
 }
 
+function dateInRange(date: string, from: string, to: string) {
+  const value = date.slice(0, 10)
+  if (from && value < from) return false
+  if (to && value > to) return false
+  return true
+}
+
+export type FundCashFlowCategoryRow = { category: string; expenseAmount: number; cashAmount: number; total: number }
+export type FundCashFlowVendorRow = { vendorId: string; vendorName: string; purchaseCount: number; totalAmount: number; paid: number; due: number }
+export type FundCashFlowItemRow = { materialId: string; materialName: string; category: string; unit: string; qty: number; totalAmount: number }
+export type FundCashFlowProductRow = { productId: string; productName: string; qty: number; totalAmount: number }
+
+// ---- Fund / Cash Flow Report (client request, 2026-09-14) ----------------
+// "আয়ের দিক... ব্যয়ের দিক... ডান-বাম... এক জায়গায় দেখতে পাওয়া" — a single
+// consolidated fund/balance picture that ties every inflow source (sales
+// money actually collected, loan withdrawals) against every outflow head
+// (Expense chart + Cash Maintenance chart, which already includes vendor
+// purchases, loan repayment, depot commission, etc. — see
+// CASH_MAINTENANCE_CATEGORIES) for one date range, plus the P&L impact of
+// product returns and vendor-wise/item-wise breakdowns underneath — instead
+// of the same numbers living scattered across the Loan & Cash Maintenance,
+// Company Earnings, and Reports Hub pages with no single printable view.
+// `from`/`to` are 'YYYY-MM-DD'; empty means unbounded on that side. Opening
+// balance sums every inflow/outflow strictly before `from` (0 when `from` is
+// empty), same "derive, don't store" shape as the Daily Cash Book on the
+// Loan & Cash Maintenance page.
+export function buildFundCashFlowReport(data: ERPData | null, from: string, to: string) {
+  const rateCards = toArray(data?.rateCards)
+  const productReturns = toArray(data?.productReturns)
+  const collections = toArray(data?.collections)
+  const loanTransactions = toArray(data?.loanTransactions)
+  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
+  const cashEntries = toArray(data?.cashMaintenance).filter((entry) => !entry.isDirectExpense)
+  const purchases = toArray(data?.purchases)
+  const vendors = toArray(data?.vendors)
+
+  // Same "paid at invoice time + every later collection" cash-received shape
+  // as collectedCashRows in the Loan & Cash Maintenance page.
+  const collectionsByRateCardId = new Map<string, number>()
+  for (const collection of collections) {
+    collectionsByRateCardId.set(collection.rateCardId, (collectionsByRateCardId.get(collection.rateCardId) ?? 0) + collection.amount)
+  }
+  const salesCashRows: Array<{ date: string; amount: number }> = []
+  for (const card of rateCards) {
+    const initialPaid = (card.paid ?? 0) - (collectionsByRateCardId.get(card.id) ?? 0)
+    if (initialPaid > 0) salesCashRows.push({ date: card.date, amount: initialPaid })
+  }
+  for (const collection of collections) {
+    salesCashRows.push({ date: collection.collectionDate, amount: collection.amount })
+  }
+
+  const loanWithdrawalRows = loanTransactions.filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance)
+
+  function cashInBetween(fromDate: string, toDate: string) {
+    const sales = salesCashRows.filter((row) => dateInRange(row.date, fromDate, toDate)).reduce((sum, row) => sum + row.amount, 0)
+    const loans = loanWithdrawalRows
+      .filter((entry) => dateInRange(entry.date, fromDate, toDate))
+      .reduce((sum, entry) => sum + entry.amount, 0)
+    return { sales, loans, total: sales + loans }
+  }
+  function cashOutBetween(fromDate: string, toDate: string) {
+    const expenseTotal = expenses
+      .filter((expense) => dateInRange(expense.date, fromDate, toDate))
+      .reduce((sum, expense) => sum + expense.amount, 0)
+    const cashTotal = cashEntries
+      .filter((entry) => dateInRange(entry.date, fromDate, toDate))
+      .reduce((sum, entry) => sum + entry.amount, 0)
+    return expenseTotal + cashTotal
+  }
+
+  const openingBalance = from ? cashInBetween('', dayBefore(from)).total - cashOutBetween('', dayBefore(from)) : 0
+  const inflow = cashInBetween(from, to)
+  const outflowTotal = cashOutBetween(from, to)
+
+  // Outflow by category — Expense chart + Cash Maintenance chart merged,
+  // same shape as ReportsHubScreen's expenseCategorySummary.
+  const categoryMap = new Map<string, FundCashFlowCategoryRow>()
+  function addCategory(category: string, amount: number, fromExpense: boolean) {
+    const row = categoryMap.get(category) ?? { category, expenseAmount: 0, cashAmount: 0, total: 0 }
+    if (fromExpense) row.expenseAmount += amount
+    else row.cashAmount += amount
+    row.total += amount
+    categoryMap.set(category, row)
+  }
+  expenses.filter((expense) => dateInRange(expense.date, from, to)).forEach((expense) => addCategory(expense.category, expense.amount, true))
+  cashEntries.filter((entry) => dateInRange(entry.date, from, to)).forEach((entry) => addCategory(entry.category, entry.amount, false))
+  const outflowByCategory = Array.from(categoryMap.values()).sort((left, right) => right.total - left.total)
+
+  const closingBalance = openingBalance + inflow.total - outflowTotal
+
+  // ---- Product returns (deducted from earning, Section 4 of the spec) ----
+  const returnsInRange = productReturns.filter((item) => dateInRange(item.date, from, to))
+  const totalReturnsDeducted = returnsInRange.reduce((sum, item) => sum + item.companyProfit, 0)
+  const totalReturnedValue = returnsInRange.reduce((sum, item) => sum + item.depotRateTotal, 0)
+
+  // ---- P&L for the same range (Section 5) ---------------------------------
+  const cardsInRange = rateCards.filter((card) => dateInRange(card.date, from, to))
+  const totalEarning = cardsInRange.reduce((sum, card) => sum + card.usableMoney, 0) - totalReturnsDeducted
+  const expenseInRange = expenses.filter((expense) => dateInRange(expense.date, from, to)).reduce((sum, expense) => sum + expense.amount, 0)
+  const netProfit = totalEarning - expenseInRange
+
+  // ---- Vendor-wise breakdown (Section 6) ----------------------------------
+  const purchasesInRange = purchases.filter((purchase) => dateInRange(purchase.date, from, to))
+  const vendorMap = new Map<string, FundCashFlowVendorRow>()
+  for (const purchase of purchasesInRange) {
+    const key = purchase.vendorId || purchase.vendorName || 'unassigned'
+    const row = vendorMap.get(key) ?? {
+      vendorId: key,
+      vendorName: purchase.vendorName || 'Unassigned',
+      purchaseCount: 0,
+      totalAmount: 0,
+      paid: 0,
+      due: 0,
+    }
+    row.purchaseCount += 1
+    row.totalAmount += purchase.totalAmount
+    row.paid += purchase.paid
+    row.due += purchase.due
+    vendorMap.set(key, row)
+  }
+  const vendorWise = Array.from(vendorMap.values()).sort((left, right) => right.totalAmount - left.totalAmount)
+
+  // ---- Item-wise breakdown — purchased materials (Section 6) -------------
+  const itemMap = new Map<string, FundCashFlowItemRow>()
+  for (const purchase of purchasesInRange) {
+    for (const item of purchase.items) {
+      const key = `${item.materialId || item.materialName}:${item.unit}`
+      const row = itemMap.get(key) ?? {
+        materialId: item.materialId || item.materialName,
+        materialName: item.materialName,
+        category: item.category === 'raw_material' ? 'Raw Material' : 'Packaging Material',
+        unit: item.unit,
+        qty: 0,
+        totalAmount: 0,
+      }
+      row.qty += item.qty
+      row.totalAmount += item.amount
+      itemMap.set(key, row)
+    }
+  }
+  const itemWise = Array.from(itemMap.values()).sort((left, right) => right.totalAmount - left.totalAmount)
+
+  // ---- Item-wise breakdown — products sold (Section 6) --------------------
+  const productMap = new Map<string, FundCashFlowProductRow>()
+  for (const card of cardsInRange) {
+    for (const item of card.items) {
+      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const key = item.productId || item.finishedGoodsId || item.productName
+      const row = productMap.get(key) ?? { productId: key, productName: item.productName, qty: 0, totalAmount: 0 }
+      row.qty += pieces
+      row.totalAmount += pieces * item.dealerRate
+      productMap.set(key, row)
+    }
+  }
+  const productWise = Array.from(productMap.values()).sort((left, right) => right.totalAmount - left.totalAmount)
+
+  return {
+    from,
+    to,
+    openingBalance,
+    inflow,
+    outflow: { byCategory: outflowByCategory, total: outflowTotal },
+    closingBalance,
+    productReturns: { count: returnsInRange.length, totalReturnedValue, totalDeducted: totalReturnsDeducted },
+    profitLoss: { totalEarning, totalExpense: expenseInRange, netProfit },
+    vendorWise,
+    itemWise,
+    productWise,
+    vendorCount: vendors.length,
+  }
+}
+
+function dayBefore(dateStr: string) {
+  const date = new Date(`${dateStr}T00:00:00`)
+  date.setDate(date.getDate() - 1)
+  return date.toISOString().slice(0, 10)
+}
+
 export type DealerSalesReportRow = {
   dealerId: string
   dealerName: string

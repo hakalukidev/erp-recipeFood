@@ -73,7 +73,12 @@ export const EXPENSE_CATEGORIES = [
   'রেন্ট',
   'বিদ্যুৎ বিল',
   'সেলারি',
-  'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)',
+  // 2026-09-15 client request: packaging material purchases (প্যাকেট/পাউচ)
+  // are never a P&L expense — moved out of this list entirely so the Finance
+  // page's "Record expense" form can no longer post one here. Use the Cash
+  // Maintenance chart's CASH_CATEGORY_PACKAGING_PURCHASE ('প্যাকেজিং
+  // মেটেরিয়ালস ক্রয়') below instead — same as a Purchase's own paid amount
+  // already does via buildPurchaseCashEntries in provider.tsx.
   // 2026-09-12 client request: a loan repayment recorded here (as opposed to
   // the same-named category on the Cash Maintenance chart below) is treated
   // as a direct operational expense — it hits Company Earnings' net profit
@@ -100,7 +105,6 @@ export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
   'রেন্ট': 'rent',
   'বিদ্যুৎ বিল': 'electricity',
   'সেলারি': 'salary',
-  'প্যাকেজিং মেটেরিয়ালস (প্যাকেট/ পাউচ)': 'factory_expense',
   'ঋণ পরিশোধ': 'loan_repayment',
 }
 
@@ -126,6 +130,13 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'প্যাকেজিং মেটেরিয়ালস ক্রয়',
   'ডিপো কমিশন',
   'ডিলার পেমেন্ট পণ্য পরিবহন',
+  // 2026-09-15 client request: petty cash handed out day-to-day (e.g. the
+  // factory mess/office's small market-money advances to staff) — the real
+  // expense only lands once it's settled against that employee's salary
+  // (a সেলারি-category Expense then), so counting it here too would be a
+  // second, premature P&L hit for money that hasn't actually been spent by
+  // the company yet. Stays a pure cash movement like the rest of this list.
+  'অফিস খরচ',
 ] as const
 
 // Named so provider.tsx's buildPurchaseCashEntries (2026-09-12 client
@@ -144,6 +155,18 @@ export const CASH_CATEGORY_LOAN_REPAYMENT = 'ঋণ পরিশোধ'
 // investment now hits cash flow) can post to this category without
 // hardcoding the Bangla literal a second time.
 export const CASH_CATEGORY_NEW_MARKET_INVESTMENT = 'নতুন মার্কেট ইনভেস্টমেন্ট'
+
+// Named so provider.tsx's buildPurchaseCashEntries can post the part of a
+// purchase's `paid` that exceeds this purchase's own items total (i.e. it's
+// paying down the vendor's opening/prior-purchase due, not today's goods) to
+// its own category — 2026-09-15 client-reported bug: that excess used to be
+// lumped into CASH_CATEGORY_GOODS_PURCHASE/PACKAGING_PURCHASE alongside the
+// goods actually bought this time, inflating "পণ্য ক্রয়" by whatever old due
+// got paid off in the same transaction. Deliberately its own category, not
+// CASH_CATEGORY_LOAN_REPAYMENT — this is vendor accounts-payable, unrelated
+// to the Loan Chart's per-loanAccountId balances that category's repayment
+// entries reconcile against.
+export const CASH_CATEGORY_VENDOR_DUE_SETTLEMENT = 'ভেন্ডার বাকি পরিশোধ'
 
 // The one category that's recorded on the Cash Maintenance chart purely to
 // help the books balance — never subtracted in the cash-out total the

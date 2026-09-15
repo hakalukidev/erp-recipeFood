@@ -114,6 +114,7 @@ import {
   CASH_CATEGORY_LOAN_REPAYMENT,
   CASH_CATEGORY_NEW_MARKET_INVESTMENT,
   CASH_CATEGORY_PACKAGING_PURCHASE,
+  CASH_CATEGORY_VENDOR_DUE_SETTLEMENT,
   DIRECT_EXPENSE_CATEGORY,
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
@@ -770,6 +771,16 @@ function buildExpenseLedgerEntries(params: {
 // ("packaging") by how much of the purchase's own line items were raw vs
 // packaging material — a purchase mixing both categories gets one entry per
 // category instead of misclassifying the whole payment as one or the other.
+//
+// `amount` (createPurchase/updatePurchase's `paid`) is allowed to exceed
+// these items' own total — that's how an existing/opening vendor balance
+// gets paid down in the same transaction (see createPurchase). Only the
+// portion up to that total is goods/packaging spend; anything beyond it is
+// paying off an older due, not today's items, so it's split out to its own
+// CASH_CATEGORY_VENDOR_DUE_SETTLEMENT entry instead of being counted as
+// পণ্য ক্রয়/প্যাকেজিং ক্রয় too (2026-09-15 client-reported bug — that excess
+// used to inflate this purchase's own goods/packaging category by however
+// much old due it was actually settling).
 function buildPurchaseCashEntries(
   items: PurchaseItem[],
   amount: number,
@@ -787,8 +798,10 @@ function buildPurchaseCashEntries(
     .reduce((sum, item) => sum + item.amount, 0)
   const grandTotal = rawTotal + packagingTotal
   const rawShare = grandTotal > 0 ? rawTotal / grandTotal : 1
-  const rawAmount = amount * rawShare
-  const packagingAmount = amount - rawAmount
+  const goodsPortion = grandTotal > 0 ? Math.min(amount, grandTotal) : amount
+  const dueSettlementAmount = amount - goodsPortion
+  const rawAmount = goodsPortion * rawShare
+  const packagingAmount = goodsPortion - rawAmount
 
   const now = new Date().toISOString()
   const entries: Record<string, CashMaintenanceRecord> = {}
@@ -811,6 +824,19 @@ function buildPurchaseCashEntries(
       id,
       category: CASH_CATEGORY_PACKAGING_PURCHASE,
       amount: packagingAmount,
+      date,
+      note,
+      createdBy: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: now,
+    }
+  }
+  if (dueSettlementAmount > 0) {
+    const id = createId('cash_maintenance')
+    entries[id] = {
+      id,
+      category: CASH_CATEGORY_VENDOR_DUE_SETTLEMENT,
+      amount: dueSettlementAmount,
       date,
       note,
       createdBy: currentUser.id,
@@ -1166,6 +1192,9 @@ function normalizeLoanTransactionInput(input: LoanTransactionInput) {
     // Only meaningful on a withdrawal — an opening balance is never "repaid
     // back" as its own concept, that's just a regular repayment against it.
     isOpeningBalance: input.type === 'withdrawal' && Boolean(input.isOpeningBalance),
+    // Only meaningful on a repayment — defaults to the pre-existing
+    // Cash Maintenance behaviour when not given.
+    postAs: input.type === 'repayment' && input.postAs === 'expense' ? 'expense' : ('cash_maintenance' as const),
   }
 }
 
@@ -3155,14 +3184,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // A repayment entered directly here (as opposed to one auto-posted from
     // an Expense — that path writes straight to loanTransactions and never
     // calls this function, so it's never mistaken for one of these) also
-    // auto-posts/updates a matching CashMaintenanceRecord (ঋণ পরিশোধ) so the
-    // repayment shows up as real cash-out on the Daily Cash Book/Net Cash
-    // Position too, not just as a drop in the member's balance. A withdrawal
-    // needs no such entry — it's already counted as Cash In directly from
+    // auto-posts/updates a matching CashMaintenanceRecord (ঋণ পরিশোধ), unless
+    // `postAs: 'expense'` was picked (2026-09-15 client request — some
+    // repayments are a direct operating cost, not just a balance-sheet cash
+    // movement), in which case it posts an ExpenseRecord + ledger entries
+    // instead, same shape as saveExpense's own EXPENSE_LOAN_REPAYMENT_CATEGORY
+    // handling. Either way the repayment shows up as real cash-out
+    // somewhere, not just as a drop in the member's balance. A withdrawal
+    // needs neither — it's already counted as Cash In directly from
     // loanTransactions (see loanWithdrawalsThisPeriod on the Loan & Cash
     // Maintenance page).
-    const cashMaintenanceId =
-      normalized.type === 'repayment' ? existingTransaction?.cashMaintenanceId ?? createId('cash_maintenance') : undefined
+    const postAsCash = normalized.type === 'repayment' && normalized.postAs === 'cash_maintenance'
+    const postAsExpense = normalized.type === 'repayment' && normalized.postAs === 'expense'
+    const cashMaintenanceId = postAsCash ? existingTransaction?.cashMaintenanceId ?? createId('cash_maintenance') : undefined
+    const expenseId = postAsExpense ? existingTransaction?.expenseId ?? createId('expense') : undefined
 
     const transaction: LoanTransactionRecord = {
       id,
@@ -3174,6 +3209,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       note: normalized.note,
       isOpeningBalance: normalized.isOpeningBalance,
       ...(cashMaintenanceId ? { cashMaintenanceId } : {}),
+      ...(expenseId ? { expenseId } : {}),
       createdBy: existingTransaction?.createdBy ?? currentUser.id,
       createdByName: existingTransaction?.createdByName ?? currentUser.name,
       createdAt: existingTransaction?.createdAt ?? now,
@@ -3193,16 +3229,69 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         createdAt: existingTransaction?.createdAt ?? now,
       }
     } else if (existingTransaction?.cashMaintenanceId) {
-      // Edited from a repayment to a withdrawal — drop the cash entry this
-      // transaction used to own so it doesn't linger unowned.
+      // Edited away from "post as Cash Maintenance" (to Expense, or to a
+      // withdrawal) — drop the cash entry this transaction used to own so
+      // it doesn't linger unowned.
       updates[`cashMaintenance/${existingTransaction.cashMaintenanceId}`] = null
+    }
+
+    if (expenseId) {
+      // Reverse-then-repost, same pattern saveExpense uses on an edit — the
+      // original ledger lines stay in the audit trail, just reversed. Runs
+      // even when staying in "post as Expense" mode, so an amount/date
+      // change on the transaction is reflected in the ledger too.
+      if (existingTransaction?.expenseId) {
+        const active = getActiveLedgerEntries(data.ledgerEntries, existingTransaction.expenseId)
+        Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+          updates[`ledgerEntries/${entry.id}`] = entry
+        })
+      }
+      const existingExpense = existingTransaction?.expenseId ? data.expenses[existingTransaction.expenseId] : undefined
+      updates[`expenses/${expenseId}`] = {
+        id: expenseId,
+        category: EXPENSE_LOAN_REPAYMENT_CATEGORY,
+        amount: normalized.amount,
+        note: normalized.note || `Recorded from Loan Chart — ${account.memberName}`,
+        date: normalized.date,
+        paymentMethod: 'cash',
+        approvalStatus: existingExpense?.approvalStatus ?? 'pending',
+        approvedBy: existingExpense?.approvedBy ?? '',
+        approvedByName: existingExpense?.approvedByName ?? '',
+        approvedAt: existingExpense?.approvedAt ?? '',
+        loanAccountId: account.id,
+        loanMemberName: account.memberName,
+        loanTransactionId: id,
+        createdBy: existingTransaction?.createdBy ?? currentUser.id,
+        createdByName: existingTransaction?.createdByName ?? currentUser.name,
+        createdAt: existingTransaction?.createdAt ?? now,
+      }
+      Object.values(
+        buildExpenseLedgerEntries({
+          expenseId,
+          date: normalized.date,
+          category: EXPENSE_LOAN_REPAYMENT_CATEGORY,
+          amount: normalized.amount,
+          paymentMethod: 'cash',
+        })
+      ).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+    } else if (existingTransaction?.expenseId) {
+      // Edited away from "post as Expense" (to Cash Maintenance, or to a
+      // withdrawal) — reverse its ledger entries and drop the expense
+      // record it used to own.
+      const active = getActiveLedgerEntries(data.ledgerEntries, existingTransaction.expenseId)
+      Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+      updates[`expenses/${existingTransaction.expenseId}`] = null
     }
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
       existingTransaction ? 'loan_transaction_updated' : 'loan_transaction_created',
       'finance',
-      `${normalized.isOpeningBalance ? 'Recorded existing loan balance of' : normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}.`
+      `${normalized.isOpeningBalance ? 'Recorded existing loan balance of' : normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}${postAsExpense ? ' (posted as Expense)' : ''}.`
     )
 
     return id
@@ -3219,10 +3308,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {
       [`loanTransactions/${transactionId}`]: null,
       ...(transaction.cashMaintenanceId ? { [`cashMaintenance/${transaction.cashMaintenanceId}`]: null } : {}),
-    })
+    }
+    if (transaction.expenseId) {
+      const active = getActiveLedgerEntries(data.ledgerEntries, transaction.expenseId)
+      Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
+      updates[`expenses/${transaction.expenseId}`] = null
+    }
+    await update(ref(db, 'erp'), updates)
     await writeActivity(
       'loan_transaction_deleted',
       'finance',

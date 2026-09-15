@@ -90,6 +90,9 @@ const emptyLoanTransactionForm = {
   date: todayIso(),
   note: '',
   isOpeningBalance: false,
+  // Only meaningful when type === 'repayment' — which chart the repayment's
+  // real cash-out posts to (2026-09-15 client request).
+  postAs: 'cash_maintenance' as 'cash_maintenance' | 'expense',
 }
 type LoanTransactionFormState = typeof emptyLoanTransactionForm
 
@@ -287,6 +290,7 @@ export default function LoanAndCashMaintenancePage() {
         date: transactionForm.date,
         note: transactionForm.note || undefined,
         isOpeningBalance: transactionForm.isOpeningBalance,
+        postAs: transactionForm.postAs,
       })
       setTransactionDialogOpen(false)
     } catch (reason) {
@@ -802,6 +806,11 @@ export default function LoanAndCashMaintenancePage() {
                         >
                           {transaction.isOpeningBalance ? 'Existing Loan' : transaction.type === 'withdrawal' ? 'Withdrawal' : 'Repayment'}
                         </Badge>
+                        {transaction.type === 'repayment' && !transaction.isOpeningBalance ? (
+                          <span className="ml-1.5 text-xs text-muted-foreground">
+                            {transaction.expenseId ? '(as Expense)' : '(as Cash Maintenance)'}
+                          </span>
+                        ) : null}
                       </TableCell>
                       <TableCell>{formatDate(transaction.date)}</TableCell>
                       <TableCell className="max-w-[220px] truncate text-muted-foreground">{transaction.note || '—'}</TableCell>
@@ -1205,6 +1214,21 @@ export default function LoanAndCashMaintenancePage() {
                 </Select>
               </div>
             )}
+            {!transactionForm.isOpeningBalance && transactionForm.type === 'repayment' ? (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Post this repayment as</label>
+                <Select
+                  value={transactionForm.postAs}
+                  onValueChange={(value) => setTransactionForm((current) => ({ ...current, postAs: value as 'cash_maintenance' | 'expense' }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash_maintenance">Cash Maintenance (doesn&apos;t affect net profit)</SelectItem>
+                    <SelectItem value="expense">Direct Expense (Operating Cost — hits net profit)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">

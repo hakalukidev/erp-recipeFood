@@ -5,6 +5,7 @@ import { FileBarChart, HandCoins, ReceiptText, Search, ShoppingCart, Truck } fro
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
+import { FundCashFlowReport } from './FundCashFlowReport'
 import { SalesReportsContent } from './SalesReportsScreen'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,9 +22,10 @@ import { useERP } from '@/lib/erp/provider'
 import { computeVendorDue, formatCurrency, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-type SectionId = 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
+type SectionId = 'fund' | 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
 
 const SECTIONS: Array<{ id: SectionId; label: string; description: string }> = [
+  { id: 'fund', label: 'Fund / Cash Flow', description: 'Inflow vs outflow, returns, and P&L — one consolidated printable report' },
   { id: 'sales', label: 'Sales', description: 'Dealer/product/category invoice reports' },
   { id: 'expense', label: 'Expense', description: 'Every recorded expense, by date range' },
   { id: 'purchase', label: 'Purchase', description: 'Every procurement transaction, by date range' },
@@ -169,7 +171,7 @@ function inRange(date: string, from: string, to: string) {
 export function ReportsHubScreen() {
   const { data } = useERP()
   const currency = data?.settings.currency
-  const [section, setSection] = useState<SectionId>('sales')
+  const [section, setSection] = useState<SectionId>('fund')
 
   // ---- Expense report (client request, 2026-09-13) -----------------------
   // Sector-wise summary + a single combined detail list, always visible —
@@ -344,6 +346,8 @@ export function ReportsHubScreen() {
             </button>
           ))}
         </div>
+
+        {section === 'fund' ? <FundCashFlowReport /> : null}
 
         {section === 'sales' ? <SalesReportsContent /> : null}
 
