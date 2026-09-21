@@ -142,6 +142,17 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'অফিস খরচ',
 ] as const
 
+// The three categories the client enters most often on the Cash Maintenance
+// chart (2026-09-22 client request) — shown as one-tap buttons above the
+// category dropdown in the Record cash entry dialog. `পণ্য ক্রয়` is also the
+// dialog's default category.
+export const CASH_QUICK_CATEGORIES = [
+  { label: 'পণ্য ক্রয়', category: 'পণ্য ক্রয়' },
+  { label: 'পাউচ / প্যাকেট', category: 'প্যাকেজিং মেটেরিয়ালস ক্রয়' },
+  { label: 'ডিপো ভাড়া', category: 'ডিপো ভাড়া' },
+] as const
+export const CASH_DEFAULT_OUT_CATEGORY = CASH_QUICK_CATEGORIES[0].category
+
 // Cash Maintenance entries recorded with direction 'in' (2026-09-22 client
 // request) — money received into the till that isn't already tracked as a
 // sale collection or loan withdrawal, e.g. the "ডিলার পয়েন্ট হতে টাকা রিসিভ"

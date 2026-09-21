@@ -30,6 +30,7 @@ import {
   Truck,
   Undo2,
   Users,
+  Wallet,
   Warehouse,
   X,
 } from 'lucide-react'
@@ -164,8 +165,15 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'finance:view',
       },
       {
-        label: 'Loan & Cash Maintenance',
-        description: 'Loan chart per member with running balance, the cash maintenance chart, and cash-in vs. cash-out reconciliation',
+        label: 'Cash Maintenance',
+        description: 'Cash In / Cash Out that never touches profit — goods purchase, pouch/packet, depot rent — plus the Daily Cash Book and reconciliation',
+        href: '/admin/cash-maintenance',
+        icon: Wallet,
+        permission: 'finance:view',
+      },
+      {
+        label: 'Loan Chart',
+        description: 'Loan chart per member with running balance, repayments and investors',
         href: '/admin/loans',
         icon: HandCoins,
         permission: 'finance:view',
