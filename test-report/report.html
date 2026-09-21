@@ -1,0 +1,205 @@
+<!doctype html><html lang="bn"><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 16mm 14mm 16mm 14mm; }
+* { box-sizing: border-box; }
+body { font-family: 'Noto Sans Bengali', 'Noto Sans', sans-serif; color: #1a2233; font-size: 11.2px; line-height: 1.6; }
+h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #2563eb; color: #12305f; }
+h3 { font-size: 12.5px; margin: 0 0 6px; } p { margin: 4px 0 8px; }
+.cover { padding-top: 40px; } .sub { color: #52607a; font-size: 13px; }
+.stats { display: flex; gap: 12px; margin: 18px 0; } .stat { flex: 1; border: 1px solid #d5dcea; border-radius: 8px; padding: 10px 12px; }
+.stat b { display: block; font-size: 22px; } .stat.g b { color: #0f8a4b; }
+table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; } th, td { border: 1px solid #d5dcea; padding: 5px 7px; vertical-align: top; text-align: left; }
+th { background: #eef3fb; } td.c { text-align: center; white-space: nowrap; } td.n { text-align: right; font-variant-numeric: tabular-nums; } td.id { font-weight: 700; white-space: nowrap; }
+tr.grp td { background: #dbe7fb; font-weight: 700; } tr { page-break-inside: avoid; }
+.ok { color: #0f8a4b; font-weight: 700; } .bad { color: #c0262d; font-weight: 700; }
+.box { border: 1px solid #cfe0f7; background: #f5f9ff; border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+.flow { display: flex; gap: 10px; } .flow > div { flex: 1; border: 1px solid #d5dcea; border-radius: 8px; padding: 10px; } .flow b { color: #12305f; }
+.case { border: 1px solid #d5dcea; border-radius: 8px; padding: 10px 12px; margin: 10px 0; page-break-inside: avoid; } .case.fail { border-color: #c0262d; }
+.case .id { background: #12305f; color: #fff; border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 11px; }
+table.kv th { width: 22%; } .shots { margin-top: 6px; } .shots img { display: block; width: 74%; margin-bottom: 6px; border: 1px solid #d5dcea; border-radius: 4px; } .pb { page-break-before: always; } ol li { margin: 3px 0; }
+.big img { width: 100%; border: 1px solid #d5dcea; border-radius: 6px; }
+.foot { color: #52607a; font-size: 10px; margin-top: 18px; }
+</style></head><body>
+
+<div class="cover">
+  <div class="sub">Recipe Food ERP</div>
+  <h1>ক্যাশ মেইনটেনেন্স ও পারচেজ<br>কীভাবে কাজ করে — টেস্ট রিপোর্ট</h1>
+  <p class="sub">তারিখ: ২২ সেপ্টেম্বর ২০২৬ · সংস্করণ: ক্যাশ মেইনটেনেন্স আলাদা মেনু</p>
+  <div class="stats">
+    <div class="stat g"><b>18 / 18</b>টেস্ট সফল</div>
+    <div class="stat"><b>8</b>টেস্ট এন্ট্রি (সব মুছে ফেলা হয়েছে)</div>
+    <div class="stat g"><b>অক্ষত</b>আসল হিসাব (আগের মতোই)</div>
+  </div>
+  <div class="box"><b>কেন এই রিপোর্ট?</b> আপনার চাওয়া অনুযায়ী পারচেজকে স্বতন্ত্র করা হয়েছে এবং প্রফিটে হিট করে না — এমন ক্যাশ জমা-খরচের জন্য আলাদা "Cash Maintenance" অপশন যোগ হয়েছে। নিচে দেখানো হয়েছে এটি কীভাবে কাজ করে, এবং প্রতিটি অংশ টেস্ট ডেটা দিয়ে যাচাই করা হয়েছে।</div>
+  <div class="box"><b>টেস্ট কীভাবে করা হয়েছে:</b> সফটওয়্যারেই, আসল ব্যবহারকারীর মতো ক্লিক করে। আপনার আসল হিসাবের সাথে মিশে না যাওয়ার জন্য সব টেস্ট এন্ট্রি দেওয়া হয়েছে ভবিষ্যতের একটি তারিখে (১৫ জানুয়ারি ২০৩০), নোটে "TEST-DELETE-ME" লিখে। টেস্ট শেষে প্রতিটি এন্ট্রি মুছে ফেলা হয়েছে এবং আগের-পরের সংখ্যা মিলিয়ে দেখা হয়েছে (শেষ অধ্যায়)।</div>
+</div>
+
+<h2 class="pb">১. কী পরিবর্তন হয়েছে</h2>
+<ol>
+<li><b>পারচেজ এখন স্বতন্ত্র।</b> পারচেজ মডিউলে শুধু ভেন্ডরভিত্তিক কেনাকাটা, জমা, বাকি (Due) এবং মেটেরিয়াল স্টকের হিসাব থাকে। এটি আর নিজে থেকে ক্যাশ বা এক্সপেন্সে ঢোকে না — তাই পিছনের জটিল প্লাস-মাইনাস আর হয় না।</li>
+<li><b>ক্যাশ মেইনটেনেন্স আলাদা মেনু।</b> সাইডবারে Transactions-এর নিচে "Cash Maintenance"। লোনের টেবিল এখন আলাদা মেনুতে ("Loan Chart"), তাই ক্যাশের পেজ ছোট ও পরিষ্কার।</li>
+<li><b>ক্যাশ ইন ও ক্যাশ আউট।</b> যেসব লেনদেন প্রফিটে হিট করবে না কিন্তু ক্যাশ কমাবে বা বাড়াবে, সেগুলো সরাসরি এখানে এন্ট্রি দেওয়া যায়।</li>
+<li><b>রোজকার তিন খাতের জন্য এক-ক্লিক বাটন:</b> পণ্য ক্রয় · পাউচ / প্যাকেট · ডিপো ভাড়া। ডায়ালগ খুললেই "পণ্য ক্রয়" আগে থেকে বাছা থাকে।</li>
+<li><b>তারিখ বাংলাদেশ সময় অনুযায়ী।</b> ভোরের দিকে এন্ট্রি দিলেও আগের দিনের তারিখ আর বসবে না।</li>
+</ol>
+
+<h2>২. কোন এন্ট্রি কোথায় দেবেন</h2>
+<table>
+<tr><th>কী ঘটছে</th><th>কোথায় দেবেন</th><th>ক্যাশে প্রভাব</th><th>প্রফিটে প্রভাব</th><th>ভেন্ডর বাকি / স্টক</th></tr>
+<tr><td>ভেন্ডর থেকে মাল কেনা</td><td>Purchase</td><td>নেই</td><td>নেই</td><td>বাকি ও স্টক বদলায়</td></tr>
+<tr><td>পণ্য কেনার টাকা দেওয়া (ক্যাশ কমবে)</td><td>Cash Maintenance → পণ্য ক্রয়</td><td>ক্যাশ কমে</td><td>নেই</td><td>—</td></tr>
+<tr><td>পাউচ / প্যাকেট কেনার টাকা</td><td>Cash Maintenance → পাউচ / প্যাকেট</td><td>ক্যাশ কমে</td><td>নেই</td><td>—</td></tr>
+<tr><td>ডিপো ভাড়া</td><td>Cash Maintenance → ডিপো ভাড়া</td><td>ক্যাশ কমে</td><td>নেই</td><td>—</td></tr>
+<tr><td>ডিলার পয়েন্ট / গাজীপুর থেকে টাকা পাওয়া</td><td>Cash Maintenance → ক্যাশ ইন</td><td>ক্যাশ বাড়ে</td><td>নেই</td><td>—</td></tr>
+<tr><td>সাধারণ পরিচালন খরচ (বেতন, পরিবহন…)</td><td>Expenses</td><td>ক্যাশ কমে</td><td><b>প্রফিট কমে</b></td><td>—</td></tr>
+</table>
+<div class="box">মনে রাখার নিয়ম: <b>প্রফিটে হিট করবে না কিন্তু ক্যাশ নড়বে → Cash Maintenance</b>। <b>প্রফিটেও হিট করবে → Expenses</b>। <b>শুধু ভেন্ডরের বাকির হিসাব → Purchase</b>।</div>
+<div class="big"><p><b>ক্যাশ এন্ট্রি দেওয়ার ফর্ম</b> — ওপরে তিনটি বাটন, নিচে পরিমাণ ও তারিখ:</p><img src="shots/guide-dialog.png" style="width:52%"></div>
+
+<h2>৩. কীভাবে ক্যাশ এন্ট্রি দেবেন (৫ ধাপ)</h2>
+<ol>
+<li>সাইডবারে <b>Transactions → Cash Maintenance</b> খুলুন।</li>
+<li><b>Record Cash Entry</b> বাটনে ক্লিক করুন।</li>
+<li>ক্যাশ কমলে <b>Cash Out (খরচ)</b>, বাড়লে <b>Cash In (জমা)</b> বাছুন। খরচের ক্ষেত্রে <b>পণ্য ক্রয় / পাউচ / প্যাকেট / ডিপো ভাড়া</b> বাটনে ক্লিক করুন — অন্য খাত হলে নিচের ড্রপডাউন থেকে বাছুন।</li>
+<li>পরিমাণ (Amount) লিখুন, তারিখ ঠিক আছে কিনা দেখুন, দরকারে নোট লিখুন।</li>
+<li><b>Save entry</b> চাপুন। ওপরের Cash-in / Cash-out কার্ড এবং নিচের Daily Cash Book সঙ্গে সঙ্গে হালনাগাদ হবে। ভুল হলে সারির পাশের কলম (এডিট) বা ডাস্টবিন (ডিলিট) আইকন ব্যবহার করুন।</li>
+</ol>
+
+<h2>৪. টেস্টের ফলাফল — এক নজরে</h2>
+<table><tr><th>নং</th><th>বিষয়</th><th>টেস্ট ডেটা</th><th>যা হওয়ার কথা</th><th>ফল</th></tr><tr class="grp"><td colspan="5">পারচেজ</td></tr><tr><td class="id">A1</td><td>নতুন পারচেজ (মোট ১,০০০, জমা ৪০০) সেভ করা</td><td>ভেন্ডর: Ibrahim Store · ইবসগুল ভূষি 18 গ্রাম ১০ Kg × ৳১০০ · জমা ৳৪০০</td><td>তালিকায় মোট ১,০০০ / জমা ৪০০ / বাকি ৬০০; ভেন্ডরের বাকি +৬০০; মেটেরিয়াল স্টক +১০ (30 Kg); ক্যাশে কিছু আসবে না</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">A2</td><td>ভেন্ডরকে বাকি ৬০০ পরিশোধ</td><td>পেমেন্ট ৳৬০০</td><td>বাকি ০ হবে; ভেন্ডরের মোট বাকি আগের অবস্থায় ফিরবে; ক্যাশে কিছু আসবে না</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">A3</td><td>পারচেজ এডিট (রেট ১০০ → ১২০)</td><td>নতুন মোট ৳১,২০০</td><td>তালিকায় মোট ১,২০০ দেখাবে; স্টক অপরিবর্তিত (30 Kg); ক্যাশে কিছু আসবে না</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">A4</td><td>পারচেজ ডিলিট</td><td>—</td><td>তালিকা থেকে চলে যাবে; ভেন্ডরের বাকি, মোট ক্রয় ও মেটেরিয়াল স্টক (20 Kg) আগের অবস্থায় ফিরবে</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr class="grp"><td colspan="5">ক্যাশ মেইনটেনেন্স</td></tr><tr><td class="id">B1</td><td>ক্যাশ আউট — কুইক বাটন "পণ্য ক্রয়"</td><td>৳৫,০০০ · কুইক বাটন</td><td>ক্যাশ ইন 0 · ক্যাশ আউট 5,000 · নিট ক্যাশ 826,999</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B2</td><td>ক্যাশ আউট — কুইক বাটন "পাউচ / প্যাকেট"</td><td>৳২,০০০ · ক্যাটাগরি: প্যাকেজিং মেটেরিয়ালস ক্রয়</td><td>ক্যাশ ইন 0 · ক্যাশ আউট 7,000 · নিট ক্যাশ 824,999</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B3</td><td>ক্যাশ আউট — কুইক বাটন "ডিপো ভাড়া"</td><td>৳৩,০০০</td><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,000 · নিট ক্যাশ 821,999</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B4</td><td>ক্যাশ আউট — ড্রপডাউন থেকে অন্য খাত (অফিস খরচ)</td><td>৳৫০০</td><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,500 · নিট ক্যাশ 821,499</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B5</td><td>ক্যাশ ইন — "অন্যান্য ক্যাশ জমা"</td><td>৳৪,০০০</td><td>ক্যাশ ইন 4,000 · ক্যাশ আউট 10,500 · নিট ক্যাশ 825,499</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B6</td><td>খাতভিত্তিক সামারি ও এন্ট্রি তালিকা</td><td>B1–B5 এর এন্ট্রি</td><td>পাঁচটা টেস্ট এন্ট্রিই তালিকায় দেখাবে; চার খাতই সামারিতে থাকবে</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B7</td><td>দৈনিক (Daily) ভিউ — ১৫ জানুয়ারি ২০৩০</td><td>তারিখ ফিল্টার</td><td>ওই দিনের ক্যাশ আউট = ৫,০০০+২,০০০+৩,০০০+৫০০ = ১০,৫০০; ক্যাশ ইন ৪,০০০</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B8</td><td>Daily Cash Book-এর হিসাব (নিট ক্যাশ)</td><td>B1–B5 সব এন্ট্রি একসাথে</td><td>নিট ক্যাশ = শুরুর 831,999 + ইন ৪,০০০ − আউট ১০,৫০০ = 825,499</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B10</td><td>এন্ট্রি এডিট (৫,০০০ → ৫,৫০০)</td><td>"পণ্য ক্রয়" এন্ট্রি</td><td>ক্যাশ আউট 11,000; নিট ক্যাশ 824,999</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B11</td><td>পরিমাণ (Amount) ছাড়া সেভ করার চেষ্টা</td><td>Amount খালি</td><td>এন্ট্রি সেভ হবে না; ত্রুটির বার্তা দেখাবে</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B12</td><td>ডায়ালগ খুললে ডিফল্ট ক্যাটাগরি ও আজকের তারিখ</td><td>—</td><td>ক্যাটাগরি "পণ্য ক্রয়"; তারিখ 2026-09-22 (বাংলাদেশ সময়)</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">B13</td><td>সব টেস্ট এন্ট্রি ডিলিট</td><td>পাঁচটাই</td><td>ক্যাশ আউট 0, ক্যাশ ইন 0, নিট ক্যাশ 831,999 — শুরুর অবস্থায় ফিরবে</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr class="grp"><td colspan="5">প্রফিটে প্রভাব</td></tr><tr><td class="id">B9</td><td>ক্যাশ এন্ট্রি নিট প্রফিটে হিট করে না</td><td>B1–B5 এন্ট্রি অবস্থায় Company Earnings</td><td>মোট খরচ 307,933 ও নিট প্রফিট 78,196.398 অপরিবর্তিত</td><td class="c"><span class="ok">✔ সফল</span></td></tr><tr><td class="id">C1</td><td>তুলনা: সাধারণ Expense (৳৭০০) প্রফিটে হিট করে</td><td>Expenses পেজ থেকে ৳৭০০</td><td>মোট খরচ +৭০০ (308,633); নিট প্রফিট −৭০০ (77,496.398)</td><td class="c"><span class="ok">✔ সফল</span></td></tr></table>
+
+<h2 class="pb">৫. বিস্তারিত ফলাফল ও স্ক্রিনশট</h2>
+
+<section class="case ">
+  <h3><span class="id">A1</span> নতুন পারচেজ (মোট ১,০০০, জমা ৪০০) সেভ করা <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>ভেন্ডর: Ibrahim Store · ইবসগুল ভূষি 18 গ্রাম ১০ Kg × ৳১০০ · জমা ৳৪০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>তালিকায় মোট ১,০০০ / জমা ৪০০ / বাকি ৬০০; ভেন্ডরের বাকি +৬০০; মেটেরিয়াল স্টক +১০ (30 Kg); ক্যাশে কিছু আসবে না</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>তালিকায় মোট ৳1,000.00 · জমা ৳400.00 · বাকি ৳600.00 | ভেন্ডরের মোট বাকি 348,090 → 348,690 | স্টক 20 → 30 Kg | ক্যাশ আউট 0 → 0</td></tr></table>
+  <div class="shots one"><img src="shots/02-A1-purchase-saved.png"><img src="shots/03-A1-cash-unchanged.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">A2</span> ভেন্ডরকে বাকি ৬০০ পরিশোধ <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>পেমেন্ট ৳৬০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>বাকি ০ হবে; ভেন্ডরের মোট বাকি আগের অবস্থায় ফিরবে; ক্যাশে কিছু আসবে না</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>তালিকায় মোট ৳1,000.00 · জমা ৳1,000.00 · বাকি ৳0.00 | ভেন্ডরের মোট বাকি 348,090 (শুরুতে 348,090) | ক্যাশ আউট 0</td></tr></table>
+  <div class="shots one"><img src="shots/05-A2-payment-saved.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">A3</span> পারচেজ এডিট (রেট ১০০ → ১২০) <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>নতুন মোট ৳১,২০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>তালিকায় মোট ১,২০০ দেখাবে; স্টক অপরিবর্তিত (30 Kg); ক্যাশে কিছু আসবে না</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>তালিকায় মোট ৳1,200.00 · জমা ৳1,000.00 · বাকি ৳200.00 | স্টক 30 Kg | ক্যাশ আউট 0</td></tr></table>
+  <div class="shots one"><img src="shots/07-A3-edited.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">A4</span> পারচেজ ডিলিট <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>—</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>তালিকা থেকে চলে যাবে; ভেন্ডরের বাকি, মোট ক্রয় ও মেটেরিয়াল স্টক (20 Kg) আগের অবস্থায় ফিরবে</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>তালিকায় নেই: true | বাকি 348,090 (শুরুতে 348,090) | মোট ক্রয় 0 (শুরুতে 0) | স্টক 20 Kg</td></tr></table>
+  <div class="shots one"><img src="shots/08-A4-deleted.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B1</span> ক্যাশ আউট — কুইক বাটন "পণ্য ক্রয়" <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>৳৫,০০০ · কুইক বাটন</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 5,000 · নিট ক্যাশ 826,999</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 5,000 · নিট ক্যাশ 826,999</td></tr></table>
+  <div class="shots one"><img src="shots/10-B1-after.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B2</span> ক্যাশ আউট — কুইক বাটন "পাউচ / প্যাকেট" <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>৳২,০০০ · ক্যাটাগরি: প্যাকেজিং মেটেরিয়ালস ক্রয়</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 7,000 · নিট ক্যাশ 824,999</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 7,000 · নিট ক্যাশ 824,999</td></tr></table>
+  <div class="shots one"><img src="shots/11-B2-after.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B3</span> ক্যাশ আউট — কুইক বাটন "ডিপো ভাড়া" <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>৳৩,০০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,000 · নিট ক্যাশ 821,999</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,000 · নিট ক্যাশ 821,999</td></tr></table>
+  <div class="shots one"><img src="shots/12-B3-after.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B4</span> ক্যাশ আউট — ড্রপডাউন থেকে অন্য খাত (অফিস খরচ) <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>৳৫০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,500 · নিট ক্যাশ 821,499</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ ইন 0 · ক্যাশ আউট 10,500 · নিট ক্যাশ 821,499</td></tr></table>
+  <div class="shots one"><img src="shots/13-B4-after.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B5</span> ক্যাশ ইন — "অন্যান্য ক্যাশ জমা" <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>৳৪,০০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ ইন 4,000 · ক্যাশ আউট 10,500 · নিট ক্যাশ 825,499</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ ইন 4,000 · ক্যাশ আউট 10,500 · নিট ক্যাশ 825,499</td></tr></table>
+  <div class="shots one"><img src="shots/14-B5-after.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B6</span> খাতভিত্তিক সামারি ও এন্ট্রি তালিকা <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>B1–B5 এর এন্ট্রি</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>পাঁচটা টেস্ট এন্ট্রিই তালিকায় দেখাবে; চার খাতই সামারিতে থাকবে</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>টেস্ট সারি 5টা; খাত পাওয়া গেছে: 4/৪</td></tr></table>
+  <div class="shots one"><img src="shots/15-B6-category-summary.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B7</span> দৈনিক (Daily) ভিউ — ১৫ জানুয়ারি ২০৩০ <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>তারিখ ফিল্টার</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ওই দিনের ক্যাশ আউট = ৫,০০০+২,০০০+৩,০০০+৫০০ = ১০,৫০০; ক্যাশ ইন ৪,০০০</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ আউট 10,500 · ক্যাশ ইন 4,000</td></tr></table>
+  <div class="shots one"><img src="shots/16-B7-daily-view.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B8</span> Daily Cash Book-এর হিসাব (নিট ক্যাশ) <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>B1–B5 সব এন্ট্রি একসাথে</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>নিট ক্যাশ = শুরুর 831,999 + ইন ৪,০০০ − আউট ১০,৫০০ = 825,499</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>নিট ক্যাশ 825,499</td></tr></table>
+  <div class="shots one"><img src="shots/17-B8-daily-cash-book.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B9</span> ক্যাশ এন্ট্রি নিট প্রফিটে হিট করে না <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>B1–B5 এন্ট্রি অবস্থায় Company Earnings</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>মোট খরচ 307,933 ও নিট প্রফিট 78,196.398 অপরিবর্তিত</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>মোট খরচ 307,933 · নিট প্রফিট 78,196.398</td></tr></table>
+  <div class="shots one"><img src="shots/18-B9-profit-unchanged.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B10</span> এন্ট্রি এডিট (৫,০০০ → ৫,৫০০) <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>"পণ্য ক্রয়" এন্ট্রি</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ আউট 11,000; নিট ক্যাশ 824,999</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাশ আউট 11,000; নিট ক্যাশ 824,999</td></tr></table>
+  <div class="shots one"><img src="shots/20-B10-edited.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B11</span> পরিমাণ (Amount) ছাড়া সেভ করার চেষ্টা <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>Amount খালি</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>এন্ট্রি সেভ হবে না; ত্রুটির বার্তা দেখাবে</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ডায়ালগ খোলা থেকেছে, এন্ট্রি সেভ হয়নি; বার্তা: "Amount must be greater than zero." (পরিমাণ শূন্যের বেশি হতে হবে)</td></tr></table>
+  <div class="shots one"><img src="shots/21-B11-validation.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B12</span> ডায়ালগ খুললে ডিফল্ট ক্যাটাগরি ও আজকের তারিখ <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>—</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাটাগরি "পণ্য ক্রয়"; তারিখ 2026-09-22 (বাংলাদেশ সময়)</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>ক্যাটাগরি "পণ্য ক্রয়"; তারিখ 2026-09-22</td></tr></table>
+  <div class="shots one"><img src="shots/22-B12-defaults.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">B13</span> সব টেস্ট এন্ট্রি ডিলিট <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>পাঁচটাই</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>ক্যাশ আউট 0, ক্যাশ ইন 0, নিট ক্যাশ 831,999 — শুরুর অবস্থায় ফিরবে</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>বাকি টেস্ট সারি 0; ক্যাশ আউট 0, ইন 0, নিট 831,999</td></tr></table>
+  <div class="shots one"><img src="shots/23-B13-all-deleted.png"></div>
+</section>
+<section class="case ">
+  <h3><span class="id">C1</span> তুলনা: সাধারণ Expense (৳৭০০) প্রফিটে হিট করে <span class="ok">✔ সফল</span></h3>
+  <table class="kv"><tr><th>টেস্ট ডেটা</th><td>Expenses পেজ থেকে ৳৭০০</td></tr>
+  <tr><th>যা হওয়ার কথা</th><td>মোট খরচ +৭০০ (308,633); নিট প্রফিট −৭০০ (77,496.398)</td></tr>
+  <tr><th>আসলে যা হয়েছে</th><td>মোট খরচ 308,633 · নিট প্রফিট 77,496.398 · Cash Maintenance-এর ক্যাশ আউট 0 (অপরিবর্তিত 0)</td></tr></table>
+  <div class="shots one"><img src="shots/24-C1-expense-effect.png"></div>
+</section>
+
+<h2 class="pb">৬. টেস্ট ডেটার তালিকা ও মুছে ফেলার নিশ্চিতকরণ</h2>
+<p>টেস্টের জন্য নিচের এন্ট্রিগুলো দেওয়া হয়েছিল। সবগুলো নোটে <b>TEST-DELETE-ME</b> লেখা এবং তারিখ <b>১৫ জানুয়ারি ২০৩০</b> — আপনার আসল হিসাবের কোনো মাসে পড়ে না।</p>
+<table><tr><th>#</th><th>ধরন</th><th>বিবরণ</th><th>তারিখ</th><th>নোট</th></tr><tr><td>1</td><td>পারচেজ</td><td>ভেন্ডর: M/S. Ibrahim Store · মেটেরিয়াল: ইবসগুল ভূষি 18 গ্রাম (১০ Kg × ৳১০০) · মোট ৳1,000, জমা ৳400, বাকি ৳600</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>2</td><td>ভেন্ডর পেমেন্ট</td><td>বাকি পরিশোধ ৳600</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>3</td><td>ক্যাশ মেইনটেনেন্স</td><td>ক্যাশ আউট · পণ্য ক্রয় · ৳5,000</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>4</td><td>ক্যাশ মেইনটেনেন্স</td><td>ক্যাশ আউট · পাউচ / প্যাকেট · ৳2,000</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>5</td><td>ক্যাশ মেইনটেনেন্স</td><td>ক্যাশ আউট · ডিপো ভাড়া · ৳3,000</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>6</td><td>ক্যাশ মেইনটেনেন্স</td><td>ক্যাশ আউট · অফিস খরচ · ৳500</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>7</td><td>ক্যাশ মেইনটেনেন্স</td><td>ক্যাশ ইন · অন্যান্য ক্যাশ জমা · ৳4,000</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr><tr><td>8</td><td>Expense</td><td>সাধারণ খরচ (Expense) ৳700 — শুধু তুলনার জন্য</td><td>১৫ জানুয়ারি ২০৩০</td><td>TEST-DELETE-ME</td></tr></table>
+<p><b>টেস্ট শেষে সব মুছে ফেলার পর</b> হিসাব আগের অবস্থায় ফিরেছে কিনা:</p>
+<table><tr><th>হিসাব</th><th>টেস্টের আগে</th><th>টেস্ট শেষে (মুছে ফেলার পর)</th><th>ফল</th></tr><tr><td>ক্যাশ ইন (জানুয়ারি ২০৩০)</td><td class="n">0</td><td class="n">0</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>ক্যাশ আউট (জানুয়ারি ২০৩০)</td><td class="n">0</td><td class="n">0</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>নিট ক্যাশ স্থিতি</td><td class="n">831,999</td><td class="n">831,999</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>মোট খরচ (Expense) — Company Earnings</td><td class="n">307,933</td><td class="n">307,933</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>নিট প্রফিট — Company Earnings</td><td class="n">78,196.398</td><td class="n">78,196.398</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>ভেন্ডরের মোট বাকি</td><td class="n">348,090</td><td class="n">348,090</td><td class="c"><span class="ok">✔ একই</span></td></tr><tr><td>মেটেরিয়াল স্টক (ইবসগুল ভূষি, Kg)</td><td class="n">20</td><td class="n">20</td><td class="c"><span class="ok">✔ একই</span></td></tr></table>
+<p class="foot">টেস্ট চালানোর সময়: ২২/৯/২০২৬, ৪:২৮:৪১ AM (বাংলাদেশ সময়)। টেস্ট ডেটা এই রিপোর্টেই সংরক্ষিত; সফটওয়্যারে কোনো টেস্ট এন্ট্রি রাখা হয়নি।</p>
+</body></html>

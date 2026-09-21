@@ -1,0 +1,22 @@
+{
+  "cash": {
+    "cashIn": 0,
+    "cashOut": 0,
+    "totalOut": 0,
+    "net": 831999
+  },
+  "earn": {
+    "totalExpenses": 307933,
+    "netProfit": 78196.398
+  },
+  "kpi": {
+    "due": 348090
+  },
+  "stock": 20,
+  "leftovers": {
+    "cashRows": 0,
+    "purchaseRows": 0,
+    "expRows": 0,
+    "testMaterials": 0
+  }
+}
