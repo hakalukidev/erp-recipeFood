@@ -1,6 +1,7 @@
 import type {
   AccountType,
   ActivityRecord,
+  CashMaintenanceRecord,
   ChartOfAccountRecord,
   DealerCategoryRecord,
   ERPData,
@@ -353,8 +354,8 @@ export type FundCashFlowProductRow = { productId: string; productName: string; q
 // "আয়ের দিক... ব্যয়ের দিক... ডান-বাম... এক জায়গায় দেখতে পাওয়া" — a single
 // consolidated fund/balance picture that ties every inflow source (sales
 // money actually collected, loan withdrawals) against every outflow head
-// (Expense chart + Cash Maintenance chart, which already includes vendor
-// purchases, loan repayment, depot commission, etc. — see
+// (Expense chart + Cash Maintenance chart, which includes goods/packaging
+// purchases, depot rent, loan repayment, depot commission, etc. — see
 // CASH_MAINTENANCE_CATEGORIES) for one date range, plus the P&L impact of
 // product returns and vendor-wise/item-wise breakdowns underneath — instead
 // of the same numbers living scattered across the Loan & Cash Maintenance,
@@ -363,13 +364,25 @@ export type FundCashFlowProductRow = { productId: string; productName: string; q
 // balance sums every inflow/outflow strictly before `from` (0 when `from` is
 // empty), same "derive, don't store" shape as the Daily Cash Book on the
 // Loan & Cash Maintenance page.
+// Cash Maintenance rows split by direction (absent = 'out', see
+// CashMaintenanceRecord.direction). A direct-expense row is neither — it's a
+// book-balancing entry only.
+export function isCashMaintenanceOut(entry: CashMaintenanceRecord) {
+  return entry.direction !== 'in' && !entry.isDirectExpense
+}
+
+export function isCashMaintenanceIn(entry: CashMaintenanceRecord) {
+  return entry.direction === 'in'
+}
+
 export function buildFundCashFlowReport(data: ERPData | null, from: string, to: string) {
   const rateCards = toArray(data?.rateCards)
   const productReturns = toArray(data?.productReturns)
   const collections = toArray(data?.collections)
   const loanTransactions = toArray(data?.loanTransactions)
   const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
-  const cashEntries = toArray(data?.cashMaintenance).filter((entry) => !entry.isDirectExpense)
+  const cashEntries = toArray(data?.cashMaintenance).filter(isCashMaintenanceOut)
+  const cashInEntries = toArray(data?.cashMaintenance).filter(isCashMaintenanceIn)
   const purchases = toArray(data?.purchases)
   const vendors = toArray(data?.vendors)
 
@@ -395,7 +408,8 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
     const loans = loanWithdrawalRows
       .filter((entry) => dateInRange(entry.date, fromDate, toDate))
       .reduce((sum, entry) => sum + entry.amount, 0)
-    return { sales, loans, total: sales + loans }
+    const other = cashInEntries.filter((entry) => dateInRange(entry.date, fromDate, toDate)).reduce((sum, entry) => sum + entry.amount, 0)
+    return { sales, loans, other, total: sales + loans + other }
   }
   function cashOutBetween(fromDate: string, toDate: string) {
     const expenseTotal = expenses

@@ -110,11 +110,8 @@ import type {
   MaterialUsageRecord,
 } from '@/lib/erp/types'
 import {
-  CASH_CATEGORY_GOODS_PURCHASE,
   CASH_CATEGORY_LOAN_REPAYMENT,
   CASH_CATEGORY_NEW_MARKET_INVESTMENT,
-  CASH_CATEGORY_PACKAGING_PURCHASE,
-  CASH_CATEGORY_VENDOR_DUE_SETTLEMENT,
   DIRECT_EXPENSE_CATEGORY,
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
@@ -763,90 +760,6 @@ function buildExpenseLedgerEntries(params: {
   }
 }
 
-// Purchase cash-flow posting (2026-09-12 client request): the cash actually
-// paid out on a purchase — its own `paid` at save time, and any later
-// VendorPaymentRecord paydown of the due — auto-posts a CashMaintenanceRecord
-// so it shows up on the Loan & Cash Maintenance reconciliation, split
-// proportionally across পণ্য ক্রয় ("goods") / প্যাকেজিং মেটেরিয়ালস ক্রয়
-// ("packaging") by how much of the purchase's own line items were raw vs
-// packaging material — a purchase mixing both categories gets one entry per
-// category instead of misclassifying the whole payment as one or the other.
-//
-// `amount` (createPurchase/updatePurchase's `paid`) is allowed to exceed
-// these items' own total — that's how an existing/opening vendor balance
-// gets paid down in the same transaction (see createPurchase). Only the
-// portion up to that total is goods/packaging spend; anything beyond it is
-// paying off an older due, not today's items, so it's split out to its own
-// CASH_CATEGORY_VENDOR_DUE_SETTLEMENT entry instead of being counted as
-// পণ্য ক্রয়/প্যাকেজিং ক্রয় too (2026-09-15 client-reported bug — that excess
-// used to inflate this purchase's own goods/packaging category by however
-// much old due it was actually settling).
-function buildPurchaseCashEntries(
-  items: PurchaseItem[],
-  amount: number,
-  date: string,
-  note: string,
-  currentUser: { id: string; name: string }
-): Record<string, CashMaintenanceRecord> {
-  if (amount <= 0) {
-    return {}
-  }
-
-  const rawTotal = items.filter((item) => item.category === 'raw_material').reduce((sum, item) => sum + item.amount, 0)
-  const packagingTotal = items
-    .filter((item) => item.category === 'packaging_material')
-    .reduce((sum, item) => sum + item.amount, 0)
-  const grandTotal = rawTotal + packagingTotal
-  const rawShare = grandTotal > 0 ? rawTotal / grandTotal : 1
-  const goodsPortion = grandTotal > 0 ? Math.min(amount, grandTotal) : amount
-  const dueSettlementAmount = amount - goodsPortion
-  const rawAmount = goodsPortion * rawShare
-  const packagingAmount = goodsPortion - rawAmount
-
-  const now = new Date().toISOString()
-  const entries: Record<string, CashMaintenanceRecord> = {}
-  if (rawAmount > 0) {
-    const id = createId('cash_maintenance')
-    entries[id] = {
-      id,
-      category: CASH_CATEGORY_GOODS_PURCHASE,
-      amount: rawAmount,
-      date,
-      note,
-      createdBy: currentUser.id,
-      createdByName: currentUser.name,
-      createdAt: now,
-    }
-  }
-  if (packagingAmount > 0) {
-    const id = createId('cash_maintenance')
-    entries[id] = {
-      id,
-      category: CASH_CATEGORY_PACKAGING_PURCHASE,
-      amount: packagingAmount,
-      date,
-      note,
-      createdBy: currentUser.id,
-      createdByName: currentUser.name,
-      createdAt: now,
-    }
-  }
-  if (dueSettlementAmount > 0) {
-    const id = createId('cash_maintenance')
-    entries[id] = {
-      id,
-      category: CASH_CATEGORY_VENDOR_DUE_SETTLEMENT,
-      amount: dueSettlementAmount,
-      date,
-      note,
-      createdBy: currentUser.id,
-      createdByName: currentUser.name,
-      createdAt: now,
-    }
-  }
-  return entries
-}
-
 // Section 37 (Budget Management): "Actual" is never stored on a budget —
 // it's the live sum of expenses matching the budget's category (compared
 // case-insensitively, same as resolveExpenseLedgerAccount above) that fall
@@ -1201,6 +1114,7 @@ function normalizeLoanTransactionInput(input: LoanTransactionInput) {
 function normalizeCashMaintenanceInput(input: CashMaintenanceInput) {
   return {
     category: input.category.trim(),
+    direction: input.direction === 'in' ? ('in' as const) : ('out' as const),
     amount: Math.max(input.amount ?? 0, 0),
     date: input.date?.trim() || new Date().toISOString().slice(0, 10),
     note: input.note?.trim() ?? '',
@@ -2309,12 +2223,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('purchase_material_deleted', 'purchase', `Deleted material ${material.name}.`)
   }
 
-  // One procurement transaction — adds to each line's material stock,
-  // opens (or fully settles) that much due against the vendor, and posts
-  // whatever was actually paid to the Cash Maintenance chart (see
-  // buildPurchaseCashEntries). See the PurchaseRecord comment in types.ts
-  // for why this still never touches the full ledger/Automatic Accounting
-  // Engine.
+  // One procurement transaction — adds to each line's material stock and
+  // opens (or fully settles) that much due against the vendor. Independent
+  // of Cash Maintenance/Expenses/the ledger (2026-09-22 client request) — see
+  // the PurchaseRecord comment in types.ts.
   async function createPurchase(input: PurchaseInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a purchase.')
@@ -2373,15 +2285,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const date = input.date?.trim() || now.slice(0, 10)
     const purchaseNumber = `PUR-${Date.now().toString().slice(-8)}`
 
-    const cashEntries = buildPurchaseCashEntries(
-      items,
-      paid,
-      date,
-      `Purchase ${purchaseNumber} — ${vendorName}`,
-      currentUser
-    )
-    const cashMaintenanceIds = Object.keys(cashEntries)
-
     const purchase: PurchaseRecord = {
       id,
       purchaseNumber,
@@ -2393,16 +2296,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       paid,
       due,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
-      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
     }
 
     const updates: Record<string, unknown> = { [`purchases/${id}`]: purchase }
-    Object.entries(cashEntries).forEach(([entryId, entry]) => {
-      updates[`cashMaintenance/${entryId}`] = entry
-    })
 
     // Purchased qty adds straight onto each material's running stock — a
     // material can appear on more than one line (unlikely but not
@@ -2507,13 +2406,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const updates: Record<string, unknown> = {}
 
-    // Drop the old Cash Maintenance entries this purchase's own `paid`
-    // posted, and the old stock this purchase's items added — same
-    // reverse-then-reapply shape as deletePurchase, just followed by a
-    // recreate instead of stopping there.
-    existing.cashMaintenanceIds?.forEach((entryId) => {
-      updates[`cashMaintenance/${entryId}`] = null
-    })
+    // Reverse the old stock this purchase's items added and apply the new
+    // items' — same reverse-then-reapply shape as deletePurchase.
     const oldStockDeltas = new Map<string, number>()
     existing.items.forEach((item) => {
       if (!item.materialId) return
@@ -2534,18 +2428,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`purchaseMaterials/${materialId}/updatedAt`] = now
     })
 
-    const cashEntries = buildPurchaseCashEntries(
-      items,
-      initialPaid,
-      date,
-      `Purchase ${existing.purchaseNumber} — ${vendorName}`,
-      currentUser
-    )
-    const cashMaintenanceIds = Object.keys(cashEntries)
-    Object.entries(cashEntries).forEach(([entryId, entry]) => {
-      updates[`cashMaintenance/${entryId}`] = entry
-    })
-
     const updatedPurchase: PurchaseRecord = {
       id: existing.id,
       purchaseNumber: existing.purchaseNumber,
@@ -2557,7 +2439,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       paid,
       due,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
-      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
+      // Carried forward untouched — only purchases saved before 2026-09-22
+      // have any; deletePurchase still cleans them up.
+      ...(existing.cashMaintenanceIds?.length ? { cashMaintenanceIds: existing.cashMaintenanceIds } : {}),
       createdBy: existing.createdBy,
       createdByName: existing.createdByName,
       createdAt: existing.createdAt,
@@ -2599,20 +2483,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updates[`purchaseMaterials/${materialId}/updatedAt`] = now
     })
 
-    // Drop the Cash Maintenance entries this purchase's own `paid` posted.
+    // Legacy only: purchases saved before 2026-09-22 auto-posted Cash
+    // Maintenance entries — drop them with the purchase.
+    // Skip entries that are already gone — nulling a non-existent node is
+    // rejected by the database rules and would fail the whole update.
     purchase.cashMaintenanceIds?.forEach((entryId) => {
-      updates[`cashMaintenance/${entryId}`] = null
+      if (data.cashMaintenance?.[entryId]) updates[`cashMaintenance/${entryId}`] = null
     })
 
     // A purchase with payments already recorded against it takes those down
-    // with it too, same cascade-delete shape used elsewhere in this file —
-    // including each payment's own Cash Maintenance entries.
+    // with it too, same cascade-delete shape used elsewhere in this file
+    // (plus any legacy auto-posted Cash Maintenance entries of its own).
     Object.values(data.vendorPayments)
       .filter((payment) => payment.purchaseId === purchaseId)
       .forEach((payment) => {
         updates[`vendorPayments/${payment.id}`] = null
         payment.cashMaintenanceIds?.forEach((entryId) => {
-          updates[`cashMaintenance/${entryId}`] = null
+          if (data.cashMaintenance?.[entryId]) updates[`cashMaintenance/${entryId}`] = null
         })
       })
 
@@ -2648,15 +2535,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const nextDue = purchase.due - amount
     const nextPaid = purchase.paid + amount
 
-    const cashEntries = buildPurchaseCashEntries(
-      purchase.items,
-      amount,
-      date,
-      `Vendor payment ${receiptNumber} — ${purchase.vendorName} (${purchase.purchaseNumber})`,
-      currentUser
-    )
-    const cashMaintenanceIds = Object.keys(cashEntries)
-
     const payment: VendorPaymentRecord = {
       id,
       receiptNumber,
@@ -2667,7 +2545,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
-      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : {}),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -2678,9 +2555,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`purchases/${purchase.id}/paid`]: nextPaid,
       [`purchases/${purchase.id}/due`]: nextDue,
     }
-    Object.entries(cashEntries).forEach(([entryId, entry]) => {
-      updates[`cashMaintenance/${entryId}`] = entry
-    })
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -2696,8 +2570,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // to fix it short of deleting and re-entering (which shifts its receipt
   // number and loses the original entry order). Edits the amount/date/note
   // in place — same reverse-then-reapply shape against the parent purchase's
-  // paid/due and this payment's own Cash Maintenance entries as everywhere
-  // else in this file.
+  // paid/due as everywhere else in this file.
   async function updateVendorPayment(paymentId: string, input: { amount: number; date?: string; note?: string }) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before editing a vendor payment.')
@@ -2732,32 +2605,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`purchases/${purchase.id}/due`]: nextDue,
     }
 
-    existing.cashMaintenanceIds?.forEach((entryId) => {
-      updates[`cashMaintenance/${entryId}`] = null
-    })
-    const cashEntries = buildPurchaseCashEntries(
-      purchase.items,
-      amount,
-      date,
-      `Vendor payment ${existing.receiptNumber} — ${purchase.vendorName} (${purchase.purchaseNumber})`,
-      currentUser
-    )
-    const cashMaintenanceIds = Object.keys(cashEntries)
-    Object.entries(cashEntries).forEach(([entryId, entry]) => {
-      updates[`cashMaintenance/${entryId}`] = entry
-    })
-
     const updatedPayment: VendorPaymentRecord = {
       ...existing,
       amount,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : { note: undefined }),
-      ...(cashMaintenanceIds.length ? { cashMaintenanceIds } : { cashMaintenanceIds: undefined }),
     }
     // Drop undefined keys rather than write them literally — Firebase
     // rejects `undefined` values outright.
     if (updatedPayment.note === undefined) delete updatedPayment.note
-    if (updatedPayment.cashMaintenanceIds === undefined) delete updatedPayment.cashMaintenanceIds
     updates[`vendorPayments/${paymentId}`] = updatedPayment
 
     await update(ref(db, 'erp'), updates)
@@ -3354,10 +3210,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const record: CashMaintenanceRecord = {
       id,
       category: normalized.category,
+      direction: normalized.direction,
       amount: normalized.amount,
       date: normalized.date,
       note: normalized.note,
-      isDirectExpense: normalized.category === DIRECT_EXPENSE_CATEGORY,
+      isDirectExpense: normalized.direction === 'out' && normalized.category === DIRECT_EXPENSE_CATEGORY,
       createdBy: existingRecord?.createdBy ?? currentUser.id,
       createdByName: existingRecord?.createdByName ?? currentUser.name,
       createdAt: existingRecord?.createdAt ?? now,
@@ -3367,7 +3224,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       existingRecord ? 'cash_maintenance_updated' : 'cash_maintenance_created',
       'finance',
-      `${existingRecord ? 'Updated' : 'Recorded'} ${normalized.category} cash entry of ${normalized.amount}.`
+      `${existingRecord ? 'Updated' : 'Recorded'} ${normalized.category} cash-${normalized.direction} entry of ${normalized.amount}.`
     )
 
     return id
@@ -5211,7 +5068,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
       updates[`ledgerEntries/${entry.id}`] = entry
     })
-    if (expense.loanTransactionId) {
+    // Only when the linked loan transaction still exists — nulling a node
+    // that's already gone is rejected by the database rules (there's no
+    // "delete a non-existent node" branch), which failed the whole
+    // multi-path update and made an orphaned loan-repayment expense
+    // undeletable.
+    if (expense.loanTransactionId && data.loanTransactions?.[expense.loanTransactionId]) {
       updates[`loanTransactions/${expense.loanTransactionId}`] = null
     }
 

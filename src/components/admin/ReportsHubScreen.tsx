@@ -19,7 +19,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { computeVendorDue, formatCurrency, formatDate, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { computeVendorDue, formatCurrency, formatDate, isCashMaintenanceOut, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SectionId = 'fund' | 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
@@ -178,11 +178,10 @@ export function ReportsHubScreen() {
   // no date filter needs to be applied first. Merges in Cash Maintenance's
   // own cash-out categories (পণ্য ক্রয়, প্যাকেজিং মেটেরিয়ালস ক্রয়, etc. —
   // see CASH_MAINTENANCE_CATEGORIES in standardChartOfAccounts.ts) alongside
-  // the Expense (P&L) chart: a Purchase's paid amount/vendor paydown posts
-  // to Cash Maintenance instead of Expenses (see buildPurchaseCashEntries in
-  // provider.tsx), so without this merge the client's own daily cash tally
-  // — which treats every taka that left the till the same way, purchases
-  // included — never matched what this report showed. A direct-expense Cash
+  // the Expense (P&L) chart: purchases/packaging/depot rent are entered
+  // directly on Cash Maintenance instead of Expenses, so without this merge
+  // the client's own daily cash tally — which treats every taka that left
+  // the till the same way — never matched what this report showed. A direct-expense Cash
   // Maintenance row (isDirectExpense) is excluded, same as everywhere else
   // that chart is summed — it's a pure book-balancing entry, not real spend.
   const [expenseFrom, setExpenseFrom] = useState('')
@@ -207,7 +206,7 @@ export function ReportsHubScreen() {
         note: expense.note,
       }))
     const fromCashMaintenance: CombinedExpenseRow[] = toArray(data?.cashMaintenance)
-      .filter((entry) => !entry.isDirectExpense)
+      .filter(isCashMaintenanceOut)
       .map((entry) => ({
         date: entry.date,
         category: entry.category,

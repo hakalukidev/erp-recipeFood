@@ -76,9 +76,8 @@ export const EXPENSE_CATEGORIES = [
   // 2026-09-15 client request: packaging material purchases (প্যাকেট/পাউচ)
   // are never a P&L expense — moved out of this list entirely so the Finance
   // page's "Record expense" form can no longer post one here. Use the Cash
-  // Maintenance chart's CASH_CATEGORY_PACKAGING_PURCHASE ('প্যাকেজিং
-  // মেটেরিয়ালস ক্রয়') below instead — same as a Purchase's own paid amount
-  // already does via buildPurchaseCashEntries in provider.tsx.
+  // Maintenance chart's 'প্যাকেজিং মেটেরিয়ালস ক্রয়' below instead — entered
+  // directly there (a Purchase no longer posts to it automatically).
   // 2026-09-12 client request: a loan repayment recorded here (as opposed to
   // the same-named category on the Cash Maintenance chart below) is treated
   // as a direct operational expense — it hits Company Earnings' net profit
@@ -129,6 +128,10 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'পণ্য ক্রয়',
   'প্যাকেজিং মেটেরিয়ালস ক্রয়',
   'ডিপো কমিশন',
+  // 2026-09-22 client request: depot rent (e.g. মাস্টারবাড়ি ভাড়া - ডিপো) is a
+  // cash movement that must not hit net profit, so it's entered directly here
+  // rather than on the Expense chart.
+  'ডিপো ভাড়া',
   'ডিলার পেমেন্ট পণ্য পরিবহন',
   // 2026-09-15 client request: petty cash handed out day-to-day (e.g. the
   // factory mess/office's small market-money advances to staff) — the real
@@ -139,11 +142,16 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'অফিস খরচ',
 ] as const
 
-// Named so provider.tsx's buildPurchaseCashEntries (2026-09-12 client
-// request — a Purchase's paid amount/vendor paydown now hits cash flow) can
-// post to these two without hardcoding the Bangla literal a second time.
-export const CASH_CATEGORY_GOODS_PURCHASE = 'পণ্য ক্রয়'
-export const CASH_CATEGORY_PACKAGING_PURCHASE = 'প্যাকেজিং মেটেরিয়ালস ক্রয়'
+// Cash Maintenance entries recorded with direction 'in' (2026-09-22 client
+// request) — money received into the till that isn't already tracked as a
+// sale collection or loan withdrawal, e.g. the "ডিলার পয়েন্ট হতে টাকা রিসিভ"
+// and "গাজীপুর থেকে কালেকশন" lines of the daily cash sheet. Kept off
+// CASH_MAINTENANCE_CATEGORIES so the cash-out dropdown stays outflow-only.
+export const CASH_IN_CATEGORIES = [
+  'ডিলার পয়েন্ট হতে টাকা রিসিভ',
+  'গাজীপুর থেকে কালেকশন',
+  'অন্যান্য ক্যাশ জমা',
+] as const
 
 // Named so provider.tsx's saveLoanTransaction (2026-09-14 client request — a
 // repayment recorded directly on the Loan Chart now hits cash flow too,
@@ -155,18 +163,6 @@ export const CASH_CATEGORY_LOAN_REPAYMENT = 'ঋণ পরিশোধ'
 // investment now hits cash flow) can post to this category without
 // hardcoding the Bangla literal a second time.
 export const CASH_CATEGORY_NEW_MARKET_INVESTMENT = 'নতুন মার্কেট ইনভেস্টমেন্ট'
-
-// Named so provider.tsx's buildPurchaseCashEntries can post the part of a
-// purchase's `paid` that exceeds this purchase's own items total (i.e. it's
-// paying down the vendor's opening/prior-purchase due, not today's goods) to
-// its own category — 2026-09-15 client-reported bug: that excess used to be
-// lumped into CASH_CATEGORY_GOODS_PURCHASE/PACKAGING_PURCHASE alongside the
-// goods actually bought this time, inflating "পণ্য ক্রয়" by whatever old due
-// got paid off in the same transaction. Deliberately its own category, not
-// CASH_CATEGORY_LOAN_REPAYMENT — this is vendor accounts-payable, unrelated
-// to the Loan Chart's per-loanAccountId balances that category's repayment
-// entries reconcile against.
-export const CASH_CATEGORY_VENDOR_DUE_SETTLEMENT = 'ভেন্ডার বাকি পরিশোধ'
 
 // The one category that's recorded on the Cash Maintenance chart purely to
 // help the books balance — never subtracted in the cash-out total the

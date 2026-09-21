@@ -42,13 +42,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
-import { CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
-import type { CashMaintenanceRecord, InvestorRecord, LoanAccountRecord, LoanTransactionRecord, LoanTransactionType } from '@/lib/erp/types'
+import { CASH_IN_CATEGORIES, CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
+import type { CashDirection, CashMaintenanceRecord, InvestorRecord, LoanAccountRecord, LoanTransactionRecord, LoanTransactionType } from '@/lib/erp/types'
 import {
   computeLoanBalance,
   computeLoanMonthlySchedule,
   formatCurrency,
   formatDate,
+  isCashMaintenanceIn,
+  isCashMaintenanceOut,
   sortByCreatedAtDesc,
   toArray,
 } from '@/lib/erp/utils'
@@ -78,7 +80,8 @@ function isBeforeDate(value: string, target: string) {
   return value.slice(0, 10) < target
 }
 
-const CASH_CATEGORY_OPTIONS = [...CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY]
+const CASH_OUT_CATEGORY_OPTIONS: string[] = [...CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY]
+const CASH_IN_CATEGORY_OPTIONS: string[] = [...CASH_IN_CATEGORIES]
 
 const emptyLoanAccountForm = { memberName: '', phone: '', address: '' }
 type LoanAccountFormState = typeof emptyLoanAccountForm
@@ -97,6 +100,7 @@ const emptyLoanTransactionForm = {
 type LoanTransactionFormState = typeof emptyLoanTransactionForm
 
 const emptyCashForm = {
+  direction: 'out' as CashDirection,
   category: CASH_MAINTENANCE_CATEGORIES[0] as string,
   amount: '',
   date: todayIso(),
@@ -438,18 +442,23 @@ export default function LoanAndCashMaintenancePage() {
   }, [cashEntries, cashMode, cashDate, cashMonth])
 
   const cashOutTotal = useMemo(
-    () => filteredCashEntries.filter((entry) => !entry.isDirectExpense).reduce((sum, entry) => sum + entry.amount, 0),
+    () => filteredCashEntries.filter(isCashMaintenanceOut).reduce((sum, entry) => sum + entry.amount, 0),
+    [filteredCashEntries]
+  )
+  const cashMaintenanceInTotal = useMemo(
+    () => filteredCashEntries.filter(isCashMaintenanceIn).reduce((sum, entry) => sum + entry.amount, 0),
     [filteredCashEntries]
   )
   const directExpenseTotal = useMemo(
-    () => filteredCashEntries.filter((entry) => entry.isDirectExpense).reduce((sum, entry) => sum + entry.amount, 0),
+    () => filteredCashEntries.filter((entry) => entry.direction !== 'in' && entry.isDirectExpense).reduce((sum, entry) => sum + entry.amount, 0),
     [filteredCashEntries]
   )
 
   // "খাত অনুযায়ী মোট" (client request, 2026-09-13): the flat entry list above
   // only shows the Cash Maintenance chart's own categories (পণ্য ক্রয়,
-  // প্যাকেজিং, ...); a Purchase's cash-out and an Expense's cash-out never
-  // land in the same table anywhere else in the app, so this merges both —
+  // প্যাকেজিং, ডিপো ভাড়া, ...); a Cash Maintenance cash-out and an Expense's
+  // cash-out never land in the same table anywhere else in the app, so this
+  // merges both —
   // same category+total shape as the Expense chart's "By category" table on
   // the Finance page — for the one number a client actually wants: total
   // spend per sector this period, cash-maintenance and expense combined.
@@ -464,7 +473,7 @@ export default function LoanAndCashMaintenancePage() {
         rows.set(category, { category, count: 1, total: amount })
       }
     }
-    filteredCashEntries.filter((entry) => !entry.isDirectExpense).forEach((entry) => add(entry.category, entry.amount))
+    filteredCashEntries.filter(isCashMaintenanceOut).forEach((entry) => add(entry.category, entry.amount))
     expenses
       .filter((expense) => (cashMode === 'daily' ? isSameDate(expense.date, cashDate) : isSameMonth(expense.date, cashMonth)))
       .forEach((expense) => add(expense.category, expense.amount))
@@ -481,6 +490,7 @@ export default function LoanAndCashMaintenancePage() {
   function openEditCash(entry: CashMaintenanceRecord) {
     setEditingCashId(entry.id)
     setCashForm({
+      direction: entry.direction === 'in' ? 'in' : 'out',
       category: entry.category,
       amount: String(entry.amount),
       date: entry.date,
@@ -502,6 +512,7 @@ export default function LoanAndCashMaintenancePage() {
       await saveCashMaintenance(
         {
           category: cashForm.category,
+          direction: cashForm.direction,
           amount,
           date: cashForm.date,
           note: cashForm.note || undefined,
@@ -562,7 +573,7 @@ export default function LoanAndCashMaintenancePage() {
         .reduce((sum, row) => sum + row.amount, 0),
     [collectedCashRows, cashMode, cashDate, cashMonth]
   )
-  const totalCashIn = loanWithdrawalsThisPeriod + salesMoneyThisPeriod
+  const totalCashIn = loanWithdrawalsThisPeriod + salesMoneyThisPeriod + cashMaintenanceInTotal
   const reconciliationGap = totalCashIn - totalCashOut
   const isBalanced = Math.abs(reconciliationGap) < 1
 
@@ -583,13 +594,16 @@ export default function LoanAndCashMaintenancePage() {
         .reduce((sum, entry) => sum + entry.amount, 0) +
       collectedCashRows
         .filter((row) => isBeforeDate(row.date, periodStartDate))
-        .reduce((sum, row) => sum + row.amount, 0)
+        .reduce((sum, row) => sum + row.amount, 0) +
+      cashEntries
+        .filter((entry) => isCashMaintenanceIn(entry) && isBeforeDate(entry.date, periodStartDate))
+        .reduce((sum, entry) => sum + entry.amount, 0)
     const cashOutBefore =
       expenses
         .filter((expense) => isBeforeDate(expense.date, periodStartDate))
         .reduce((sum, expense) => sum + expense.amount, 0) +
       cashEntries
-        .filter((entry) => !entry.isDirectExpense && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => isCashMaintenanceOut(entry) && isBeforeDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0)
     return cashInBefore - cashOutBefore
   }, [loanTransactions, collectedCashRows, expenses, cashEntries, periodStartDate])
@@ -1046,7 +1060,7 @@ export default function LoanAndCashMaintenancePage() {
             <SectionHeader
               icon={Wallet}
               title="Cash Maintenance Chart"
-              description="Loan repayment, new market investment, goods/packaging purchase, depot commission, and dealer payment for product transport — cash movements that don't post to the Expense chart."
+              description="Cash In (received from a dealer point, Gazipur collection, etc.) and Cash Out both go here. Enter goods purchase, pouch/packaging purchase, and depot rent here directly, along with loan repayment, new market investment, depot commission, and dealer payment for product transport — cash movements that reduce cash but don't post to the Expense chart or affect profit. The Purchase section no longer posts here automatically."
             />
             <div className="flex flex-wrap gap-3">
               <Select value={cashMode} onValueChange={(value) => setCashMode(value as typeof cashMode)}>
@@ -1064,10 +1078,11 @@ export default function LoanAndCashMaintenancePage() {
               <ExportMenu
                 filenameBase="cash-maintenance"
                 title="Cash Maintenance Chart"
-                headers={['Date', 'Category', 'Amount', 'Direct Expense', 'Note']}
+                headers={['Date', 'Category', 'Direction', 'Amount', 'Direct Expense', 'Note']}
                 rows={filteredCashEntries.map((entry) => [
                   entry.date,
                   entry.category,
+                  entry.direction === 'in' ? 'Cash In' : 'Cash Out',
                   entry.amount,
                   entry.isDirectExpense ? 'Yes' : 'No',
                   entry.note ?? '',
@@ -1080,7 +1095,11 @@ export default function LoanAndCashMaintenancePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {cashError ? <p className="text-sm text-destructive">{cashError}</p> : null}
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                <span className="text-muted-foreground">Cash-in total (Cash Maintenance)</span>
+                <p className="mt-1 text-lg font-semibold">{formatCurrency(cashMaintenanceInTotal, currency)}</p>
+              </div>
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
                 <span className="text-muted-foreground">Cash-out total (excl. direct expense)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(cashOutTotal, currency)}</p>
@@ -1148,6 +1167,11 @@ export default function LoanAndCashMaintenancePage() {
                       <TableCell>{formatDate(entry.date)}</TableCell>
                       <TableCell className="font-medium">
                         {entry.category}
+                        {entry.direction === 'in' ? (
+                          <Badge variant="outline" className="ml-2 rounded-full border-emerald-300 text-[10px] text-emerald-700 dark:text-emerald-300">
+                            Cash In
+                          </Badge>
+                        ) : null}
                         {entry.isDirectExpense ? (
                           <Badge variant="outline" className="ml-2 rounded-full text-[10px]">
                             Direct
@@ -1155,7 +1179,12 @@ export default function LoanAndCashMaintenancePage() {
                         ) : null}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{entry.note || '-'}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(entry.amount, currency)}</TableCell>
+                      <TableCell
+                        className={cn('text-right tabular-nums', entry.direction === 'in' && 'text-emerald-600 dark:text-emerald-400')}
+                      >
+                        {entry.direction === 'in' ? '+' : ''}
+                        {formatCurrency(entry.amount, currency)}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditCash(entry)} aria-label="Edit cash entry">
@@ -1213,6 +1242,10 @@ export default function LoanAndCashMaintenancePage() {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Sales money (collected)</span>
                   <span className="tabular-nums">{formatCurrency(salesMoneyThisPeriod, currency)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Other cash received (Cash Maintenance)</span>
+                  <span className="tabular-nums">{formatCurrency(cashMaintenanceInTotal, currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
                   <span>Total</span>
@@ -1399,11 +1432,36 @@ export default function LoanAndCashMaintenancePage() {
           <DialogHeader>
             <DialogTitle>{editingCashId ? 'Edit cash entry' : 'Record cash entry'}</DialogTitle>
             <DialogDescription>
-              Pick “{DIRECT_EXPENSE_CATEGORY}” for an entry that&apos;s only for matching the books — it won&apos;t count against the cash-out total.
+              Cash In adds to the day&apos;s cash; Cash Out reduces it — neither affects profit. Pick “{DIRECT_EXPENSE_CATEGORY}” (Cash Out) for an entry that&apos;s only for matching the books — it won&apos;t count against the cash-out total.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {cashError ? <p className="text-sm text-destructive">{cashError}</p> : null}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Type</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(['out', 'in'] as const).map((direction) => (
+                  <Button
+                    key={direction}
+                    type="button"
+                    variant={cashForm.direction === direction ? 'default' : 'outline'}
+                    onClick={() =>
+                      setCashForm((current) =>
+                        current.direction === direction
+                          ? current
+                          : {
+                              ...current,
+                              direction,
+                              category: direction === 'in' ? CASH_IN_CATEGORY_OPTIONS[0] : CASH_MAINTENANCE_CATEGORIES[0],
+                            }
+                      )
+                    }
+                  >
+                    {direction === 'in' ? 'Cash In (জমা)' : 'Cash Out (খরচ)'}
+                  </Button>
+                ))}
+              </div>
+            </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">
                 Category<span className="ml-0.5 text-rose-500">*</span>
@@ -1411,7 +1469,7 @@ export default function LoanAndCashMaintenancePage() {
               <Select value={cashForm.category} onValueChange={(value) => setCashForm((current) => ({ ...current, category: value }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {CASH_CATEGORY_OPTIONS.map((category) => (
+                  {(cashForm.direction === 'in' ? CASH_IN_CATEGORY_OPTIONS : CASH_OUT_CATEGORY_OPTIONS).map((category) => (
                     <SelectItem key={category} value={category}>{category}</SelectItem>
                   ))}
                 </SelectContent>

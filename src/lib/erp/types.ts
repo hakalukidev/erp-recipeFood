@@ -833,13 +833,12 @@ export type ProductReturnInput = {
 //
 // Deliberately NOT posted to the full ledger/Automatic Accounting Engine —
 // this is a standalone procurement + stock log, not a Chart-of-Accounts-
-// integrated module. It DOES hit cash flow though (2026-09-12 client
-// request): the cash actually paid out — a purchase's own `paid` at save
-// time, and any later VendorPaymentRecord paydown — auto-posts a
-// CashMaintenanceRecord under পণ্য ক্রয় / প্যাকেজিং মেটেরিয়ালস ক্রয়
-// (split proportionally to the raw-vs-packaging mix of the purchase's line
-// items), so the Loan & Cash Maintenance reconciliation actually sees it —
-// see buildPurchaseCashEntries in provider.tsx.
+// integrated module. As of 2026-09-22 (client request) it is also fully
+// independent of cash flow: a purchase's `paid` and any VendorPaymentRecord
+// only move the vendor's due, never a CashMaintenanceRecord. Cash actually
+// spent on goods/packaging/depot rent is entered directly on the Loan & Cash
+// Maintenance page's Cash Maintenance Chart instead (it was auto-posted
+// from here between 2026-09-12 and 2026-09-22).
 export type VendorRecord = {
   id: string
   name: string
@@ -948,9 +947,9 @@ export type PurchaseRecord = {
   paid: number
   due: number
   note?: string
-  // The CashMaintenanceRecord(s) auto-posted for `paid` at save time — see
-  // buildPurchaseCashEntries in provider.tsx. Up to two entries (goods +
-  // packaging) when a purchase mixes both material categories.
+  // Legacy: CashMaintenanceRecord(s) auto-posted for `paid` by purchases
+  // saved before 2026-09-22. No longer written — kept only so deleting the
+  // purchase still removes them.
   cashMaintenanceIds?: string[]
   createdBy: string
   createdByName: string
@@ -979,8 +978,7 @@ export type VendorPaymentRecord = {
   amount: number
   date: string
   note?: string
-  // Same as PurchaseRecord.cashMaintenanceIds, but for this paydown's amount
-  // — see buildPurchaseCashEntries in provider.tsx.
+  // Legacy, same as PurchaseRecord.cashMaintenanceIds — no longer written.
   cashMaintenanceIds?: string[]
   createdBy: string
   createdByName: string
@@ -1490,12 +1488,20 @@ export type LoanTransactionInput = {
 // `isDirectExpense` marks an entry recorded under the DIRECT_EXPENSE_CATEGORY
 // option — shown on the chart for the record but excluded from that cash-out
 // total, since it's only there to help the books balance, not a real spend.
+// `direction` (2026-09-22 client request): 'in' marks money that came INTO the
+// till but isn't a sale/loan already tracked elsewhere (e.g. cash received
+// from a dealer point, a Gazipur collection) — it adds to Cash In instead of
+// Cash Out and never touches net profit. Absent means 'out', which is every
+// record saved before this field existed.
+export type CashDirection = 'in' | 'out'
+
 export type CashMaintenanceRecord = {
   id: string
   category: string
   amount: number
   date: string
   note?: string
+  direction?: CashDirection
   isDirectExpense?: boolean
   createdBy: string
   createdByName: string
@@ -1504,6 +1510,7 @@ export type CashMaintenanceRecord = {
 
 export type CashMaintenanceInput = {
   category: string
+  direction?: CashDirection
   amount: number
   date?: string
   note?: string

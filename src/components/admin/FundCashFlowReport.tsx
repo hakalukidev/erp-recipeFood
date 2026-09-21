@@ -143,7 +143,7 @@ function buildFundReportHtml(
         <table class="doc">
           <tbody>
             ${row('Opening balance', formatCurrency(report.openingBalance, currency))}
-            ${row('Total Inflow (Sales collection + Loan withdrawal)', formatCurrency(report.inflow.total, currency))}
+            ${row('Total Inflow (Sales collection + Loan withdrawal + Other cash received)', formatCurrency(report.inflow.total, currency))}
             ${row('Total Outflow (Expenses + Cash Maintenance)', formatCurrency(report.outflow.total, currency))}
             ${row('Closing balance', formatCurrency(report.closingBalance, currency), true)}
           </tbody>
@@ -154,6 +154,7 @@ function buildFundReportHtml(
           <tbody>
             ${row('Sales collection (cash received from dealers)', formatCurrency(report.inflow.sales, currency))}
             ${row('Loan withdrawal', formatCurrency(report.inflow.loans, currency))}
+            ${row('Other cash received (Cash Maintenance)', formatCurrency(report.inflow.other, currency))}
             ${row('Total Inflow', formatCurrency(report.inflow.total, currency), true)}
           </tbody>
         </table>
@@ -213,8 +214,8 @@ function buildFundReportHtml(
 // ---- Fund / Cash Flow Report (client request, 2026-09-14) ----------------
 // One consolidated screen tying together every inflow source (sales money
 // actually collected + loan withdrawal) against every outflow head (Expense
-// chart + Cash Maintenance chart — which already includes vendor purchases,
-// loan repayment, depot commission, etc.), the P&L impact of product
+// chart + Cash Maintenance chart — which includes goods/packaging purchases,
+// depot rent, loan repayment, depot commission, etc.), the P&L impact of product
 // returns, and vendor-wise/item-wise breakdowns underneath — everything the
 // Loan & Cash Maintenance, Company Earnings, and Reports Hub pages already
 // track individually, but never showed together on one printable page. See
@@ -249,7 +250,7 @@ export function FundCashFlowReport() {
               <Landmark className="h-4.5 w-4.5" /> Fund / Cash Flow Report
             </CardTitle>
             <CardDescription>
-              Every inflow (sales collection, loan withdrawal) against every outflow (expenses, cash maintenance), with
+              Every inflow (sales collection, loan withdrawal, other cash received) against every outflow (expenses, cash maintenance), with
               product returns and P&amp;L netted in — one place, one printout.
             </CardDescription>
           </div>
@@ -329,6 +330,10 @@ export function FundCashFlowReport() {
                 <TableRow>
                   <TableCell>Loan withdrawal</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.loans, currency)}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Other cash received (Cash Maintenance)</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.other, currency)}</TableCell>
                 </TableRow>
                 <TableRow className="bg-muted/30 font-semibold">
                   <TableCell>Total Inflow</TableCell>
