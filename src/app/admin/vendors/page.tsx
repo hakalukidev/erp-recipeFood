@@ -1,10 +1,11 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { Edit, MapPin, Phone, Plus, Search, Trash2, Truck } from 'lucide-react'
+import { BookOpen, Edit, MapPin, Phone, Plus, Search, Trash2, Truck, Wallet } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ExportMenu } from '@/components/admin/ExportMenu'
+import { VendorLedgerDialog, VendorPaymentDialog } from '@/components/admin/VendorPaymentDialogs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,7 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { VendorRecord } from '@/lib/erp/types'
-import { computeVendorDue, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { computeVendorSummary, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function formatAmount(value: number) {
@@ -50,10 +51,10 @@ function formFromVendor(vendor: VendorRecord): VendorFormState {
 // Split out of the Purchase page into its own top-level section (2026-09-12
 // client request) — a fully independent department, not linked to anything
 // else, that only carries vendor identity + their running due (see
-// computeVendorDue in utils.ts). Recording a purchase or a vendor payment
-// still happens from the Purchase page (/admin/purchase), which keeps its
-// own vendor picker/voucher lookups — this page is purely the vendor
-// directory (add/edit/delete + due at a glance).
+// computeVendorDue in utils.ts). Purchases are recorded from the Purchase
+// page (/admin/purchase); a payment against the vendor's whole due and the
+// vendor ledger (Previous Due + Purchase − Payment = Current Due) are
+// available here too.
 export default function VendorsPage() {
   const { data, saveVendor, deleteVendor } = useERP()
   const [query, setQuery] = useState('')
@@ -61,14 +62,33 @@ export default function VendorsPage() {
   const [vendorDialogOpen, setVendorDialogOpen] = useState(false)
   const [editingVendor, setEditingVendor] = useState<VendorRecord | null>(null)
   const [vendorForm, setVendorForm] = useState<VendorFormState>(emptyVendorForm)
+  const [payVendorId, setPayVendorId] = useState<string | undefined>(undefined)
+  const [payDialogOpen, setPayDialogOpen] = useState(false)
+  const [ledgerVendorId, setLedgerVendorId] = useState<string | null>(null)
+  const [ledgerDialogOpen, setLedgerDialogOpen] = useState(false)
 
   const vendors = useMemo(() => sortByCreatedAtDesc(toArray(data?.vendors)), [data?.vendors])
 
-  const vendorDueById = useMemo(() => {
-    const map = new Map<string, number>()
-    vendors.forEach((vendor) => map.set(vendor.id, computeVendorDue(data ?? null, vendor.id)))
+  const summaryById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof computeVendorSummary>>()
+    vendors.forEach((vendor) => map.set(vendor.id, computeVendorSummary(data ?? null, vendor.id)))
     return map
   }, [data, vendors])
+  const emptySummary = { openingDue: 0, totalPurchase: 0, totalPaid: 0, currentDue: 0 }
+  const summaryOf = (vendorId: string) => summaryById.get(vendorId) ?? emptySummary
+
+  const grandTotals = useMemo(
+    () =>
+      Array.from(summaryById.values()).reduce(
+        (totals, summary) => ({
+          totalPurchase: totals.totalPurchase + summary.totalPurchase,
+          totalPaid: totals.totalPaid + summary.totalPaid,
+          currentDue: totals.currentDue + summary.currentDue,
+        }),
+        { totalPurchase: 0, totalPaid: 0, currentDue: 0 }
+      ),
+    [summaryById]
+  )
 
   const filteredVendors = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -122,17 +142,23 @@ export default function VendorsPage() {
     }
   }
 
-  const vendorExportHeaders = ['Vendor Name', 'Proprietor', 'Phone', 'Address', 'Current Due']
+  const vendorExportHeaders = ['Vendor Name', 'Proprietor', 'Phone', 'Address', 'Previous Due', 'Total Purchase', 'Total Payment', 'Current Due']
   const vendorExportRows = useMemo(
     () =>
-      filteredVendors.map((vendor) => [
-        vendor.name,
-        vendor.proprietorName ?? '',
-        vendor.phone,
-        vendor.address,
-        (vendorDueById.get(vendor.id) ?? 0).toFixed(2),
-      ]),
-    [filteredVendors, vendorDueById]
+      filteredVendors.map((vendor) => {
+        const summary = summaryById.get(vendor.id) ?? { openingDue: 0, totalPurchase: 0, totalPaid: 0, currentDue: 0 }
+        return [
+          vendor.name,
+          vendor.proprietorName ?? '',
+          vendor.phone,
+          vendor.address,
+          summary.openingDue.toFixed(2),
+          summary.totalPurchase.toFixed(2),
+          summary.totalPaid.toFixed(2),
+          summary.currentDue.toFixed(2),
+        ]
+      }),
+    [filteredVendors, summaryById]
   )
 
   return (
@@ -144,21 +170,44 @@ export default function VendorsPage() {
           </Card>
         ) : null}
 
-        <Card className="w-full max-w-xs border-border/70 shadow-sm">
-          <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">Vendors</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight">{vendors.length.toLocaleString('en-BD')}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Total vendors on file</p>
-          </CardContent>
-        </Card>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Vendors</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{vendors.length.toLocaleString('en-BD')}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Total vendors on file</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Total purchase</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatAmount(grandTotals.totalPurchase)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Bought from every vendor</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Total payment</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">{formatAmount(grandTotals.totalPaid)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Paid to every vendor</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Total current due</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">{formatAmount(grandTotals.currentDue)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Previous due + purchase − payment</p>
+            </CardContent>
+          </Card>
+        </div>
 
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Vendor list</CardTitle>
               <CardDescription>
-                Search by vendor/proprietor name, phone, or address. Current due is opening due plus the live sum of
-                every unpaid purchase against them — record a purchase or a payment from the Purchase page.
+                Current due = previous due + purchase − payment. Use Pay to pay down a vendor&apos;s total due, or
+                Statement for the full transaction history and product-wise quantities.
               </CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_auto_auto]">
@@ -187,6 +236,9 @@ export default function VendorsPage() {
                     <TableHead>Proprietor</TableHead>
                     <TableHead>Mobile</TableHead>
                     <TableHead>Address</TableHead>
+                    <TableHead className="text-right">Previous Due</TableHead>
+                    <TableHead className="text-right">Total Purchase</TableHead>
+                    <TableHead className="text-right">Total Payment</TableHead>
                     <TableHead className="text-right">Current Due</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -217,13 +269,43 @@ export default function VendorsPage() {
                           <span>{vendor.address || 'N/A'}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right">
-                        <span className={cn((vendorDueById.get(vendor.id) ?? 0) > 0 && 'font-semibold text-destructive')}>
-                          {formatAmount(vendorDueById.get(vendor.id) ?? 0)}
+                      <TableCell className="text-right tabular-nums">{formatAmount(summaryOf(vendor.id).openingDue)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(summaryOf(vendor.id).totalPurchase)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-emerald-600">
+                        {formatAmount(summaryOf(vendor.id).totalPaid)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <span className={cn(summaryOf(vendor.id).currentDue > 0 && 'font-semibold text-destructive')}>
+                          {formatAmount(summaryOf(vendor.id).currentDue)}
                         </span>
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9"
+                            disabled={summaryOf(vendor.id).currentDue <= 0}
+                            onClick={() => {
+                              setFeedback(null)
+                              setPayVendorId(vendor.id)
+                              setPayDialogOpen(true)
+                            }}
+                          >
+                            <Wallet className="mr-1.5 h-4 w-4" /> Pay
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9"
+                            onClick={() => {
+                              setFeedback(null)
+                              setLedgerVendorId(vendor.id)
+                              setLedgerDialogOpen(true)
+                            }}
+                          >
+                            <BookOpen className="mr-1.5 h-4 w-4" /> Statement
+                          </Button>
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditVendorDialog(vendor)} aria-label={`Edit ${vendor.name}`}>
                             <Edit className="h-4 w-4" />
                           </Button>
@@ -242,7 +324,7 @@ export default function VendorsPage() {
                   ))}
                   {filteredVendors.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={9} className="h-28 text-center text-muted-foreground">
                         No vendors found.
                       </TableCell>
                     </TableRow>
@@ -330,6 +412,14 @@ export default function VendorsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <VendorPaymentDialog open={payDialogOpen} onOpenChange={setPayDialogOpen} vendorId={payVendorId} onSaved={setFeedback} />
+      <VendorLedgerDialog
+        open={ledgerDialogOpen}
+        onOpenChange={setLedgerDialogOpen}
+        vendorId={ledgerVendorId}
+        onFeedback={setFeedback}
+      />
     </AdminShell>
   )
 }

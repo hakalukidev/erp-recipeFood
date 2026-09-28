@@ -247,7 +247,12 @@ export function buildOperationsOverview(data: ERPData | null) {
 export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   const rateCards = toArray(data?.rateCards)
   const productReturns = toArray(data?.productReturns)
-  const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
+  // Every non-rejected ExpenseRecord plus direct-expense Cash Maintenance
+  // entries (see directExpenseCashEntries).
+  const expenses: Array<{ date: string; amount: number }> = [
+    ...toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected'),
+    ...directExpenseCashEntries(data),
+  ]
 
   const totalEarning =
     rateCards.reduce((sum, card) => sum + card.usableMoney, 0) -
@@ -366,10 +371,22 @@ export type FundCashFlowProductRow = { productId: string; productName: string; q
 // empty), same "derive, don't store" shape as the Daily Cash Book on the
 // Loan & Cash Maintenance page.
 // Cash Maintenance rows split by direction (absent = 'out', see
-// CashMaintenanceRecord.direction). A direct-expense row is neither — it's a
-// book-balancing entry only.
+// CashMaintenanceRecord.direction). A direct-expense row (isDirectExpense)
+// counts as cash out like any other since 2026-09-29 (client spec §20–21:
+// it showed in the history but never in the summary/reports) — it used to
+// be excluded as a book-balancing-only entry.
 export function isCashMaintenanceOut(entry: CashMaintenanceRecord) {
-  return entry.direction !== 'in' && !entry.isDirectExpense
+  return entry.direction !== 'in'
+}
+
+// Direct-expense Cash Maintenance rows (DIRECT_EXPENSE_CATEGORY) are also a
+// P&L expense (spec §21: Cash Entry → Expense → Summary → Reporting), so
+// Company Earnings and the Fund/Cash Flow P&L count them next to
+// ExpenseRecords. Rejected entries are left out, same as rejected expenses.
+export function directExpenseCashEntries(data: ERPData | null) {
+  return toArray(data?.cashMaintenance).filter(
+    (entry) => entry.isDirectExpense && entry.direction !== 'in' && entry.approvalStatus !== 'rejected'
+  )
 }
 
 export function isCashMaintenanceIn(entry: CashMaintenanceRecord) {
@@ -450,7 +467,11 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
   // ---- P&L for the same range (Section 5) ---------------------------------
   const cardsInRange = rateCards.filter((card) => dateInRange(card.date, from, to))
   const totalEarning = cardsInRange.reduce((sum, card) => sum + card.usableMoney, 0) - totalReturnsDeducted
-  const expenseInRange = expenses.filter((expense) => dateInRange(expense.date, from, to)).reduce((sum, expense) => sum + expense.amount, 0)
+  const expenseInRange =
+    expenses.filter((expense) => dateInRange(expense.date, from, to)).reduce((sum, expense) => sum + expense.amount, 0) +
+    directExpenseCashEntries(data)
+      .filter((entry) => dateInRange(entry.date, from, to))
+      .reduce((sum, entry) => sum + entry.amount, 0)
   const netProfit = totalEarning - expenseInRange
 
   // ---- Vendor-wise breakdown (Section 6) ----------------------------------
@@ -820,6 +841,13 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
     .reduce((sum, order) => sum + order.due, 0)
 }
 
+// The name to show for an expense category — its renamed label (spec §18,
+// SettingsRecord.expenseCategoryLabels) or the stored key itself.
+export function expenseCategoryLabel(data: ERPData | null | undefined, category: string) {
+  const match = data?.settings?.expenseCategoryLabels?.find((entry) => entry?.category === category)
+  return match?.label?.trim() || category
+}
+
 // ---- Purchase Section (procurement from vendors) --------------------------
 // Same "always derive it live" shape as computeDealerDue above — a vendor's
 // outstanding due is never stored as its own running total, just the
@@ -829,14 +857,321 @@ export function computeDealerDue(data: ERPData | null, dealerId: string) {
 // createPurchase/recordVendorPayment, and can go negative when a purchase's
 // `paid` was entered larger than that purchase's own total to pay down the
 // opening/prior balance in the same transaction).
+//
+// Vendor-level payments (VendorPaymentRecord with no purchaseId) aren't
+// reflected in any purchase's due, so they're subtracted here directly:
+// Previous Due + New Purchase − Payment = Current Due.
 export function computeVendorDue(data: ERPData | null, vendorId: string) {
   const openingDue = data?.vendors[vendorId]?.openingDue ?? 0
   return (
     openingDue +
     toArray(data?.purchases)
       .filter((purchase) => purchase.vendorId === vendorId)
-      .reduce((sum, purchase) => sum + purchase.due, 0)
+      .reduce((sum, purchase) => sum + purchase.due, 0) -
+    computeVendorAccountPayments(data, vendorId)
   )
+}
+
+// Vendor Statement totals (2026-09-28): Previous (opening) Due + Purchase −
+// Payment = Current Due. totalPaid counts paid-at-purchase, per-purchase
+// payments (both already in purchase.paid) and vendor-level payments, so
+// currentDue always equals computeVendorDue.
+export function computeVendorSummary(data: ERPData | null, vendorId: string) {
+  const openingDue = data?.vendors[vendorId]?.openingDue ?? 0
+  const vendorPurchases = toArray(data?.purchases).filter((purchase) => purchase.vendorId === vendorId)
+  const totalPurchase = vendorPurchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0)
+  const totalPaid =
+    vendorPurchases.reduce((sum, purchase) => sum + purchase.paid, 0) + computeVendorAccountPayments(data, vendorId)
+  return { openingDue, totalPurchase, totalPaid, currentDue: openingDue + totalPurchase - totalPaid }
+}
+
+// Sum of payments made against a vendor's whole account rather than one
+// purchase — see VendorPaymentRecord in types.ts.
+export function computeVendorAccountPayments(data: ERPData | null, vendorId?: string) {
+  return toArray(data?.vendorPayments)
+    .filter((payment) => !payment.purchaseId && (vendorId === undefined || payment.vendorId === vendorId))
+    .reduce((sum, payment) => sum + payment.amount, 0)
+}
+
+// Stock units one Rate Card line moves: qty × per-carton multiplier pieces,
+// converted back to Finished Goods cartons when the line carries a
+// packaging conversion (see RateCardLineItem.piecesPerStockUnit).
+export function rateCardLineStockUnits(item: { qty: number; perCtnBgs?: string; finishedGoodsId?: string; piecesPerStockUnit?: number }) {
+  const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+  return item.finishedGoodsId && item.piecesPerStockUnit && item.piecesPerStockUnit > 0 ? pieces / item.piecesPerStockUnit : pieces
+}
+
+// ---- Packaging conversion (2026-09-28 client spec §10) --------------------
+// piece → gram → kg: a 45 g packet × 72 pcs/carton = 3,240 g = 3.24 kg per
+// carton. Returns undefined unless both numbers are positive.
+export function computePackWeightKg(pieceWeightGrams?: number, piecesPerUnit?: number) {
+  const grams = Number(pieceWeightGrams) || 0
+  const pieces = Number(piecesPerUnit) || 0
+  if (grams <= 0 || pieces <= 0) return undefined
+  return (grams * pieces) / 1000
+}
+
+// "45 g × 72 pcs = 3,240 g = 3.24 kg", or undefined without both numbers.
+export function describePackConversion(item: { pieceWeightGrams?: number; piecesPerUnit?: number }) {
+  const kg = computePackWeightKg(item.pieceWeightGrams, item.piecesPerUnit)
+  if (kg === undefined) return undefined
+  const fmt = (value: number) => value.toLocaleString('en-BD', { maximumFractionDigits: 3 })
+  return `${fmt(item.pieceWeightGrams!)} g × ${fmt(item.piecesPerUnit!)} pcs = ${fmt(kg * 1000)} g = ${fmt(kg)} kg`
+}
+
+// ---- Factory Stock (2026-09-28 client spec §7–9) -------------------------
+// Vendor → Purchase → Factory Stock → Dealer sale, product-wise (মরিচ,
+// হলুদ, জিরা …), always derived live — never stored:
+//   Purchased  = Σ purchase lines for the material
+//   Sold       = Σ Rate Card lines of every Finished Goods pack size made
+//                from it, × that pack size's unitWeightKg
+//                (e.g. 10 bags × 15 kg + 3 bags × 15 kg = 195 kg)
+//   Remaining  = loose stock (PurchaseMaterialRecord.stockQty) + packed
+//                stock (Σ FinishedGoods.stockQty × unitWeightKg)
+// Counting loose + packed together means Production (raw → packed) just
+// moves kg from one bucket to the other without changing the total, and a
+// sale that was never preceded by a Production entry (packed stock goes
+// negative) still nets correctly: 500 − 195 = 305.
+export type FactoryStockPackRow = {
+  finishedGoodsId: string
+  name: string
+  packSize?: string
+  unitWeightKg: number
+  pieceWeightGrams?: number
+  piecesPerUnit?: number
+  packedUnits: number
+  soldUnits: number
+}
+
+export type FactoryStockRow = {
+  material: PurchaseMaterialRecord
+  // Stock at the start of the period — for an all-time view, whatever was
+  // on hand before the first purchase/sale on file (e.g. stock typed in by
+  // hand when the material was added). Opening + Purchased − Sold − Other
+  // usage = Closing, always.
+  openingQty: number
+  purchasedQty: number
+  purchaseCount: number
+  soldQty: number
+  otherUsageQty: number
+  // Stock at the end of the period (= currentQty when there's no `to`).
+  closingQty: number
+  // Right now — loose + packed.
+  currentQty: number
+  looseQty: number
+  packedQty: number
+  packs: FactoryStockPackRow[]
+}
+
+export type FactoryStockRange = { from?: string; to?: string }
+
+// `range` (spec §12 — "any time"): Purchased/Sold/Other usage count only
+// entries dated inside [from, to]; Closing is rolled back from today's
+// live stock by undoing everything dated after `to`; Opening is Closing
+// minus the period's movement. Dates are 'YYYY-MM-DD' strings.
+export function computeFactoryStock(data: ERPData | null, range: FactoryStockRange = {}): FactoryStockRow[] {
+  const materials = toArray(data?.purchaseMaterials)
+  const finishedGoods = toArray(data?.finishedGoods)
+  const day = (value?: string) => (value ?? '').slice(0, 10)
+  const inPeriod = (date?: string) => (!range.from || day(date) >= range.from) && (!range.to || day(date) <= range.to)
+  const afterPeriod = (date?: string) => Boolean(range.to) && day(date) > range.to!
+
+  type Bucket = { period: number; after: number }
+  const add = (map: Map<string, Bucket>, key: string, date: string | undefined, qty: number) => {
+    const current = map.get(key) ?? { period: 0, after: 0 }
+    if (inPeriod(date)) current.period += qty
+    else if (afterPeriod(date)) current.after += qty
+    map.set(key, current)
+  }
+
+  const purchased = new Map<string, Bucket>()
+  const purchaseCount = new Map<string, number>()
+  toArray(data?.purchases).forEach((purchase) => {
+    const seen = new Set<string>()
+    purchase.items.forEach((item) => {
+      if (!item.materialId) return
+      add(purchased, item.materialId, purchase.date, item.qty)
+      if (inPeriod(purchase.date) && !seen.has(item.materialId)) {
+        purchaseCount.set(item.materialId, (purchaseCount.get(item.materialId) ?? 0) + 1)
+      }
+      seen.add(item.materialId)
+    })
+  })
+
+  // Units of each Finished Goods pack size billed on Rate Cards — same
+  // conversion saveRateCard decrements stock by.
+  const soldUnits = new Map<string, Bucket>()
+  toArray(data?.rateCards).forEach((card) => {
+    card.items.forEach((item) => {
+      if (!item.finishedGoodsId) return
+      add(soldUnits, item.finishedGoodsId, card.date, rateCardLineStockUnits(item))
+    })
+  })
+
+  // Manual usage only — Production batches post their own MaterialUsageRecord,
+  // but that's raw → packed (still in the factory), not stock leaving.
+  const productionUsageIds = new Set(
+    toArray(data?.productionBatches)
+      .map((batch) => batch.materialUsageId)
+      .filter((id): id is string => Boolean(id))
+  )
+  const otherUsage = new Map<string, Bucket>()
+  toArray(data?.materialUsages).forEach((usage) => {
+    if (productionUsageIds.has(usage.id)) return
+    add(otherUsage, usage.materialId, usage.date, usage.qty)
+  })
+
+  return materials
+    .map((material) => {
+      const linked = finishedGoods.filter((item) => item.rawMaterialId === material.id)
+      const packs: FactoryStockPackRow[] = linked.map((item) => ({
+        finishedGoodsId: item.id,
+        name: item.name,
+        packSize: item.packSize,
+        unitWeightKg: item.unitWeightKg || 0,
+        pieceWeightGrams: item.pieceWeightGrams,
+        piecesPerUnit: item.piecesPerUnit,
+        packedUnits: item.stockQty,
+        soldUnits: soldUnits.get(item.id)?.period ?? 0,
+      }))
+      const soldAfterQty = linked.reduce((sum, item) => sum + (soldUnits.get(item.id)?.after ?? 0) * (item.unitWeightKg || 0), 0)
+      const soldQty = packs.reduce((sum, pack) => sum + pack.soldUnits * pack.unitWeightKg, 0)
+      const packedQty = packs.reduce((sum, pack) => sum + pack.packedUnits * pack.unitWeightKg, 0)
+      const currentQty = material.stockQty + packedQty
+      const purchasedQty = purchased.get(material.id)?.period ?? 0
+      const otherUsageQty = otherUsage.get(material.id)?.period ?? 0
+      const closingQty =
+        currentQty - (purchased.get(material.id)?.after ?? 0) + soldAfterQty + (otherUsage.get(material.id)?.after ?? 0)
+      return {
+        material,
+        openingQty: closingQty - purchasedQty + soldQty + otherUsageQty,
+        purchasedQty,
+        purchaseCount: purchaseCount.get(material.id) ?? 0,
+        soldQty,
+        otherUsageQty,
+        closingQty,
+        currentQty,
+        looseQty: material.stockQty,
+        packedQty,
+        packs,
+      }
+    })
+    .sort((left, right) => left.material.name.localeCompare(right.material.name))
+}
+
+// Product Statement / inventory ledger (2026-09-29 client spec §13) — every
+// movement of one product in date order with a running stock, plus which
+// vendor supplied how much. The inventory-side twin of the Vendor
+// Statement: a purchase line appears in both (qty here, money there).
+// Production is left out (raw → packed stays in the factory). Starts from
+// computeFactoryStock's all-time opening, so the last balance always
+// equals the product's current stock.
+export type ProductLedgerEntry = {
+  key: string
+  date: string
+  createdAt: string
+  type: 'purchase' | 'sale' | 'usage'
+  reference: string
+  party: string
+  detail?: string
+  qtyIn: number
+  qtyOut: number
+  amount: number
+}
+
+export type ProductVendorSummary = { vendorId?: string; vendorName: string; qty: number; amount: number; purchases: number }
+
+export function computeProductLedger(data: ERPData | null, materialId: string) {
+  const stockRow = computeFactoryStock(data).find((row) => row.material.id === materialId)
+  const entries: ProductLedgerEntry[] = []
+  const vendorMap = new Map<string, ProductVendorSummary>()
+
+  toArray(data?.purchases).forEach((purchase) => {
+    const lines = purchase.items.filter((item) => item.materialId === materialId)
+    if (!lines.length) return
+    const qty = lines.reduce((sum, item) => sum + item.qty, 0)
+    const amount = lines.reduce((sum, item) => sum + item.amount, 0)
+    entries.push({
+      key: purchase.id,
+      date: purchase.date,
+      createdAt: purchase.createdAt,
+      type: 'purchase',
+      reference: purchase.purchaseNumber,
+      party: purchase.vendorName,
+      detail: lines.map((item) => `${item.qty} ${item.unit} @ ${item.rate.toFixed(2)}`).join(', '),
+      qtyIn: qty,
+      qtyOut: 0,
+      amount,
+    })
+    const vendorKey = purchase.vendorId ?? purchase.vendorName
+    const summary = vendorMap.get(vendorKey) ?? { vendorId: purchase.vendorId, vendorName: purchase.vendorName, qty: 0, amount: 0, purchases: 0 }
+    summary.qty += qty
+    summary.amount += amount
+    summary.purchases += 1
+    vendorMap.set(vendorKey, summary)
+  })
+
+  const packsById = new Map((stockRow?.packs ?? []).map((pack) => [pack.finishedGoodsId, pack]))
+  toArray(data?.rateCards).forEach((card) => {
+    const lines = card.items.filter((item) => item.finishedGoodsId && packsById.has(item.finishedGoodsId))
+    if (!lines.length) return
+    const qty = lines.reduce(
+      (sum, item) => sum + rateCardLineStockUnits(item) * (packsById.get(item.finishedGoodsId!)?.unitWeightKg ?? 0),
+      0
+    )
+    entries.push({
+      key: card.id,
+      date: card.date,
+      createdAt: card.createdAt,
+      type: 'sale',
+      reference: card.invoiceNo,
+      party: card.recipientName,
+      detail: lines
+        .map((item) => {
+          const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+          return `${item.productName} × ${pieces.toLocaleString('en-BD', { maximumFractionDigits: 2 })}`
+        })
+        .join(', '),
+      qtyIn: 0,
+      qtyOut: qty,
+      amount: 0,
+    })
+  })
+
+  const productionUsageIds = new Set(
+    toArray(data?.productionBatches)
+      .map((batch) => batch.materialUsageId)
+      .filter((id): id is string => Boolean(id))
+  )
+  toArray(data?.materialUsages).forEach((usage) => {
+    if (usage.materialId !== materialId || productionUsageIds.has(usage.id)) return
+    entries.push({
+      key: usage.id,
+      date: usage.date,
+      createdAt: usage.createdAt,
+      type: 'usage',
+      reference: 'Usage',
+      party: '—',
+      detail: usage.note,
+      qtyIn: 0,
+      qtyOut: usage.qty,
+      amount: 0,
+    })
+  })
+
+  entries.sort((left, right) => left.date.localeCompare(right.date) || left.createdAt.localeCompare(right.createdAt))
+  let running = stockRow?.openingQty ?? 0
+  const rows = entries.map((entry) => {
+    running += entry.qtyIn - entry.qtyOut
+    return { ...entry, balance: running }
+  })
+
+  return {
+    stock: stockRow,
+    rows,
+    vendors: Array.from(vendorMap.values()).sort((left, right) => right.qty - left.qty),
+    totalPurchaseAmount: Array.from(vendorMap.values()).reduce((sum, vendor) => sum + vendor.amount, 0),
+  }
 }
 
 // The pieces a packaging material's current stock is actually good for —

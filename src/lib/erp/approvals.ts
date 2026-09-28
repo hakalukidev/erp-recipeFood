@@ -127,7 +127,7 @@ export const APPROVAL_SOURCES: Record<ApprovalCollection, ApprovalSource> = {
       party: record.vendorName,
       amount: record.amount,
       date: record.date,
-      detail: `Against purchase ${record.purchaseNumber}`,
+      detail: record.purchaseNumber ? `Against purchase ${record.purchaseNumber}` : 'Against vendor total due',
     }),
   },
   materialUsages: {

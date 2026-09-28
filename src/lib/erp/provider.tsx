@@ -123,11 +123,14 @@ import {
 } from '@/lib/erp/standardChartOfAccounts'
 import {
   computeLoanBalance,
+  computePackWeightKg,
+  computeVendorDue,
   createId,
   getPermissions,
   getProductStatus,
   hasPermission as hasPermissionCheck,
   parsePerCtnMultiplier,
+  rateCardLineStockUnits,
   saleTypeLabel,
   toArray,
 } from '@/lib/erp/utils'
@@ -239,6 +242,7 @@ type ERPContextValue = {
   deletePurchase: (purchaseId: string) => Promise<void>
   recordVendorPayment: (input: VendorPaymentInput) => Promise<string>
   updateVendorPayment: (paymentId: string, input: { amount: number; date?: string; note?: string }) => Promise<void>
+  deleteVendorPayment: (paymentId: string) => Promise<void>
   createMaterialUsage: (input: MaterialUsageInput) => Promise<string>
   deleteMaterialUsage: (materialUsageId: string) => Promise<void>
   saveFinishedGoods: (input: FinishedGoodsInput, finishedGoodsId?: string) => Promise<string>
@@ -246,6 +250,7 @@ type ERPContextValue = {
   createProductionBatch: (input: ProductionBatchInput) => Promise<string>
   deleteProductionBatch: (productionBatchId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
+  saveExpenseCategoryLabels: (labels: Array<{ category: string; label: string }>) => Promise<void>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -2146,8 +2151,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.vendorId === vendorId)
-    if (hasPurchases) {
-      throw new Error('Vendors with purchases on file cannot be deleted.')
+    const hasPayments = Object.values(data.vendorPayments).some((payment) => payment.vendorId === vendorId)
+    if (hasPurchases || hasPayments) {
+      throw new Error('Vendors with purchases or payments on file cannot be deleted.')
     }
 
     const db = getDatabaseOrThrow()
@@ -2264,7 +2270,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (qty <= 0) {
         throw new Error(`Quantity for ${name} must be greater than zero.`)
       }
-      const rate = Number(requested.rate) || 0
+      // An Amount typed directly on the line (2026-09-28) is kept exactly —
+      // rate is derived from it — so 80,000 is saved as 80,000, not
+      // qty × a rounded rate (e.g. 79,999.99).
+      const typedAmount = requested.amount !== undefined ? Math.round(Number(requested.amount) * 100) / 100 : undefined
+      const rate = typedAmount !== undefined && Number.isFinite(typedAmount) ? typedAmount / qty : Number(requested.rate) || 0
       if (rate < 0) {
         throw new Error(`Rate for ${name} cannot be negative.`)
       }
@@ -2276,7 +2286,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         unit: material?.unit ?? 'kg',
         qty,
         rate,
-        amount: qty * rate,
+        amount: typedAmount !== undefined && Number.isFinite(typedAmount) ? typedAmount : Math.round(qty * rate * 100) / 100,
       }
     })
 
@@ -2380,7 +2390,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (qty <= 0) {
         throw new Error(`Quantity for ${name} must be greater than zero.`)
       }
-      const rate = Number(requested.rate) || 0
+      // An Amount typed directly on the line (2026-09-28) is kept exactly —
+      // rate is derived from it — so 80,000 is saved as 80,000, not
+      // qty × a rounded rate (e.g. 79,999.99).
+      const typedAmount = requested.amount !== undefined ? Math.round(Number(requested.amount) * 100) / 100 : undefined
+      const rate = typedAmount !== undefined && Number.isFinite(typedAmount) ? typedAmount / qty : Number(requested.rate) || 0
       if (rate < 0) {
         throw new Error(`Rate for ${name} cannot be negative.`)
       }
@@ -2392,7 +2406,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         unit: material?.unit ?? 'kg',
         qty,
         rate,
-        amount: qty * rate,
+        amount: typedAmount !== undefined && Number.isFinite(typedAmount) ? typedAmount : Math.round(qty * rate * 100) / 100,
       }
     })
 
@@ -2405,12 +2419,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         `This purchase already has ${vendorPaymentsTotal.toFixed(2)} in recorded vendor payments — the new total can't be less than that. Edit or delete those payments first.`
       )
     }
-    // Not capped at totalAmount - vendorPaymentsTotal (2026-09-13 client
-    // request, same as createPurchase above) — the amount entered at
-    // purchase-creation time can be edited larger than this purchase's own
-    // total to pay down the vendor's opening/prior balance instead.
-    const initialPaid = Math.max(Number(input.paid) || 0, 0)
-    const paid = initialPaid + vendorPaymentsTotal
+    // On an edit `input.paid` is this purchase's TOTAL paid (paid at
+    // purchase time + separate vendor payments) and replaces the old figure
+    // — 2026-09-28 client bug: it used to mean only the paid-at-purchase
+    // part, so correcting 70,000 → 80,000 got added on top of the 70,000
+    // already recorded as a vendor payment and showed 1,50,000 paid.
+    // Still not capped at totalAmount (2026-09-13 client request, same as
+    // createPurchase above) — paying more than this purchase's own total
+    // pays down the vendor's opening/prior balance instead.
+    const paid = Math.max(Number(input.paid) || 0, 0)
+    if (paid < vendorPaymentsTotal) {
+      throw new Error(
+        `Total paid can't be less than the ${vendorPaymentsTotal.toFixed(2)} already recorded as separate vendor payments on this purchase — edit or delete those from Payment history first.`
+      )
+    }
     const due = totalAmount - paid
 
     const db = getDatabaseOrThrow()
@@ -2459,14 +2481,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createdBy: existing.createdBy,
       createdByName: existing.createdByName,
       createdAt: existing.createdAt,
+      // Overwritten in place — the record always shows the final corrected
+      // state; these just mark that (and when/by whom) it was corrected.
+      updatedAt: now,
+      updatedByName: currentUser.name,
+      editCount: (existing.editCount ?? 0) + 1,
     }
     updates[`purchases/${purchaseId}`] = updatedPurchase
 
+    // Before → after in the activity log, so the correction is traceable
+    // even though the purchase itself holds only the corrected figures.
+    const describeItems = (list: PurchaseItem[]) =>
+      list.map((item) => `${item.materialName} ${item.qty} ${item.unit} = ${item.amount.toFixed(2)}`).join(', ')
     await update(ref(db, 'erp'), updates)
     await writeActivity(
       'purchase_updated',
       'purchase',
-      `Edited purchase ${existing.purchaseNumber} from ${vendorName} — ${totalAmount.toFixed(2)} total, ${paid.toFixed(2)} paid, ${due.toFixed(2)} due.`
+      `Edited purchase ${existing.purchaseNumber} (${vendorName}): total ${existing.totalAmount.toFixed(2)} → ${totalAmount.toFixed(2)}, paid ${existing.paid.toFixed(2)} → ${paid.toFixed(2)}, due ${existing.due.toFixed(2)} → ${due.toFixed(2)}. Items: [${describeItems(existing.items)}] → [${describeItems(items)}].`
     )
   }
 
@@ -2523,20 +2554,58 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   // A paydown against one purchase's due — mirrors recordCollection above,
-  // just on the payable side.
+  // just on the payable side. Without a purchaseId it's a vendor-level
+  // payment against the vendor's whole running due instead (see
+  // VendorPaymentRecord in types.ts).
   async function recordVendorPayment(input: VendorPaymentInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a vendor payment.')
     }
 
-    const purchase = data.purchases[input.purchaseId]
-    if (!purchase) {
-      throw new Error('Purchase not found.')
-    }
-
     const amount = Number(input.amount) || 0
     if (amount <= 0) {
       throw new Error('Payment amount must be greater than zero.')
+    }
+
+    if (!input.purchaseId) {
+      const vendor = input.vendorId ? data.vendors[input.vendorId] : undefined
+      if (!vendor) {
+        throw new Error('Vendor not found.')
+      }
+      const previousDue = computeVendorDue(data, vendor.id)
+      if (amount > previousDue) {
+        throw new Error(`Payment amount cannot exceed ${vendor.name}'s current due of ${previousDue.toFixed(2)}.`)
+      }
+
+      const db = getDatabaseOrThrow()
+      const id = createId('vendorpay')
+      const now = new Date().toISOString()
+      const payment: VendorPaymentRecord = {
+        id,
+        receiptNumber: `VPAY-${Date.now().toString().slice(-8)}`,
+        vendorId: vendor.id,
+        vendorName: vendor.name,
+        amount,
+        date: input.date?.trim() || now.slice(0, 10),
+        ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+        ...pendingApprovalFields(currentUser, now),
+        createdBy: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+      }
+
+      await update(ref(db, 'erp'), { [`vendorPayments/${id}`]: payment })
+      await writeActivity(
+        'vendor_payment_recorded',
+        'purchase',
+        `Paid ${amount.toFixed(2)} to ${vendor.name} against total due — ${previousDue.toFixed(2)} → ${(previousDue - amount).toFixed(2)} still due.`
+      )
+      return id
+    }
+
+    const purchase = data.purchases[input.purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
     }
     if (amount > purchase.due) {
       throw new Error('Payment amount cannot exceed the outstanding due.')
@@ -2596,14 +2665,38 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Vendor payment not found.')
     }
     assertApprovalUnlocked('vendorPayments', existing)
-    const purchase = data.purchases[existing.purchaseId]
-    if (!purchase) {
-      throw new Error('Purchase not found.')
-    }
 
     const amount = Number(input.amount) || 0
     if (amount <= 0) {
       throw new Error('Payment amount must be greater than zero.')
+    }
+
+    if (!existing.purchaseId) {
+      const dueRoom = (existing.vendorId ? computeVendorDue(data, existing.vendorId) : 0) + existing.amount
+      if (amount > dueRoom) {
+        throw new Error(`Payment amount cannot exceed the vendor's outstanding due of ${dueRoom.toFixed(2)}.`)
+      }
+      const now = new Date().toISOString()
+      const updatedPayment: VendorPaymentRecord = {
+        ...existing,
+        amount,
+        date: input.date?.trim() || existing.date,
+        ...pendingApprovalFields(currentUser, now),
+      }
+      if (input.note?.trim()) updatedPayment.note = input.note.trim()
+      else delete updatedPayment.note
+      await update(ref(getDatabaseOrThrow(), 'erp'), { [`vendorPayments/${paymentId}`]: updatedPayment })
+      await writeActivity(
+        'vendor_payment_updated',
+        'purchase',
+        `Edited payment ${existing.receiptNumber} to ${existing.vendorName} — now ${amount.toFixed(2)}, ${(dueRoom - amount).toFixed(2)} still due.`
+      )
+      return
+    }
+
+    const purchase = data.purchases[existing.purchaseId]
+    if (!purchase) {
+      throw new Error('Purchase not found.')
     }
     // The due room this payment can grow into is whatever's due today, plus
     // what this same payment is already contributing.
@@ -2639,6 +2732,37 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'vendor_payment_updated',
       'purchase',
       `Edited payment ${existing.receiptNumber} to ${purchase.vendorName} against purchase ${purchase.purchaseNumber} — now ${amount.toFixed(2)}, ${nextDue.toFixed(2)} still due.`
+    )
+  }
+
+  // Removes a payment and gives its amount back to whatever it paid down —
+  // the parent purchase's paid/due, or (vendor-level) the vendor's running
+  // due, which computeVendorDue picks up automatically.
+  async function deleteVendorPayment(paymentId: string) {
+    if (!data) {
+      return
+    }
+    const payment = data.vendorPayments[paymentId]
+    if (!payment) {
+      throw new Error('Vendor payment not found.')
+    }
+    assertApprovalUnlocked('vendorPayments', payment)
+
+    const updates: Record<string, unknown> = { [`vendorPayments/${paymentId}`]: null }
+    const purchase = payment.purchaseId ? data.purchases[payment.purchaseId] : undefined
+    if (purchase) {
+      updates[`purchases/${purchase.id}/paid`] = purchase.paid - payment.amount
+      updates[`purchases/${purchase.id}/due`] = purchase.due + payment.amount
+    }
+    payment.cashMaintenanceIds?.forEach((entryId) => {
+      if (data.cashMaintenance?.[entryId]) updates[`cashMaintenance/${entryId}`] = null
+    })
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity(
+      'vendor_payment_deleted',
+      'purchase',
+      `Deleted payment ${payment.receiptNumber} (${payment.amount.toFixed(2)}) to ${payment.vendorName}.`
     )
   }
 
@@ -2754,12 +2878,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = existing?.id ?? createId('finishedgoods')
     const now = new Date().toISOString()
+    const packKg = computePackWeightKg(input.pieceWeightGrams, input.piecesPerUnit)
     const record: FinishedGoodsRecord = {
       id,
       name,
       ...(rawMaterial ? { rawMaterialId: rawMaterial.id, rawMaterialName: rawMaterial.name } : {}),
       ...(input.packSize?.trim() ? { packSize: input.packSize.trim() } : {}),
-      unitWeightKg: Math.max(Number(input.unitWeightKg) || 0, 0),
+      // piece → gram → kg wins over a hand-typed weight when both are given.
+      ...(packKg !== undefined ? { pieceWeightGrams: Number(input.pieceWeightGrams), piecesPerUnit: Number(input.piecesPerUnit) } : {}),
+      unitWeightKg: packKg ?? Math.max(Number(input.unitWeightKg) || 0, 0),
       stockQty: Number(input.stockQty) || 0,
       minStock: Number(input.minStock) || 0,
       rawRate: Math.max(Number(input.rawRate) || 0, 0),
@@ -5104,6 +5231,35 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
+  // Rename expense categories (2026-09-29 client spec §18) — display names
+  // only; the stored keys never change. Blank = back to the default name.
+  // Same users:edit gate as saveSettings (the database rule on erp/settings).
+  async function saveExpenseCategoryLabels(labels: Array<{ category: string; label: string }>) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before renaming expense categories.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'users:edit')) {
+      throw new Error('You do not have permission to rename expense categories.')
+    }
+    const cleaned = labels
+      .map((entry) => ({ category: entry.category, label: entry.label.trim() }))
+      .filter((entry) => entry.label && entry.label !== entry.category)
+    const seen = new Set<string>()
+    cleaned.forEach((entry) => {
+      const key = entry.label.toLowerCase()
+      if (seen.has(key)) throw new Error(`Two categories can't share the name "${entry.label}".`)
+      seen.add(key)
+    })
+    await set(ref(getDatabaseOrThrow(), 'erp/settings/expenseCategoryLabels'), cleaned.length ? cleaned : null)
+    await writeActivity(
+      'expense_categories_renamed',
+      'finance',
+      cleaned.length
+        ? `Renamed expense categories: ${cleaned.map((entry) => `${entry.category} → ${entry.label}`).join(', ')}.`
+        : 'Reset expense category names to default.'
+    )
+  }
+
   async function saveSettings(input: SettingsInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before changing settings.')
@@ -5130,6 +5286,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       returnWindowDays: input.returnWindowDays,
       refundPolicy: input.refundPolicy,
       restockOnReturn: input.restockOnReturn,
+      // Written by saveExpenseCategoryLabels — carried through so saving
+      // business settings doesn't wipe the renamed expense categories.
+      ...(data.settings.expenseCategoryLabels?.length ? { expenseCategoryLabels: data.settings.expenseCategoryLabels } : {}),
     }
 
     await set(ref(db, 'erp/settings'), settings)
@@ -5765,7 +5924,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const productPieces = new Map<string, number>()
     const finishedGoodsPieces = new Map<string, number>()
     items.forEach((item) => {
-      const pieces = item.qty * parsePerCtnMultiplier(item.perCtnBgs)
+      const pieces = rateCardLineStockUnits(item)
       if (item.finishedGoodsId) {
         finishedGoodsPieces.set(item.finishedGoodsId, (finishedGoodsPieces.get(item.finishedGoodsId) ?? 0) + pieces)
       } else if (item.productId) {
@@ -5968,6 +6127,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         tpRate: Number(item.tpRate) || 0,
         mrpRate: Number(item.mrpRate) || 0,
         ...(item.perCtnBgs?.trim() ? { perCtnBgs: item.perCtnBgs.trim() } : {}),
+        ...(item.finishedGoodsId && Number(item.piecesPerStockUnit) > 0 ? { piecesPerStockUnit: Number(item.piecesPerStockUnit) } : {}),
         ...(item.srCommissionPercent ? { srCommissionPercent: Number(item.srCommissionPercent) || 0 } : {}),
         ...(item.tpPercent ? { tpPercent: Number(item.tpPercent) || 0 } : {}),
       }))
@@ -5982,10 +6142,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const totals = computeRateCardTotals(items)
 
-    // Dealer payment tracking (client request, 2026-09-13) — same
-    // paid/collections split as updatePurchase uses for a Purchase's own
-    // vendor payments: `paid` here only ever covers the amount entered on
-    // this form, any CollectionRecord already on file sits on top of it.
+    // Dealer payment tracking (client request, 2026-09-13). On an edit
+    // `input.paid` is the invoice's TOTAL paid (paid at invoice time +
+    // collections) and replaces the old figure — same fix as updatePurchase
+    // (2026-09-28: it used to be added on top of the collections already on
+    // file, so correcting 70,000 → 80,000 read as 1,50,000 paid).
     const collectionsTotal = existing
       ? Object.values(data.collections)
           .filter((collection) => collection.rateCardId === existing.id)
@@ -5996,9 +6157,21 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         `This invoice already has ${collectionsTotal.toFixed(2)} in recorded collections — the new total can't be less than that. Edit or delete those collections first.`
       )
     }
-    const initialPaid = Math.min(Math.max(Number(input.paid) || 0, 0), totals.dealerRateTotal - collectionsTotal)
-    const paid = initialPaid + collectionsTotal
-    const due = totals.dealerRateTotal - paid
+    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), totals.dealerRateTotal)
+    if (paid < collectionsTotal) {
+      throw new Error(
+        `Total paid can't be less than the ${collectionsTotal.toFixed(2)} already recorded as separate collections on this invoice — edit or delete those from Collection history first.`
+      )
+    }
+    // Damage returns already credited against this invoice (spec §15) stay
+    // credited across an edit.
+    const returnAdjustment = existing?.returnAdjustment ?? 0
+    if (returnAdjustment > 0 && paid + returnAdjustment > totals.dealerRateTotal + 0.005) {
+      throw new Error(
+        `This invoice has ${returnAdjustment.toFixed(2)} credited from product returns — paid plus that can't exceed the invoice total. Lower the paid amount or edit the return first.`
+      )
+    }
+    const due = totals.dealerRateTotal - paid - returnAdjustment
 
     const rateCard: RateCardRecord = {
       id,
@@ -6013,6 +6186,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       ...totals,
       paid,
       due,
+      ...(returnAdjustment ? { returnAdjustment } : {}),
       ...pendingApprovalFields(currentUser, now),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -6063,6 +6237,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Rate card not found.')
     }
     assertApprovalUnlocked('rateCards', rateCard)
+    const linkedReturn = Object.values(data.productReturns).find((entry) => entry.rateCardId === rateCardId && entry.dueAdjustment)
+    if (linkedReturn) {
+      throw new Error(
+        `Product return ${linkedReturn.returnNumber} is credited against this invoice — edit that return to remove the adjustment (or delete it) first.`
+      )
+    }
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -6153,6 +6333,60 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // Dealer due adjustment for a damage return (2026-09-29 client spec §15):
+  // backs out `previous`'s credit (if any) and applies the new one, netting
+  // both into `updates` so an edit that keeps the same invoice only moves
+  // the difference. Returns the link fields to store on the return.
+  function applyReturnDueAdjustment(
+    updates: Record<string, unknown>,
+    previous: ProductReturnRecord | null,
+    next: { returnParty: ProductReturnInput['returnParty']; dealerId?: string; rateCardId?: string; amount?: number }
+  ): Pick<ProductReturnRecord, 'rateCardId' | 'invoiceNo' | 'dueAdjustment'> {
+    if (!data) return {}
+    const pending = new Map<string, { due: number; returnAdjustment: number }>()
+    const cardState = (rateCardId: string) => {
+      const existing = pending.get(rateCardId)
+      if (existing) return existing
+      const card = data.rateCards[rateCardId]
+      const state = { due: card?.due ?? 0, returnAdjustment: card?.returnAdjustment ?? 0 }
+      pending.set(rateCardId, state)
+      return state
+    }
+
+    if (previous?.rateCardId && previous.dueAdjustment && data.rateCards[previous.rateCardId]) {
+      const state = cardState(previous.rateCardId)
+      state.due += previous.dueAdjustment
+      state.returnAdjustment -= previous.dueAdjustment
+    }
+
+    let link: Pick<ProductReturnRecord, 'rateCardId' | 'invoiceNo' | 'dueAdjustment'> = {}
+    const amount = Math.round((Number(next.amount) || 0) * 100) / 100
+    if (next.returnParty === 'dealer' && next.rateCardId && amount > 0) {
+      const card = data.rateCards[next.rateCardId]
+      if (!card) {
+        throw new Error('Invoice to adjust not found.')
+      }
+      if (next.dealerId && card.dealerId && card.dealerId !== next.dealerId) {
+        throw new Error(`Invoice ${card.invoiceNo} belongs to a different dealer.`)
+      }
+      const state = cardState(card.id)
+      if (amount > state.due + 0.005) {
+        throw new Error(`Adjustment can't exceed invoice ${card.invoiceNo}'s outstanding due of ${state.due.toFixed(2)}.`)
+      }
+      state.due -= amount
+      state.returnAdjustment += amount
+      link = { rateCardId: card.id, invoiceNo: card.invoiceNo, dueAdjustment: amount }
+    }
+
+    const now = new Date().toISOString()
+    pending.forEach((state, rateCardId) => {
+      updates[`rateCards/${rateCardId}/due`] = Math.round(state.due * 100) / 100
+      updates[`rateCards/${rateCardId}/returnAdjustment`] = Math.round(state.returnAdjustment * 100) / 100
+      updates[`rateCards/${rateCardId}/updatedAt`] = now
+    })
+    return link
+  }
+
   async function createProductReturn(input: ProductReturnInput) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a product return.')
@@ -6221,9 +6455,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const manufacturingExpenseAmount = totals.manufRateTotal - totals.rawRateTotal
     const rawMaterialExpenseAmount = totals.rawRateTotal * 0.3
 
+    const dueLink = applyReturnDueAdjustment(updates, null, {
+      returnParty: input.returnParty,
+      dealerId: dealer?.id,
+      rateCardId: input.rateCardId,
+      amount: input.dueAdjustment,
+    })
+
     const productReturn: ProductReturnRecord = {
       id,
       returnNumber,
+      ...dueLink,
       returnParty: input.returnParty,
       ...(depot ? { depotId: depot.id } : {}),
       ...(dealer ? { dealerId: dealer.id } : {}),
@@ -6245,7 +6487,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'product_return_created',
       'sales',
-      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — return value ${totals.depotRateTotal.toFixed(2)} credited at Depot Rate, company profit down ${totals.companyProfit.toFixed(2)}.`
+      `Recorded product return ${returnNumber} from ${input.returnParty === 'depot' ? 'Depot' : 'Dealer'} ${recipientName} — return value ${totals.depotRateTotal.toFixed(2)} credited at Depot Rate, company profit down ${totals.companyProfit.toFixed(2)}.${dueLink.dueAdjustment ? ` ${dueLink.dueAdjustment.toFixed(2)} adjusted against invoice ${dueLink.invoiceNo}'s due.` : ''}`
     )
 
     return id
@@ -6335,11 +6577,28 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const manufacturingExpenseAmount = totals.manufRateTotal - totals.rawRateTotal
     const rawMaterialExpenseAmount = totals.rawRateTotal * 0.3
 
+    // Only returns that carry a due adjustment own their invoice link; an
+    // older return's informational rateCardId/invoiceNo is kept as-is when
+    // no adjustment is asked for.
+    const dueLink = applyReturnDueAdjustment(updates, existing, {
+      returnParty: input.returnParty,
+      dealerId: dealer?.id,
+      rateCardId: input.rateCardId,
+      amount: input.dueAdjustment,
+    })
+    const legacyLink =
+      !dueLink.rateCardId && !existing.dueAdjustment
+        ? {
+            ...(existing.rateCardId ? { rateCardId: existing.rateCardId } : {}),
+            ...(existing.invoiceNo ? { invoiceNo: existing.invoiceNo } : {}),
+          }
+        : {}
+
     const updatedReturn: ProductReturnRecord = {
       id: existing.id,
       returnNumber: existing.returnNumber,
-      ...(existing.rateCardId ? { rateCardId: existing.rateCardId } : {}),
-      ...(existing.invoiceNo ? { invoiceNo: existing.invoiceNo } : {}),
+      ...legacyLink,
+      ...dueLink,
       returnParty: input.returnParty,
       ...(depot ? { depotId: depot.id } : {}),
       ...(dealer ? { dealerId: dealer.id } : {}),
@@ -6379,6 +6638,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const updates: Record<string, unknown> = { [`productReturns/${productReturnId}`]: null }
+    // Give the invoice back whatever due this return had credited off it.
+    applyReturnDueAdjustment(updates, productReturn, { returnParty: productReturn.returnParty })
 
     // Undo the manufacturing/raw-material write-off expenses this return
     // posted (see createProductReturn) — same reverse-and-delete shape
@@ -6587,6 +6848,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deletePurchase,
       recordVendorPayment,
       updateVendorPayment,
+      deleteVendorPayment,
       createMaterialUsage,
       deleteMaterialUsage,
       saveFinishedGoods,
@@ -6594,6 +6856,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createProductionBatch,
       deleteProductionBatch,
       saveSettings,
+      saveExpenseCategoryLabels,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
   )

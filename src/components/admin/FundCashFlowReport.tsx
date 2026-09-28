@@ -16,7 +16,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { buildFundCashFlowReport, formatCurrency, formatDate } from '@/lib/erp/utils'
+import { buildFundCashFlowReport, expenseCategoryLabel, formatCurrency, formatDate } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -230,7 +230,7 @@ export function FundCashFlowReport() {
   const periodLabel = from || to ? `${from ? formatDate(from) : 'Beginning'} to ${to ? formatDate(to) : 'Now'}` : 'All time'
 
   const categoryHeaders = ['Category', 'Expense', 'Cash Maintenance', 'Total']
-  const categoryRows = report.outflow.byCategory.map((row) => [row.category, row.expenseAmount, row.cashAmount, row.total])
+  const categoryRows = report.outflow.byCategory.map((row) => [expenseCategoryLabel(data, row.category), row.expenseAmount, row.cashAmount, row.total])
 
   const vendorHeaders = ['Vendor', 'Purchases', 'Total', 'Paid', 'Due']
   const vendorRows = report.vendorWise.map((row) => [row.vendorName, row.purchaseCount, row.totalAmount, row.paid, row.due])
@@ -419,7 +419,7 @@ export function FundCashFlowReport() {
               <TableBody>
                 {report.outflow.byCategory.map((row) => (
                   <TableRow key={row.category}>
-                    <TableCell className="font-medium">{row.category}</TableCell>
+                    <TableCell className="font-medium">{expenseCategoryLabel(data, row.category)}</TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {row.expenseAmount > 0 ? formatCurrency(row.expenseAmount, currency) : '—'}
                     </TableCell>

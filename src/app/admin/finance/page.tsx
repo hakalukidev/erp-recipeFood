@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -22,7 +23,7 @@ import {
 import { EXPENSE_CATEGORIES, EXPENSE_LOAN_REPAYMENT_CATEGORY, EXPENSE_SALARY_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
 import type { ExpenseInput, ExpenseRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
-import { computeEmployeeSalaryTotals, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { computeEmployeeSalaryTotals, expenseCategoryLabel, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const ALL_CATEGORIES = '__all__'
@@ -53,13 +54,14 @@ function buildExpenseReportHtml(
   categoryTotals: Array<{ category: string; count: number; total: number }>,
   expenses: ExpenseRecord[],
   currency: string | undefined,
-  grandTotal: number
+  grandTotal: number,
+  labelOf: (category: string) => string = (category) => category
 ) {
   const summaryRows = categoryTotals
     .map(
       (row) => `
       <tr>
-        <td>${escapeHtml(row.category)}</td>
+        <td>${escapeHtml(labelOf(row.category))}</td>
         <td class="numeric">${row.count}</td>
         <td class="numeric">${formatCurrency(row.total, currency)}</td>
       </tr>
@@ -73,7 +75,7 @@ function buildExpenseReportHtml(
       <tr>
         <td>${index + 1}</td>
         <td>${formatDate(expense.date)}</td>
-        <td>${escapeHtml(expense.category)}</td>
+        <td>${escapeHtml(labelOf(expense.category))}</td>
         <td>${escapeHtml(expense.loanMemberName || expense.employeeName || '-')}</td>
         <td class="numeric">${formatCurrency(expense.amount, currency)}</td>
         <td>${escapeHtml(expense.note || '-')}</td>
@@ -183,8 +185,16 @@ function SectionHeader({
 }
 
 export default function ExpensesPage() {
-  const { data, saveExpense, deleteExpense, updateExpenseApproval, hasPermission } = useERP()
+  const { data, saveExpense, deleteExpense, updateExpenseApproval, saveExpenseCategoryLabels, hasPermission } = useERP()
   const canApproveExpenses = hasPermission('finance:approve')
+  // Renaming categories writes erp/settings — same users:edit gate as the
+  // Settings page (see saveExpenseCategoryLabels).
+  const canRenameCategories = hasPermission('users:edit')
+  const labelOf = (category: string) => expenseCategoryLabel(data, category)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameDraft, setRenameDraft] = useState<Record<string, string>>({})
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renameSaving, setRenameSaving] = useState(false)
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
@@ -224,6 +234,39 @@ export default function ExpensesPage() {
       mode === 'daily' ? isSameDate(expense.date, selectedDate) : isSameMonth(expense.date, selectedMonth)
     )
   }, [mode, expenses, selectedDate, selectedMonth])
+
+  // Filter options: every current category plus any retired one (e.g. the
+  // old 'ড্যামেজ') that still has expenses on file, so those stay findable.
+  const filterCategories = useMemo(() => {
+    const list: string[] = [...EXPENSE_CATEGORIES]
+    expenses.forEach((expense) => {
+      if (!list.includes(expense.category)) list.push(expense.category)
+    })
+    return list
+  }, [expenses])
+  const isRetiredCategory = (category: string) => !(EXPENSE_CATEGORIES as readonly string[]).includes(category)
+
+  function openRenameDialog() {
+    setRenameDraft(Object.fromEntries(EXPENSE_CATEGORIES.map((category) => [category, labelOf(category)])))
+    setRenameError(null)
+    setRenameOpen(true)
+  }
+
+  async function handleSaveRename() {
+    setRenameError(null)
+    setRenameSaving(true)
+    try {
+      await saveExpenseCategoryLabels(
+        EXPENSE_CATEGORIES.map((category) => ({ category, label: renameDraft[category] ?? '' }))
+      )
+      setRenameOpen(false)
+      setFeedback('Expense category names updated.')
+    } catch (reason) {
+      setRenameError(reason instanceof Error ? reason.message : 'Unable to rename categories.')
+    } finally {
+      setRenameSaving(false)
+    }
+  }
 
   const filteredExpenses = useMemo(() => {
     return selectedCategory === ALL_CATEGORIES
@@ -371,8 +414,11 @@ export default function ExpensesPage() {
               <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_CATEGORIES}>All categories</SelectItem>
-                {EXPENSE_CATEGORIES.map((category) => (
-                  <SelectItem key={category} value={category}>{category}</SelectItem>
+                {filterCategories.map((category) => (
+                  <SelectItem key={category} value={category}>
+                    {labelOf(category)}
+                    {isRetiredCategory(category) ? ' (retired)' : ''}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -382,7 +428,7 @@ export default function ExpensesPage() {
               headers={['Date', 'Category', 'Employee/Loan', 'Amount', 'Payment method', 'Note']}
               rows={filteredExpenses.map((expense) => [
                 expense.date.slice(0, 10),
-                expense.category,
+                labelOf(expense.category),
                 expense.loanMemberName || expense.employeeName || '',
                 expense.amount,
                 expense.paymentMethod ?? 'cash',
@@ -397,7 +443,7 @@ export default function ExpensesPage() {
               disabled={filteredExpenses.length === 0}
               onClick={() =>
                 openPrintWindow(
-                  buildExpenseReportHtml(periodLabel, categoryTotals, filteredExpenses, currency, expenseTotal)
+                  buildExpenseReportHtml(periodLabel, categoryTotals, filteredExpenses, currency, expenseTotal, labelOf)
                 )
               }
             >
@@ -437,7 +483,7 @@ export default function ExpensesPage() {
                         className={cn('cursor-pointer', selectedCategory === row.category && 'bg-muted/40')}
                         onClick={() => setSelectedCategory(selectedCategory === row.category ? ALL_CATEGORIES : row.category)}
                       >
-                        <TableCell className="font-medium">{row.category}</TableCell>
+                        <TableCell className="font-medium">{labelOf(row.category)}</TableCell>
                         <TableCell className="text-right tabular-nums">{row.count}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
                       </TableRow>
@@ -484,10 +530,25 @@ export default function ExpensesPage() {
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {EXPENSE_CATEGORIES.map((category) => (
-                          <SelectItem key={category} value={category}>{category}</SelectItem>
+                          <SelectItem key={category} value={category}>{labelOf(category)}</SelectItem>
                         ))}
+                        {/* Editing an old entry in a retired category (e.g. Damage) —
+                            keep it selectable so the edit doesn't silently change it. */}
+                        {isRetiredCategory(expenseForm.category) ? (
+                          <SelectItem value={expenseForm.category}>{labelOf(expenseForm.category)} (retired)</SelectItem>
+                        ) : null}
                       </SelectContent>
                     </Select>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        Damaged products aren&apos;t an expense — record them as a Product Return, which adjusts the dealer&apos;s due.
+                      </p>
+                      {canRenameCategories ? (
+                        <button type="button" className="text-[11px] font-medium text-primary hover:underline" onClick={openRenameDialog}>
+                          Rename categories
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   {expenseForm.category === EXPENSE_SALARY_CATEGORY ? (
                     <div className="space-y-2">
@@ -612,7 +673,7 @@ export default function ExpensesPage() {
                       {filteredExpenses.map((expense) => (
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
-                          <TableCell className="font-medium">{expense.category}</TableCell>
+                          <TableCell className="font-medium">{labelOf(expense.category)}</TableCell>
                           <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
                           <TableCell>
@@ -772,6 +833,38 @@ export default function ExpensesPage() {
           </Card>
         </section>
       </div>
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Rename expense categories</DialogTitle>
+            <DialogDescription>
+              Changes the name shown everywhere, including on old entries, reports and budgets. Leave a field blank to go back to
+              the default name.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {EXPENSE_CATEGORIES.map((category) => (
+              <div key={category} className="grid gap-1 sm:grid-cols-[1fr_1.4fr] sm:items-center sm:gap-3">
+                <p className="text-xs text-muted-foreground">{category}</p>
+                <Input
+                  value={renameDraft[category] ?? ''}
+                  placeholder={category}
+                  onChange={(event) => setRenameDraft((current) => ({ ...current, [category]: event.target.value }))}
+                />
+              </div>
+            ))}
+            {renameError ? <p className="text-sm text-destructive">{renameError}</p> : null}
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" variant="outline" className="rounded-xl" onClick={() => setRenameOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" className="rounded-xl" disabled={renameSaving} onClick={() => void handleSaveRename()}>
+                {renameSaving ? 'Saving…' : 'Save names'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AdminShell>
   )
 }

@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import { buildCompanyEarningsSummary, buildOperationsOverview, formatCurrency, formatDate } from '@/lib/erp/utils'
+import { buildCompanyEarningsSummary, buildOperationsOverview, expenseCategoryLabel, formatCurrency, formatDate } from '@/lib/erp/utils'
 
 // Lazy-loaded so recharts never ships in the Dashboard's initial bundle — the
 // Dashboard is the first page nearly every session loads, so this is the
@@ -231,7 +231,7 @@ export function DashboardScreen() {
                       {overview.recentExpenses.map((expense) => (
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
-                          <TableCell className="font-medium">{expense.category}</TableCell>
+                          <TableCell className="font-medium">{expenseCategoryLabel(data, expense.category)}</TableCell>
                           <TableCell className="capitalize text-muted-foreground">{expense.approvalStatus}</TableCell>
                           <TableCell className="text-right">{formatCurrency(expense.amount, currency)}</TableCell>
                         </TableRow>

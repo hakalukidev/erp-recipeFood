@@ -33,6 +33,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
+import { cn } from '@/lib/utils'
 import type { DealerRecord, DepotRecord, ProductReturnParty, ProductReturnRecord, ProductReturnUnit } from '@/lib/erp/types'
 import {
   createId,
@@ -540,6 +541,12 @@ export default function ProductReturnsPage() {
   const [lines, setLines] = useState<ReturnLineDraft[]>([emptyLine()])
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [reason, setReason] = useState('')
+  // Dealer due adjustment (spec §15) — which of the dealer's invoices this
+  // damage return is credited against, and how much. The amount follows the
+  // return value until the user types their own.
+  const [adjustInvoiceId, setAdjustInvoiceId] = useState('')
+  const [adjustAmount, setAdjustAmount] = useState('')
+  const [adjustTouched, setAdjustTouched] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -565,6 +572,38 @@ export default function ProductReturnsPage() {
 
   const previewTotals = useMemo(() => computePreviewTotals(lines), [lines])
 
+  // ---- Dealer due adjustment (spec §15) ----
+  const editingEntry = editingId ? productReturns.find((entry) => entry.id === editingId) ?? null : null
+  // Due still open on an invoice, as if this return hadn't been credited yet
+  // (so editing a return doesn't count its own adjustment against itself).
+  const availableDue = (card: (typeof rateCards)[number]) =>
+    card.due + (editingEntry?.rateCardId === card.id ? editingEntry.dueAdjustment ?? 0 : 0)
+  const dealerInvoices = useMemo(
+    () =>
+      returnParty === 'dealer' && dealerId
+        ? rateCards
+            .filter((card) => card.dealerId === dealerId && (availableDue(card) > 0.005 || card.id === adjustInvoiceId))
+            .sort((left, right) => right.date.localeCompare(left.date))
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rateCards, returnParty, dealerId, adjustInvoiceId, editingEntry]
+  )
+  const dealerTotalDue = useMemo(
+    () =>
+      dealerId
+        ? rateCards.filter((card) => card.dealerId === dealerId).reduce((sum, card) => sum + availableDue(card), 0)
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rateCards, dealerId, editingEntry]
+  )
+  const adjustInvoice = adjustInvoiceId ? rateCards.find((card) => card.id === adjustInvoiceId) : undefined
+  const adjustInvoiceDue = adjustInvoice ? availableDue(adjustInvoice) : 0
+  const effectiveAdjustAmount = adjustInvoice
+    ? adjustTouched
+      ? Number(adjustAmount) || 0
+      : Math.min(previewTotals.returnValue, adjustInvoiceDue)
+    : 0
+
   const filteredReturns = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return productReturns
@@ -581,6 +620,9 @@ export default function ProductReturnsPage() {
     setLines([emptyLine()])
     setDate(new Date().toISOString().slice(0, 10))
     setReason('')
+    setAdjustInvoiceId('')
+    setAdjustAmount('')
+    setAdjustTouched(false)
     setFormError(null)
     setDialogOpen(true)
   }
@@ -606,6 +648,9 @@ export default function ProductReturnsPage() {
     )
     setDate(entry.date)
     setReason(entry.reason ?? '')
+    setAdjustInvoiceId(entry.dueAdjustment && entry.rateCardId ? entry.rateCardId : '')
+    setAdjustAmount(entry.dueAdjustment ? String(entry.dueAdjustment) : '')
+    setAdjustTouched(Boolean(entry.dueAdjustment))
     setFormError(null)
     setDialogOpen(true)
   }
@@ -721,6 +766,9 @@ export default function ProductReturnsPage() {
         date,
         reason: reason.trim() || undefined,
         items,
+        ...(returnParty === 'dealer' && adjustInvoiceId
+          ? { rateCardId: adjustInvoiceId, dueAdjustment: effectiveAdjustAmount }
+          : {}),
       }
       if (editingId) {
         await updateProductReturn(editingId, input)
@@ -929,7 +977,14 @@ export default function ProductReturnsPage() {
                       <TableCell>{partyLabel(entry)}</TableCell>
                       <TableCell>{entry.recipientName}</TableCell>
                       <TableCell>{formatDate(entry.date)}</TableCell>
-                      <TableCell className="text-right text-destructive">-{formatAmount(entry.depotRateTotal)}</TableCell>
+                      <TableCell className="text-right text-destructive">
+                        -{formatAmount(entry.depotRateTotal)}
+                        {entry.dueAdjustment ? (
+                          <p className="text-[11px] text-muted-foreground">
+                            {formatAmount(entry.dueAdjustment)} off {entry.invoiceNo} due
+                          </p>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right">{formatAmount(entry.dealerRateTotal - entry.depotRateTotal)}</TableCell>
                       <TableCell className="text-right text-destructive">-{formatAmount(entry.companyProfit)}</TableCell>
                       <TableCell className="text-right">
@@ -1220,6 +1275,86 @@ export default function ProductReturnsPage() {
                 <p className="text-xs text-muted-foreground">Net value remaining (recoverable on resale)</p>
                 <p className="text-lg font-semibold text-emerald-600">{formatAmount(netReturnValue(previewTotals))}</p>
               </div>
+
+              {returnParty === 'dealer' && dealerId ? (
+                <div className="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
+                  <div>
+                    <p className="text-sm font-medium">Adjust against dealer invoice / due</p>
+                    <p className="text-xs text-muted-foreground">
+                      Credits the return value off one of this dealer&apos;s invoices: Original due − Damage return = Adjusted due.
+                      Dealer&apos;s total due now: {formatAmount(dealerTotalDue)}.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Invoice</label>
+                      <Select
+                        value={adjustInvoiceId || 'none'}
+                        onValueChange={(value) => {
+                          setAdjustInvoiceId(value === 'none' ? '' : value)
+                          setAdjustTouched(false)
+                          setAdjustAmount('')
+                        }}
+                      >
+                        <SelectTrigger className="bg-background">
+                          <SelectValue placeholder="No adjustment" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">No adjustment</SelectItem>
+                          {dealerInvoices.map((card) => (
+                            <SelectItem key={card.id} value={card.id}>
+                              {card.invoiceNo} · {formatDate(card.date)} · due {formatAmount(availableDue(card))}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {dealerInvoices.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">This dealer has no invoice with an outstanding due.</p>
+                      ) : null}
+                    </div>
+                    {adjustInvoice ? (
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Adjustment amount</label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={adjustInvoiceDue}
+                          value={adjustTouched ? adjustAmount : String(Math.round(effectiveAdjustAmount * 100) / 100)}
+                          onChange={(event) => {
+                            setAdjustTouched(true)
+                            setAdjustAmount(event.target.value)
+                          }}
+                          className="bg-background"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Defaults to the return value, up to the invoice&apos;s due.</p>
+                      </div>
+                    ) : null}
+                  </div>
+                  {adjustInvoice ? (
+                    <div className="grid gap-2 rounded-lg border border-border/60 bg-background p-3 text-sm sm:grid-cols-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Original due ({adjustInvoice.invoiceNo})</p>
+                        <p className="font-semibold tabular-nums">{formatAmount(adjustInvoiceDue)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">− Damage return</p>
+                        <p className="font-semibold tabular-nums text-emerald-600">{formatAmount(effectiveAdjustAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">= Adjusted due</p>
+                        <p
+                          className={cn(
+                            'font-semibold tabular-nums',
+                            adjustInvoiceDue - effectiveAdjustAmount < -0.005 ? 'text-destructive' : ''
+                          )}
+                        >
+                          {formatAmount(adjustInvoiceDue - effectiveAdjustAmount)}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Reason (optional)</label>

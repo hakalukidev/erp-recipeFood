@@ -63,6 +63,7 @@ import {
   isCommissionSaleType,
   isTradeSalesType,
   parsePerCtnMultiplier,
+  rateCardLineStockUnits,
   saleTypeLabel,
   sortByCreatedAtDesc,
   toArray,
@@ -89,6 +90,8 @@ type LineItemForm = {
   // List — see the RateCardLineItem comment in types.ts. A line only ever
   // sets one of the two.
   finishedGoodsId: string
+  // See RateCardLineItem.piecesPerStockUnit — '' when the line has none.
+  piecesPerStockUnit: string
   productName: string
   qty: string
   rawRate: string
@@ -111,6 +114,7 @@ function emptyLineItem(): LineItemForm {
     key: createId('line'),
     productId: '',
     finishedGoodsId: '',
+    piecesPerStockUnit: '',
     productName: '',
     qty: '1',
     rawRate: '0',
@@ -156,6 +160,7 @@ function toLineItemForm(item: RateCardLineItem): LineItemForm {
     key: createId('line'),
     productId: item.productId ?? '',
     finishedGoodsId: item.finishedGoodsId ?? '',
+    piecesPerStockUnit: item.piecesPerStockUnit ? String(item.piecesPerStockUnit) : '',
     productName: item.productName,
     qty: String(item.qty),
     rawRate: String(item.rawRate),
@@ -489,7 +494,8 @@ function buildDealerInvoiceHtml(
             <tr><td>Goods Amount:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
             <tr><td>Dealer Margin:</td><td class="numeric hl">${formatAmount(dealerMargin)}</td></tr>
             <tr><td>Paid:</td><td class="numeric">${formatAmount(rateCard.paid ?? 0)}</td></tr>
-            <tr><td>Due:</td><td class="numeric hl">${formatAmount(rateCard.due ?? rateCard.dealerRateTotal)}</td></tr>
+            ${rateCard.returnAdjustment ? `<tr><td>Less: Damage Return:</td><td class="numeric">${formatAmount(rateCard.returnAdjustment)}</td></tr>` : ''}
+            <tr><td>${rateCard.returnAdjustment ? 'Adjusted Due:' : 'Due:'}</td><td class="numeric hl">${formatAmount(rateCard.due ?? rateCard.dealerRateTotal)}</td></tr>
           </table>
         </div>
 
@@ -930,9 +936,11 @@ export default function RateCardPage() {
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
   const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
-  // Collections already on file against the invoice being edited — sit
-  // outside form.paid (see openEditDialog above), needed for an accurate
-  // Due preview while editing.
+  // Damage returns credited against the invoice being edited (spec §15) —
+  // stay credited across the edit, so the Due preview subtracts them too.
+  const editingReturnAdjustment = editingId ? data?.rateCards?.[editingId]?.returnAdjustment ?? 0 : 0
+  // Collections already on file against the invoice being edited — already
+  // included in form.paid, which can't go below them.
   const editingCollectionsTotal = useMemo(
     () =>
       editingId ? (collectionsByRateCardId.get(editingId) ?? []).reduce((sum, collection) => sum + collection.amount, 0) : 0,
@@ -972,11 +980,8 @@ export default function RateCardPage() {
 
   function openEditDialog(card: RateCardRecord) {
     setEditingId(card.id)
-    // `paid` on the form only ever represents the amount entered at
-    // invoice-time — collections already on file sit on top of it (see
-    // saveRateCard in provider.tsx), same paid/collections split
-    // updatePurchase uses for a Purchase's own vendor payments.
-    const collectionsTotal = (collectionsByRateCardId.get(card.id) ?? []).reduce((sum, collection) => sum + collection.amount, 0)
+    // `paid` on the form is the invoice's total paid (collections included)
+    // — saving replaces it, never adds on top (see saveRateCard).
     setForm({
       invoiceNo: card.invoiceNo,
       recipientName: card.recipientName,
@@ -986,7 +991,7 @@ export default function RateCardPage() {
       saleType: card.saleType ?? DEFAULT_SALE_TYPE,
       remarks: card.remarks ?? '',
       items: card.items.map(toLineItemForm),
-      paid: String(Math.max((card.paid ?? 0) - collectionsTotal, 0)),
+      paid: String(card.paid ?? 0),
     })
     setFormError(null)
     setShowBreakdown(false)
@@ -1025,6 +1030,7 @@ export default function RateCardPage() {
       .map((item) => ({
         productId: item.finishedGoodsId ? undefined : item.productId || undefined,
         finishedGoodsId: item.finishedGoodsId || undefined,
+        piecesPerStockUnit: item.finishedGoodsId && Number(item.piecesPerStockUnit) > 0 ? Number(item.piecesPerStockUnit) : undefined,
         productName: item.productName.trim(),
         qty: Number(item.qty) || 0,
         rawRate: Number(item.rawRate) || 0,
@@ -1235,7 +1241,12 @@ export default function RateCardPage() {
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal)}</TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal - card.depotRateTotal)}</TableCell>
                       <TableCell className="text-right text-emerald-600">{formatAmount(card.paid ?? 0)}</TableCell>
-                      <TableCell className="text-right text-destructive">{formatAmount(card.due ?? card.dealerRateTotal)}</TableCell>
+                      <TableCell className="text-right text-destructive">
+                        {formatAmount(card.due ?? card.dealerRateTotal)}
+                        {card.returnAdjustment ? (
+                          <p className="text-[11px] text-muted-foreground">after −{formatAmount(card.returnAdjustment)} return</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -1432,6 +1443,7 @@ export default function RateCardPage() {
                               updateItem(item.key, {
                                 productId: value,
                                 finishedGoodsId: '',
+                                piecesPerStockUnit: '',
                                 productName: selected.name,
                                 perCtnBgs: selected.perCtnBgs ?? '',
                                 rawRate: String(selected.rawRate),
@@ -1454,13 +1466,20 @@ export default function RateCardPage() {
                             // is a weight label, not a multiplier — qty here already counts
                             // finished units directly (see rateCardStockPieces in
                             // provider.tsx, which is what actually moves this stock).
+                            // Exception (spec §10–11): a pack size with a packaging
+                            // conversion (45 g × 72 pcs/carton) prefills /ctn with its
+                            // pieces per carton, and piecesPerStockUnit converts the
+                            // pieces back to cartons for stock — so it's priced per
+                            // piece like a Product List line and loose pieces can be sold.
                             const selectedFinishedGoods = finishedGoodsById.get(value)
                             if (selectedFinishedGoods) {
+                              const piecesPerCarton = selectedFinishedGoods.piecesPerUnit ?? 0
                               updateItem(item.key, {
                                 productId: '',
                                 finishedGoodsId: value,
+                                piecesPerStockUnit: piecesPerCarton > 0 ? String(piecesPerCarton) : '',
                                 productName: selectedFinishedGoods.name,
-                                perCtnBgs: '',
+                                perCtnBgs: piecesPerCarton > 0 ? String(piecesPerCarton) : '',
                                 rawRate: item.rawRate === '0' ? String(selectedFinishedGoods.rawRate) : item.rawRate,
                                 manufRate: item.manufRate === '0' ? String(selectedFinishedGoods.manufRate) : item.manufRate,
                                 depotRate: item.depotRate === '0' ? String(selectedFinishedGoods.depotRate) : item.depotRate,
@@ -1477,6 +1496,7 @@ export default function RateCardPage() {
                             updateItem(item.key, {
                               productId: value,
                               finishedGoodsId: '',
+                              piecesPerStockUnit: '',
                               productName: selected?.name ?? item.productName,
                               // Carton size defaults from the product (Edit product →
                               // Carton size) but stays editable per line below — the
@@ -1555,6 +1575,24 @@ export default function RateCardPage() {
                             <p className="text-xs text-muted-foreground">
                               = {totalPieces.toLocaleString('en-BD')} pcs total
                             </p>
+                            {(() => {
+                              // Weight this line takes out of Factory Stock (spec §11).
+                              const pack = item.finishedGoodsId ? finishedGoodsById.get(item.finishedGoodsId) : undefined
+                              if (!pack?.unitWeightKg) return null
+                              const units = rateCardLineStockUnits({
+                                qty: Number(item.qty) || 0,
+                                perCtnBgs: item.perCtnBgs,
+                                finishedGoodsId: item.finishedGoodsId,
+                                piecesPerStockUnit: Number(item.piecesPerStockUnit) || undefined,
+                              })
+                              const kg = units * pack.unitWeightKg
+                              return (
+                                <p className="text-xs font-medium text-primary">
+                                  −{kg.toLocaleString('en-BD', { maximumFractionDigits: 3 })} kg
+                                  {pack.rawMaterialName ? ` ${pack.rawMaterialName}` : ''} from factory stock
+                                </p>
+                              )
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1748,26 +1786,26 @@ export default function RateCardPage() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">
-                  {editingId ? 'Paid at invoice time' : 'Paid now'}
+                  {editingId ? 'Total paid' : 'Paid now'}
                 </label>
                 <Input
                   type="number"
                   min={0}
-                  max={Math.max(totals.dealerRateTotal - editingCollectionsTotal, 0)}
+                  max={Math.max(totals.dealerRateTotal - editingReturnAdjustment, 0)}
                   value={form.paid}
                   onChange={(event) => setForm((current) => ({ ...current, paid: event.target.value }))}
                   className="bg-background"
                 />
                 {editingId && editingCollectionsTotal > 0 ? (
                   <p className="text-[11px] text-muted-foreground">
-                    Plus {formatAmount(editingCollectionsTotal)} already recorded as separate collections — edit those from Collection history.
+                    Includes {formatAmount(editingCollectionsTotal)} recorded as separate collections — can&apos;t go below that.
                   </p>
                 ) : null}
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Due</p>
                 <p className="text-lg font-semibold text-destructive tabular-nums">
-                  {formatAmount(Math.max(totals.dealerRateTotal - (Number(form.paid) || 0) - editingCollectionsTotal, 0))}
+                  {formatAmount(Math.max(totals.dealerRateTotal - (Number(form.paid) || 0) - editingReturnAdjustment, 0))}
                 </p>
               </div>
             </div>

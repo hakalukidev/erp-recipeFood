@@ -55,6 +55,7 @@ import {
   computeLoanBalance,
   loanTransactionTypeLabel,
   computeLoanMonthlySchedule,
+  expenseCategoryLabel,
   formatCurrency,
   formatDate,
   isCashMaintenanceIn,
@@ -514,9 +515,9 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     filteredCashEntries.filter(isCashMaintenanceOut).forEach((entry) => add(entry.category, entry.amount))
     expenses
       .filter((expense) => (cashMode === 'daily' ? isSameDate(expense.date, cashDate) : isSameMonth(expense.date, cashMonth)))
-      .forEach((expense) => add(expense.category, expense.amount))
+      .forEach((expense) => add(expenseCategoryLabel(data, expense.category), expense.amount))
     return Array.from(rows.values()).sort((left, right) => right.total - left.total)
-  }, [filteredCashEntries, expenses, cashMode, cashDate, cashMonth])
+  }, [data, filteredCashEntries, expenses, cashMode, cashDate, cashMonth])
 
   function openCreateCash() {
     setEditingCashId(null)
@@ -646,6 +647,121 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     return cashInBefore - cashOutBefore
   }, [loanTransactions, collectedCashRows, expenses, cashEntries, periodStartDate])
   const closingBalance = openingBalance + totalCashIn - totalCashOut
+
+  // ---- Cash Book detail (2026-09-29 client spec §22–23) ---------------------
+  // Every cash-in/cash-out transaction behind the Daily Cash Book totals, one
+  // row each, from every source — sales collections, loan withdrawals, Cash
+  // Maintenance entries (in/out, direct expense included) and Expenses
+  // (Salary, Loan Repayment, …). The Cash Book used to show only two lump
+  // Cash Out lines, so categories like Salary / Loan Repayment / Dealer
+  // Payment never appeared by name, and the export only covered Cash
+  // Maintenance rows. Same filters as the totals above, so the by-category
+  // lines always add up to Total Cash In / Total Cash Out.
+  type CashBookRow = {
+    key: string
+    date: string
+    direction: 'in' | 'out'
+    source: string
+    category: string
+    party: string
+    note: string
+    amount: number
+  }
+  const cashBookRows = useMemo<CashBookRow[]>(() => {
+    const inPeriod = (date: string) => (cashMode === 'daily' ? isSameDate(date, cashDate) : isSameMonth(date, cashMonth))
+    const rows: CashBookRow[] = []
+
+    const collectionsByRateCardId = new Map<string, number>()
+    for (const collection of collections) {
+      collectionsByRateCardId.set(collection.rateCardId, (collectionsByRateCardId.get(collection.rateCardId) ?? 0) + collection.amount)
+    }
+    for (const card of rateCards) {
+      const initialPaid = (card.paid ?? 0) - (collectionsByRateCardId.get(card.id) ?? 0)
+      if (initialPaid > 0 && inPeriod(card.date)) {
+        rows.push({
+          key: `inv-${card.id}`,
+          date: card.date,
+          direction: 'in',
+          source: 'Sales',
+          category: 'বিক্রয় কালেকশন (Sales money)',
+          party: card.recipientName,
+          note: `Paid with invoice ${card.invoiceNo}`,
+          amount: initialPaid,
+        })
+      }
+    }
+    for (const collection of collections) {
+      if (!inPeriod(collection.collectionDate)) continue
+      rows.push({
+        key: `col-${collection.id}`,
+        date: collection.collectionDate,
+        direction: 'in',
+        source: 'Sales',
+        category: 'বিক্রয় কালেকশন (Sales money)',
+        party: collection.dealerName,
+        note: `${collection.receiptNumber} · ${collection.invoiceNo}${collection.note ? ` · ${collection.note}` : ''}`,
+        amount: collection.amount,
+      })
+    }
+    for (const entry of loanTransactions) {
+      if (entry.type !== 'withdrawal' || entry.isOpeningBalance || entry.isAdjustment || !inPeriod(entry.date)) continue
+      rows.push({
+        key: `loan-${entry.id}`,
+        date: entry.date,
+        direction: 'in',
+        source: 'Loan',
+        category: 'ঋণ গ্রহণ (Loan withdrawal)',
+        party: entry.memberName,
+        note: entry.note ?? '',
+        amount: entry.amount,
+      })
+    }
+    for (const entry of cashEntries) {
+      if (!inPeriod(entry.date)) continue
+      const direction = isCashMaintenanceIn(entry) ? 'in' : isCashMaintenanceOut(entry) ? 'out' : null
+      if (!direction) continue
+      rows.push({
+        key: `cash-${entry.id}`,
+        date: entry.date,
+        direction,
+        source: 'Cash Maintenance',
+        category: entry.category,
+        party: '',
+        note: entry.note ?? '',
+        amount: entry.amount,
+      })
+    }
+    for (const expense of expenses) {
+      if (!inPeriod(expense.date)) continue
+      rows.push({
+        key: `exp-${expense.id}`,
+        date: expense.date.slice(0, 10),
+        direction: 'out',
+        source: 'Expense',
+        category: expenseCategoryLabel(data, expense.category),
+        party: expense.loanMemberName || expense.employeeName || '',
+        note: expense.note ?? '',
+        amount: expense.amount,
+      })
+    }
+    return rows.sort((left, right) => left.date.localeCompare(right.date))
+  }, [data, collections, rateCards, loanTransactions, cashEntries, expenses, cashMode, cashDate, cashMonth])
+
+  const cashBookByCategory = (direction: 'in' | 'out') => {
+    const map = new Map<string, { category: string; count: number; total: number }>()
+    cashBookRows
+      .filter((row) => row.direction === direction)
+      .forEach((row) => {
+        const current = map.get(row.category) ?? { category: row.category, count: 0, total: 0 }
+        current.count += 1
+        current.total += row.amount
+        map.set(row.category, current)
+      })
+    return Array.from(map.values()).sort((left, right) => right.total - left.total)
+  }
+  const cashBookInByCategory = cashBookByCategory('in')
+  const cashBookOutByCategory = cashBookByCategory('out')
+  const cashBookPeriodLabel = cashMode === 'daily' ? formatDate(cashDate) : cashMonth
 
   return (
     <AdminShell active={showCash ? 'Cash Maintenance' : 'Loan Chart'}>
@@ -1273,12 +1389,47 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
 
         {/* Reconciliation */}
         <Card className="border-border/70 shadow-sm">
-          <CardHeader>
+          <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <SectionHeader
               icon={Scale}
               title="Daily Cash Book"
               description="Opening balance carried from before this period, plus cash-in, minus cash-out — same tally as the manual daily cash sheet, ending in a Net Cash Position."
             />
+            <div className="flex flex-wrap gap-2">
+              <ExportMenu
+                filenameBase={`cash-book-${cashMode === 'daily' ? cashDate : cashMonth}`}
+                title={`Daily Cash Book — all transactions (${cashBookPeriodLabel})`}
+                headers={['Date', 'Cash In/Out', 'Source', 'Category', 'Party', 'Note', 'Cash In', 'Cash Out']}
+                rows={[
+                  ['', '', '', 'Opening balance', '', '', openingBalance, ''],
+                  ...cashBookRows.map((row) => [
+                    row.date,
+                    row.direction === 'in' ? 'Cash In' : 'Cash Out',
+                    row.source,
+                    row.category,
+                    row.party,
+                    row.note,
+                    row.direction === 'in' ? row.amount : '',
+                    row.direction === 'out' ? row.amount : '',
+                  ]),
+                  ['', '', '', 'Total', '', '', totalCashIn, totalCashOut],
+                  ['', '', '', 'Closing balance (Cash on Hand)', '', '', closingBalance, ''],
+                ]}
+              />
+              <ExportMenu
+                filenameBase={`cash-summary-${cashMode === 'daily' ? cashDate : cashMonth}`}
+                title={`Cash Summary by category (${cashBookPeriodLabel})`}
+                headers={['Cash In/Out', 'Category', 'Entries', 'Amount']}
+                rows={[
+                  ['', 'Opening balance', '', openingBalance],
+                  ...cashBookInByCategory.map((row) => ['Cash In', row.category, row.count, row.total]),
+                  ['Cash In', 'Total Cash In', '', totalCashIn],
+                  ...cashBookOutByCategory.map((row) => ['Cash Out', row.category, row.count, row.total]),
+                  ['Cash Out', 'Total Cash Out', '', totalCashOut],
+                  ['', 'Closing balance (Cash on Hand)', '', closingBalance],
+                ]}
+              />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="mb-4 flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
@@ -1289,33 +1440,34 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2 rounded-xl border border-border/60 p-4">
-                <p className="text-sm font-medium text-foreground">Cash In</p>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">New loan withdrawals</span>
-                  <span className="tabular-nums">{formatCurrency(loanWithdrawalsThisPeriod, currency)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Sales money (collected)</span>
-                  <span className="tabular-nums">{formatCurrency(salesMoneyThisPeriod, currency)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Other cash received (Cash Maintenance)</span>
-                  <span className="tabular-nums">{formatCurrency(cashMaintenanceInTotal, currency)}</span>
-                </div>
+                <p className="text-sm font-medium text-foreground">Cash In — by category</p>
+                {cashBookInByCategory.map((row) => (
+                  <div key={row.category} className="flex justify-between gap-3 text-sm">
+                    <span className="text-muted-foreground">
+                      {row.category} <span className="text-xs">({row.count})</span>
+                    </span>
+                    <span className="tabular-nums">{formatCurrency(row.total, currency)}</span>
+                  </div>
+                ))}
+                {cashBookInByCategory.length === 0 ? <p className="text-sm text-muted-foreground">No cash in this period.</p> : null}
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
                   <span>Total Cash In</span>
                   <span className="tabular-nums">{formatCurrency(totalCashIn, currency)}</span>
                 </div>
               </div>
               <div className="space-y-2 rounded-xl border border-border/60 p-4">
-                <p className="text-sm font-medium text-foreground">Cash Out</p>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Direct Expense (Expense দপ্তরের মোট খরচ)</span>
-                  <span className="tabular-nums">{formatCurrency(expenseTotalThisPeriod, currency)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Cash Maintenance entries (direct expense নয়)</span>
-                  <span className="tabular-nums">{formatCurrency(cashOutTotal, currency)}</span>
+                <p className="text-sm font-medium text-foreground">Cash Out — by category</p>
+                {cashBookOutByCategory.map((row) => (
+                  <div key={row.category} className="flex justify-between gap-3 text-sm">
+                    <span className="text-muted-foreground">
+                      {row.category} <span className="text-xs">({row.count})</span>
+                    </span>
+                    <span className="tabular-nums">{formatCurrency(row.total, currency)}</span>
+                  </div>
+                ))}
+                {cashBookOutByCategory.length === 0 ? <p className="text-sm text-muted-foreground">No cash out this period.</p> : null}
+                <div className="flex justify-between border-t border-dashed border-border/60 pt-2 text-xs text-muted-foreground">
+                  <span>Expense chart {formatCurrency(expenseTotalThisPeriod, currency)} + Cash Maintenance {formatCurrency(cashOutTotal, currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
                   <span>Total Cash Out</span>

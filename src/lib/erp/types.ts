@@ -518,6 +518,15 @@ export type RateCardLineItem = {
   // saveRateCard/deleteRateCard adjusts (see rateCardStockDeltas in
   // provider.tsx) — a line never sets both.
   finishedGoodsId?: string
+  // Finished Goods line whose pack size has a packaging conversion (spec
+  // §10–11, e.g. 45 g × 72 pcs/carton): copied from
+  // FinishedGoodsRecord.piecesPerUnit when the line is picked. The line is
+  // then priced per piece like any Product List line (qty × perCtnBgs =
+  // total pieces) and stock moves by pieces ÷ this, so 30 loose packets
+  // take 30/72 of a carton. Absent on older lines — they keep counting
+  // qty × multiplier directly as Finished Goods units. See
+  // rateCardLineStockUnits in utils.ts.
+  piecesPerStockUnit?: number
   productName: string
   qty: number
   rawRate: number
@@ -592,6 +601,13 @@ export type RateCardRecord = RecordApprovalFields & {
   // invoice.
   paid: number
   due: number
+  // Damage/product returns credited against this invoice (2026-09-29 client
+  // spec §15) — sum of every linked ProductReturnRecord.dueAdjustment. Not
+  // cash, so it never touches `paid` (Collections/Daily Cash Book read
+  // that); it only lowers `due`:
+  //   due = dealerRateTotal − paid − returnAdjustment
+  // Kept in sync by create/update/deleteProductReturn.
+  returnAdjustment?: number
   createdAt: string
   updatedAt: string
 }
@@ -780,6 +796,12 @@ export type ProductReturnRecord = RecordApprovalFields & {
   resoldAmount?: number
   resoldDate?: string
   resoldNote?: string
+  // Dealer due adjustment (2026-09-29 client spec §15): a dealer return
+  // linked to one of that dealer's invoices (rateCardId/invoiceNo above)
+  // credits this much against the invoice's due — Original Due − Damage
+  // Return = Adjusted Due. Defaults to the return value, editable, capped at
+  // the invoice's outstanding due. See RateCardRecord.returnAdjustment.
+  dueAdjustment?: number
   processedBy: string
   processedByName: string
   createdAt: string
@@ -811,6 +833,10 @@ export type ProductReturnInput = {
     perCtnBgs?: string
   }>
   reason?: string
+  // Dealer returns only — the invoice to credit and how much (see
+  // ProductReturnRecord.dueAdjustment). Omit rateCardId for no adjustment.
+  rateCardId?: string
+  dueAdjustment?: number
 }
 
 // ---- Purchase Section (procurement from vendors) --------------------------
@@ -954,25 +980,39 @@ export type PurchaseRecord = RecordApprovalFields & {
   createdBy: string
   createdByName: string
   createdAt: string
+  // Set by updatePurchase — the record itself is overwritten with the
+  // corrected figures (never a second transaction); these only mark that
+  // it was edited. The before → after detail is in the activity log.
+  updatedAt?: string
+  updatedByName?: string
+  editCount?: number
 }
 
 export type PurchaseInput = {
   vendorId?: string
   vendorName?: string
   date?: string
-  items: Array<{ materialId?: string; materialName: string; qty: number; rate: number }>
+  // `amount`, when given, is kept exactly and the rate derived from it.
+  items: Array<{ materialId?: string; materialName: string; qty: number; rate: number; amount?: number }>
   paid?: number
   note?: string
 }
 
-// A paydown against one purchase's outstanding due — same role as
-// CollectionRecord against an OrderRecord (see recordCollection in
-// provider.tsx), just on the payable side instead of the receivable side.
+// A paydown to a vendor — same role as CollectionRecord against an
+// OrderRecord (see recordCollection in provider.tsx), just on the payable
+// side instead of the receivable side. Two shapes:
+//   - with purchaseId: against one purchase's own due (moves that
+//     purchase's paid/due, capped at it).
+//   - without purchaseId (2026-09-28 client request): against the vendor's
+//     whole running due — Previous Due + New Purchase − Payment = Current
+//     Due. Doesn't touch any purchase; computeVendorDue subtracts it
+//     directly, so a ৳1,50,000 payment can clear a ৳1,00,000 purchase plus
+//     ৳50,000 of the opening due in one entry.
 export type VendorPaymentRecord = RecordApprovalFields & {
   id: string
   receiptNumber: string
-  purchaseId: string
-  purchaseNumber: string
+  purchaseId?: string
+  purchaseNumber?: string
   vendorId?: string
   vendorName: string
   amount: number
@@ -986,7 +1026,10 @@ export type VendorPaymentRecord = RecordApprovalFields & {
 }
 
 export type VendorPaymentInput = {
-  purchaseId: string
+  // Set one: purchaseId pays down that purchase; vendorId alone pays down
+  // the vendor's whole running due.
+  purchaseId?: string
+  vendorId?: string
   amount: number
   date?: string
   note?: string
@@ -1045,6 +1088,13 @@ export type FinishedGoodsRecord = {
   // unitWeightKg), hand-editable per batch the same way every other
   // prefilled rate on this app is.
   unitWeightKg: number
+  // Packaging conversion (2026-09-28 client spec §10): piece → gram → kg.
+  // A pack size sold as a carton of small packets, e.g. 45 g packet × 72
+  // pcs/carton = 3,240 g = 3.24 kg. When both are set, unitWeightKg is
+  // derived from them (see computePackWeightKg in utils.ts) and one unit of
+  // stock / one Rate Card qty = one carton.
+  pieceWeightGrams?: number
+  piecesPerUnit?: number
   stockQty: number
   minStock: number
   // Same six rate columns a Rate Card line item carries (see
@@ -1065,6 +1115,8 @@ export type FinishedGoodsInput = {
   rawMaterialId?: string
   packSize?: string
   unitWeightKg?: number
+  pieceWeightGrams?: number
+  piecesPerUnit?: number
   stockQty?: number
   minStock?: number
   rawRate?: number
@@ -1335,6 +1387,12 @@ export type SettingsRecord = {
   returnWindowDays: number
   refundPolicy: RefundPolicy
   restockOnReturn: boolean
+  // Expense category display names (2026-09-29 client spec §18) — renames
+  // the label shown everywhere without touching the stored category key, so
+  // old expenses, budgets and the salary/loan-repayment logic keep matching.
+  // A list rather than a map because some keys contain '/', which Firebase
+  // rejects in a key.
+  expenseCategoryLabels?: Array<{ category: string; label: string }>
 }
 
 // Section 29 (Automatic Accounting Engine): every expense auto-posts
@@ -1497,8 +1555,11 @@ export type LoanTransactionInput = {
 // ExpenseRecord (both are real cash out) and compares that against loan
 // withdrawals + sales money for the same period.
 // `isDirectExpense` marks an entry recorded under the DIRECT_EXPENSE_CATEGORY
-// option — shown on the chart for the record but excluded from that cash-out
-// total, since it's only there to help the books balance, not a real spend.
+// option. Since 2026-09-29 (client spec §20–21) it counts everywhere: cash
+// out on the summary/reconciliation/reports like any other entry, and as a
+// P&L expense in Company Earnings (see isCashMaintenanceOut and
+// directExpenseCashEntries in utils.ts). It used to be excluded as a
+// book-balancing-only entry.
 // `direction` (2026-09-22 client request): 'in' marks money that came INTO the
 // till but isn't a sale/loan already tracked elsewhere (e.g. cash received
 // from a dealer point, a Gazipur collection) — it adds to Cash In instead of

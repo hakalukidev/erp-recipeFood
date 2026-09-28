@@ -19,7 +19,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { computeVendorDue, formatCurrency, formatDate, isCashMaintenanceOut, loanTransactionTypeLabel, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { computeVendorDue, expenseCategoryLabel, formatCurrency, formatDate, isCashMaintenanceOut, loanTransactionTypeLabel, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SectionId = 'fund' | 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
@@ -181,9 +181,8 @@ export function ReportsHubScreen() {
   // the Expense (P&L) chart: purchases/packaging/depot rent are entered
   // directly on Cash Maintenance instead of Expenses, so without this merge
   // the client's own daily cash tally — which treats every taka that left
-  // the till the same way — never matched what this report showed. A direct-expense Cash
-  // Maintenance row (isDirectExpense) is excluded, same as everywhere else
-  // that chart is summed — it's a pure book-balancing entry, not real spend.
+  // the till the same way — never matched what this report showed. Direct-
+  // expense rows are included (isCashMaintenanceOut, since 2026-09-29).
   const [expenseFrom, setExpenseFrom] = useState('')
   const [expenseTo, setExpenseTo] = useState('')
 
@@ -200,7 +199,7 @@ export function ReportsHubScreen() {
       .filter((expense) => expense.approvalStatus !== 'rejected')
       .map((expense) => ({
         date: expense.date,
-        category: expense.category,
+        category: expenseCategoryLabel(data, expense.category),
         amount: expense.amount,
         source: 'Expense',
         note: expense.note,

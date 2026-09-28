@@ -23,7 +23,7 @@ import {
 } from '@/lib/erp/approvals'
 import { useERP } from '@/lib/erp/provider'
 import type { RecordApprovalStatus } from '@/lib/erp/types'
-import { formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
+import { expenseCategoryLabel, formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 // Input & Authorization (client spec, 2026-09-25): one place where every
@@ -80,7 +80,7 @@ export default function ApprovalsPage() {
         permission: 'finance:approve',
         href: '/admin/finance',
         status: expense.approvalStatus,
-        reference: expense.category,
+        reference: expenseCategoryLabel(data, expense.category),
         party: expense.employeeName || expense.loanMemberName || '—',
         amount: expense.amount,
         date: expense.date,

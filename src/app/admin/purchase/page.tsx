@@ -21,6 +21,9 @@ import {
 import { AdminShell } from '@/components/admin/AdminShell'
 import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
+import { FactoryStockSection } from '@/components/admin/FactoryStockSection'
+import { PurchaseLedgerOverview } from '@/components/admin/PurchaseLedgerOverview'
+import { VendorPaymentDialog } from '@/components/admin/VendorPaymentDialogs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -64,9 +67,13 @@ import type {
 } from '@/lib/erp/types'
 import {
   computeMaterialAvailablePieces,
+  computePackWeightKg,
+  computeVendorAccountPayments,
   computeVendorDue,
   createId,
+  describePackConversion,
   formatDate,
+  formatDateTime,
   sortByCreatedAtDesc,
   toArray,
 } from '@/lib/erp/utils'
@@ -140,6 +147,8 @@ type FinishedGoodsFormState = {
   rawMaterialId: string
   packSize: string
   unitWeightKg: string
+  pieceWeightGrams: string
+  piecesPerUnit: string
   stockQty: string
   minStock: string
   rawRate: string
@@ -155,6 +164,8 @@ const emptyFinishedGoodsForm: FinishedGoodsFormState = {
   rawMaterialId: '',
   packSize: '',
   unitWeightKg: '0',
+  pieceWeightGrams: '',
+  piecesPerUnit: '',
   stockQty: '0',
   minStock: '0',
   rawRate: '0',
@@ -171,6 +182,8 @@ function formFromFinishedGoods(item: FinishedGoodsRecord): FinishedGoodsFormStat
     rawMaterialId: item.rawMaterialId ?? '',
     packSize: item.packSize ?? '',
     unitWeightKg: String(item.unitWeightKg),
+    pieceWeightGrams: item.pieceWeightGrams ? String(item.pieceWeightGrams) : '',
+    piecesPerUnit: item.piecesPerUnit ? String(item.piecesPerUnit) : '',
     stockQty: String(item.stockQty),
     minStock: String(item.minStock),
     rawRate: String(item.rawRate),
@@ -347,10 +360,12 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord, 
   `
 }
 
-type SectionId = 'purchases' | 'materials' | 'production' | 'finishedGoods'
+type SectionId = 'purchases' | 'ledger' | 'factoryStock' | 'materials' | 'production' | 'finishedGoods'
 
 const SECTIONS: Array<{ id: SectionId; label: string; description: string }> = [
   { id: 'purchases', label: 'Purchase Entry', description: 'Daily buys from vendors — Kg, rate, paid, due' },
+  { id: 'ledger', label: 'Ledger Overview', description: 'Vendor-wise due + product-wise stock, side by side' },
+  { id: 'factoryStock', label: 'Factory Stock', description: 'Product-wise: purchased, sold to dealers, remaining' },
   { id: 'materials', label: 'Materials & Stock', description: 'Raw + packaging material stock and low-stock alerts' },
   { id: 'production', label: 'Production Entry', description: 'Raw material repacked into Finished Goods pack sizes' },
   { id: 'finishedGoods', label: 'Finished Goods', description: 'Production output stock, ready for Rate Card invoicing' },
@@ -383,6 +398,8 @@ export default function PurchasePage() {
   const vendorPaymentsByPurchaseId = useMemo(() => {
     const map = new Map<string, VendorPaymentRecord[]>()
     for (const payment of vendorPayments) {
+      // Vendor-level payments (no purchaseId) belong to no single purchase.
+      if (!payment.purchaseId) continue
       const existing = map.get(payment.purchaseId)
       if (existing) existing.push(payment)
       else map.set(payment.purchaseId, [payment])
@@ -557,6 +574,14 @@ export default function PurchasePage() {
   const [finishedGoodsDialogOpen, setFinishedGoodsDialogOpen] = useState(false)
   const [editingFinishedGoods, setEditingFinishedGoods] = useState<FinishedGoodsRecord | null>(null)
   const [finishedGoodsForm, setFinishedGoodsForm] = useState<FinishedGoodsFormState>(emptyFinishedGoodsForm)
+  const finishedGoodsPackKg = computePackWeightKg(
+    Number(finishedGoodsForm.pieceWeightGrams) || undefined,
+    Number(finishedGoodsForm.piecesPerUnit) || undefined
+  )
+  const finishedGoodsConversion = describePackConversion({
+    pieceWeightGrams: Number(finishedGoodsForm.pieceWeightGrams) || undefined,
+    piecesPerUnit: Number(finishedGoodsForm.piecesPerUnit) || undefined,
+  })
 
   const filteredFinishedGoods = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -589,6 +614,8 @@ export default function PurchasePage() {
           rawMaterialId: finishedGoodsForm.rawMaterialId || undefined,
           packSize: finishedGoodsForm.packSize || undefined,
           unitWeightKg: Number(finishedGoodsForm.unitWeightKg) || 0,
+          pieceWeightGrams: Number(finishedGoodsForm.pieceWeightGrams) || undefined,
+          piecesPerUnit: Number(finishedGoodsForm.piecesPerUnit) || undefined,
           stockQty: Number(finishedGoodsForm.stockQty) || 0,
           minStock: Number(finishedGoodsForm.minStock) || 0,
           rawRate: Number(finishedGoodsForm.rawRate) || 0,
@@ -745,14 +772,14 @@ export default function PurchasePage() {
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [paymentHistoryPurchase, setPaymentHistoryPurchase] = useState<PurchaseRecord | null>(null)
   const [paymentHistoryDialogOpen, setPaymentHistoryDialogOpen] = useState(false)
+  const [vendorPayDialogOpen, setVendorPayDialogOpen] = useState(false)
 
   const purchaseTotal = useMemo(
     () => purchaseLines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0),
     [purchaseLines]
   )
   // Vendor payments already on file against the purchase being edited —
-  // these sit outside `purchasePaid` (see openEditPurchaseDialog above), so
-  // they need adding back in for an accurate Due preview while editing.
+  // already included in `purchasePaid`, which can't be edited below this.
   const editingVendorPaymentsTotal = useMemo(
     () => (editingPurchase ? (vendorPaymentsByPurchaseId.get(editingPurchase.id) ?? []).reduce((sum, payment) => sum + payment.amount, 0) : 0),
     [editingPurchase, vendorPaymentsByPurchaseId]
@@ -788,8 +815,13 @@ export default function PurchasePage() {
       }),
       { totalAmount: 0, totalPaid: 0, totalDue: 0 }
     )
-    return { ...fromPurchases, totalDue: fromPurchases.totalDue + openingDueTotal }
-  }, [purchases, vendors])
+    const accountPayments = computeVendorAccountPayments(data ?? null)
+    return {
+      ...fromPurchases,
+      totalPaid: fromPurchases.totalPaid + accountPayments,
+      totalDue: fromPurchases.totalDue + openingDueTotal - accountPayments,
+    }
+  }, [data, purchases, vendors])
 
   function openCreatePurchaseDialog() {
     setEditingPurchase(null)
@@ -804,10 +836,8 @@ export default function PurchasePage() {
   }
 
   // Edit Option (client request, 2026-09-13) — same dialog as New Purchase,
-  // pre-filled from the existing record. `purchasePaid` only ever represents
-  // the amount paid at purchase-creation time (see updatePurchase in
-  // provider.tsx), so it's pre-filled with paid minus whatever's already on
-  // file as separate VendorPaymentRecords, not the raw `paid` total.
+  // pre-filled from the existing record. Saving overwrites it in place —
+  // never adds a new transaction on top.
   function openEditPurchaseDialog(purchase: PurchaseRecord) {
     setEditingPurchase(purchase)
     setPurchaseVendorId(purchase.vendorId ?? '')
@@ -824,11 +854,9 @@ export default function PurchasePage() {
         basis: 'rate' as const,
       }))
     )
-    const vendorPaymentsTotal = (vendorPaymentsByPurchaseId.get(purchase.id) ?? []).reduce(
-      (sum, payment) => sum + payment.amount,
-      0
-    )
-    setPurchasePaid(String(Math.max(purchase.paid - vendorPaymentsTotal, 0)))
+    // Total paid, not just the paid-at-purchase part — editing it replaces
+    // the figure (see updatePurchase in provider.tsx).
+    setPurchasePaid(String(purchase.paid))
     setPurchaseNote(purchase.note ?? '')
     setPurchaseFormError(null)
     setFeedback(null)
@@ -942,6 +970,7 @@ export default function PurchasePage() {
           materialName: name,
           qty: Number(line.qty) || 0,
           rate: Number(line.rate) || 0,
+          ...(line.basis === 'amount' ? { amount: Number(line.amount) || 0 } : {}),
         })
       }
 
@@ -1121,7 +1150,7 @@ export default function PurchasePage() {
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Total deposited</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">{formatAmount(purchaseStats.totalPaid)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Paid at purchase time + separate vendor payments</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Paid at purchase time + vendor payments</p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
@@ -1156,6 +1185,18 @@ export default function PurchasePage() {
                     <Plus className="mr-2 h-4 w-4" />
                     New Purchase
                   </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setFeedback(null)
+                      setVendorPayDialogOpen(true)
+                    }}
+                    className="h-10 rounded-xl"
+                    disabled={vendors.length === 0}
+                  >
+                    <Wallet className="mr-2 h-4 w-4" />
+                    Pay vendor
+                  </Button>
                   <ExportMenu
                     filenameBase="purchases"
                     title="Purchases"
@@ -1187,7 +1228,18 @@ export default function PurchasePage() {
                     <TableBody>
                       {filteredPurchases.map((purchase) => (
                         <TableRow key={purchase.id}>
-                          <TableCell className="font-medium">{purchase.purchaseNumber}<RecordApprovalTag record={purchase} /></TableCell>
+                          <TableCell className="font-medium">
+                            {purchase.purchaseNumber}
+                            <RecordApprovalTag record={purchase} />
+                            {purchase.updatedAt ? (
+                              <p
+                                className="text-[11px] font-normal text-amber-600"
+                                title={`Last edited ${formatDateTime(purchase.updatedAt)}${purchase.updatedByName ? ` by ${purchase.updatedByName}` : ''}`}
+                              >
+                                Edited{purchase.editCount && purchase.editCount > 1 ? ` ×${purchase.editCount}` : ''} · {formatDate(purchase.updatedAt)}
+                              </p>
+                            ) : null}
+                          </TableCell>
                           <TableCell>{purchase.vendorName}</TableCell>
                           <TableCell>{formatDate(purchase.date)}</TableCell>
                           <TableCell className="max-w-64 truncate text-muted-foreground">
@@ -1258,6 +1310,10 @@ export default function PurchasePage() {
             </Card>
           </div>
         ) : null}
+
+        {section === 'ledger' ? <PurchaseLedgerOverview /> : null}
+
+        {section === 'factoryStock' ? <FactoryStockSection /> : null}
 
         {section === 'materials' ? (
           <div className="space-y-6">
@@ -1703,7 +1759,12 @@ export default function PurchasePage() {
                                 <p className="font-semibold">{item.name}</p>
                               </div>
                             </TableCell>
-                            <TableCell>{item.packSize ?? '—'}</TableCell>
+                            <TableCell>
+                              {item.packSize ?? '—'}
+                              {describePackConversion(item) ? (
+                                <p className="text-[11px] text-muted-foreground">{describePackConversion(item)}</p>
+                              ) : null}
+                            </TableCell>
                             <TableCell className="text-muted-foreground">{item.rawMaterialName ?? '—'}</TableCell>
                             <TableCell className="text-right tabular-nums">{formatQty(item.stockQty)}</TableCell>
                             <TableCell className="text-right tabular-nums text-muted-foreground">
@@ -2119,7 +2180,7 @@ export default function PurchasePage() {
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs text-muted-foreground">
-                    {editingPurchase ? 'Paid at purchase time' : 'Paid now'}
+                    {editingPurchase ? 'Total paid' : 'Paid now'}
                   </label>
                   <Input
                     type="number"
@@ -2130,7 +2191,7 @@ export default function PurchasePage() {
                   />
                   {editingPurchase && editingVendorPaymentsTotal > 0 ? (
                     <p className="text-[11px] text-muted-foreground">
-                      Plus {formatAmount(editingVendorPaymentsTotal)} already recorded as separate vendor payments — edit those from Payment history.
+                      Includes {formatAmount(editingVendorPaymentsTotal)} recorded as separate vendor payments — can&apos;t go below that.
                     </p>
                   ) : (
                     <p className="text-[11px] text-muted-foreground">
@@ -2141,7 +2202,7 @@ export default function PurchasePage() {
                 <div>
                   <p className="text-xs text-muted-foreground">Due (this purchase)</p>
                   {(() => {
-                    const thisDue = purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal
+                    const thisDue = purchaseTotal - (Number(purchasePaid) || 0)
                     return (
                       <p className={cn('text-lg font-semibold', thisDue > 0 ? 'text-destructive' : 'text-emerald-600')}>
                         {formatAmount(Math.abs(thisDue))}
@@ -2153,16 +2214,26 @@ export default function PurchasePage() {
               </div>
 
               {purchaseVendorId ? (
-                <div className="grid gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4 sm:grid-cols-2">
+                <div className="grid gap-3 rounded-xl border border-primary/30 bg-primary/5 p-4 sm:grid-cols-4">
                   <div>
-                    <p className="text-xs text-muted-foreground">Previous due (opening + earlier purchases)</p>
+                    <p className="text-xs text-muted-foreground">Previous due</p>
                     <p className="text-lg font-semibold tabular-nums">{formatAmount(vendorDueExcludingThisPurchase)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Total due (after saving this purchase)</p>
+                    <p className="text-xs text-muted-foreground">+ New purchase</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatAmount(purchaseTotal)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">− Payment</p>
+                    <p className="text-lg font-semibold tabular-nums text-emerald-600">
+                      {formatAmount(Number(purchasePaid) || 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">= Current due</p>
                     {(() => {
                       const totalDue =
-                        vendorDueExcludingThisPurchase + purchaseTotal - (Number(purchasePaid) || 0) - editingVendorPaymentsTotal
+                        vendorDueExcludingThisPurchase + purchaseTotal - (Number(purchasePaid) || 0)
                       return (
                         <p className={cn('text-lg font-semibold tabular-nums', totalDue > 0 ? 'text-destructive' : 'text-emerald-600')}>
                           {formatAmount(Math.abs(totalDue))}
@@ -2193,6 +2264,8 @@ export default function PurchasePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <VendorPaymentDialog open={vendorPayDialogOpen} onOpenChange={setVendorPayDialogOpen} onSaved={setFeedback} />
 
       {/* ---- Vendor payment dialog ---- */}
       <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
@@ -2341,16 +2414,55 @@ export default function PurchasePage() {
                 />
               </div>
             </div>
+            {/* Packaging conversion (spec §10): piece → gram → kg. */}
+            <div className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+              <p className="text-sm font-medium text-foreground">
+                Packaging conversion <span className="font-normal text-muted-foreground">(optional — for packets in a carton)</span>
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Weight per piece / packet (gram)</p>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={finishedGoodsForm.pieceWeightGrams}
+                    onChange={(event) => setFinishedGoodsForm((current) => ({ ...current, pieceWeightGrams: event.target.value }))}
+                    placeholder="e.g. 45"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Pieces per carton / unit</p>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="1"
+                    value={finishedGoodsForm.piecesPerUnit}
+                    onChange={(event) => setFinishedGoodsForm((current) => ({ ...current, piecesPerUnit: event.target.value }))}
+                    placeholder="e.g. 72"
+                  />
+                </div>
+              </div>
+              {finishedGoodsConversion ? (
+                <p className="text-xs font-medium text-primary">1 carton = {finishedGoodsConversion}</p>
+              ) : null}
+            </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">Raw material Kg per produced unit</p>
               <Input
                 type="number"
                 min={0}
-                step="0.01"
-                value={finishedGoodsForm.unitWeightKg}
+                step="0.001"
+                value={
+                  finishedGoodsPackKg !== undefined ? String(Math.round(finishedGoodsPackKg * 1000) / 1000) : finishedGoodsForm.unitWeightKg
+                }
+                disabled={finishedGoodsPackKg !== undefined}
                 onChange={(event) => setFinishedGoodsForm((current) => ({ ...current, unitWeightKg: event.target.value }))}
                 placeholder="e.g. 15 (one sack of this pack size uses 15 Kg raw material)"
               />
+              {finishedGoodsPackKg !== undefined ? (
+                <p className="text-[11px] text-muted-foreground">Calculated from the packaging conversion above.</p>
+              ) : null}
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-2">

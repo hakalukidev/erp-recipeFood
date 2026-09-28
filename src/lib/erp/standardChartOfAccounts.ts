@@ -63,8 +63,18 @@ export const STANDARD_CHART_OF_ACCOUNTS: Array<{
 // P&L expenses, and are recorded on the Loan & Cash Maintenance admin page
 // instead): only these heads actually reduce Company Earnings' net profit
 // (see buildCompanyEarningsSummary in utils.ts).
+//
+// 2026-09-29 client spec §19: 'ড্যামেজ' (Damage) removed — a dealer's damaged
+// product is not an expense; it goes through Product Return, which credits
+// the dealer's invoice due (Damaged Product → Product Return → Dealer
+// Account Adjustment). Old Damage expenses stay on file and keep their
+// ledger mapping below; they just can't be newly entered.
+//
+// These are the stable category keys stored on ExpenseRecord.category and
+// matched by logic (EXPENSE_SALARY_CATEGORY etc.). The name shown to users
+// can be renamed from the Finance page (spec §18) — see
+// SettingsRecord.expenseCategoryLabels and expenseCategoryLabel in utils.ts.
 export const EXPENSE_CATEGORIES = [
-  'ড্যামেজ',
   'ডিলার কমিশন ও মার্কেট ছাড়',
   'এসআর ইনসেন্টিভ',
   'পরিবহন খরচ',
@@ -95,6 +105,7 @@ export const EXPENSE_CATEGORIES = [
 // against; anything unmatched falls back to 'other_expense'. Kept in sync
 // with the Expenses group above.
 export const EXPENSE_CATEGORY_LEDGER_ACCOUNT: Record<string, LedgerAccount> = {
+  // Legacy only — no longer an EXPENSE_CATEGORIES entry (see above).
   'ড্যামেজ': 'other_expense',
   'ডিলার কমিশন ও মার্কেট ছাড়': 'commission',
   'এসআর ইনসেন্টিভ': 'commission',
@@ -175,9 +186,9 @@ export const CASH_CATEGORY_LOAN_REPAYMENT = 'ঋণ পরিশোধ'
 // hardcoding the Bangla literal a second time.
 export const CASH_CATEGORY_NEW_MARKET_INVESTMENT = 'নতুন মার্কেট ইনভেস্টমেন্ট'
 
-// The one category that's recorded on the Cash Maintenance chart purely to
-// help the books balance — never subtracted in the cash-out total the
-// reconciliation check uses (see CashMaintenanceRecord.isDirectExpense).
+// Direct expense entered on the Cash Maintenance chart — counts as cash out
+// everywhere and as a P&L expense (see CashMaintenanceRecord.isDirectExpense).
+// Was excluded from all totals until 2026-09-29 (client spec §20–21).
 export const DIRECT_EXPENSE_CATEGORY = 'সরাসরি এক্সপেন্স (হিসাব মেলানোর জন্য)'
 
 // The EXPENSE_CATEGORIES entry an expense must carry to be eligible for the
