@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
+import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from './ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -727,7 +728,7 @@ export function AccountingScreen() {
                   <TableBody>
                     {journalEntries.map((entry) => (
                       <TableRow key={entry.id}>
-                        <TableCell className="font-mono text-xs">{entry.journalNumber}</TableCell>
+                        <TableCell className="font-mono text-xs">{entry.journalNumber}<RecordApprovalTag record={entry} /></TableCell>
                         <TableCell>{formatDate(entry.date)}</TableCell>
                         <TableCell className="max-w-[260px] truncate">{entry.narration}</TableCell>
                         <TableCell className="text-right tabular-nums">

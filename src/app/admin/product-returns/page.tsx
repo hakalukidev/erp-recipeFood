@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { FileText, Package, Pencil, Plus, Printer, RefreshCcw, Search, Trash2, Undo2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -924,7 +925,7 @@ export default function ProductReturnsPage() {
                 <TableBody>
                   {filteredReturns.map((entry) => (
                     <TableRow key={entry.id}>
-                      <TableCell className="font-medium">{entry.returnNumber}</TableCell>
+                      <TableCell className="font-medium">{entry.returnNumber}<RecordApprovalTag record={entry} /></TableCell>
                       <TableCell>{partyLabel(entry)}</TableCell>
                       <TableCell>{entry.recipientName}</TableCell>
                       <TableCell>{formatDate(entry.date)}</TableCell>

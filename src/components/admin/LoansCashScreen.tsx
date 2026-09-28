@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -52,6 +53,7 @@ import {
 import type { CashDirection, CashMaintenanceRecord, InvestorRecord, LoanAccountRecord, LoanTransactionRecord, LoanTransactionType } from '@/lib/erp/types'
 import {
   computeLoanBalance,
+  loanTransactionTypeLabel,
   computeLoanMonthlySchedule,
   formatCurrency,
   formatDate,
@@ -93,7 +95,7 @@ function isBeforeDate(value: string, target: string) {
 const CASH_OUT_CATEGORY_OPTIONS: string[] = [...CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY]
 const CASH_IN_CATEGORY_OPTIONS: string[] = [...CASH_IN_CATEGORIES]
 
-const emptyLoanAccountForm = { memberName: '', phone: '', address: '' }
+const emptyLoanAccountForm = { memberName: '', phone: '', address: '', balance: '' }
 type LoanAccountFormState = typeof emptyLoanAccountForm
 
 const emptyLoanTransactionForm = {
@@ -103,6 +105,9 @@ const emptyLoanTransactionForm = {
   date: todayIso(),
   note: '',
   isOpeningBalance: false,
+  // Balance correction from "Edit loan member" — carried through an edit so
+  // it stays cash-free (see LoanTransactionRecord.isAdjustment).
+  isAdjustment: false,
   // Only meaningful when type === 'repayment' — which chart the repayment's
   // real cash-out posts to (2026-09-15 client request).
   postAs: 'cash_maintenance' as 'cash_maintenance' | 'expense',
@@ -256,16 +261,29 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
 
   function openEditAccount(account: LoanAccountRecord) {
     setEditingAccountId(account.id)
-    setAccountForm({ memberName: account.memberName, phone: account.phone, address: account.address ?? '' })
+    setAccountForm({
+      memberName: account.memberName,
+      phone: account.phone,
+      address: account.address ?? '',
+      balance: String(computeLoanBalance(data ?? null, account.id).balance),
+    })
     setAccountError(null)
     setAccountDialogOpen(true)
   }
 
   async function handleSaveAccount() {
     setAccountError(null)
+    const balance = accountForm.balance.trim() === '' ? undefined : Number(accountForm.balance)
+    if (editingAccountId && balance !== undefined && !Number.isFinite(balance)) {
+      setAccountError('Balance must be a number.')
+      return
+    }
     setAccountSaving(true)
     try {
-      await saveLoanAccount(accountForm, editingAccountId ?? undefined)
+      await saveLoanAccount(
+        { memberName: accountForm.memberName, phone: accountForm.phone, address: accountForm.address, balance: editingAccountId ? balance : undefined },
+        editingAccountId ?? undefined
+      )
       setAccountDialogOpen(false)
     } catch (reason) {
       setAccountError(reason instanceof Error ? reason.message : 'Unable to save loan member.')
@@ -311,6 +329,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       type,
       loanAccountId: loanAccountId ?? '',
       isOpeningBalance: Boolean(isOpeningBalance),
+      isAdjustment: false,
     })
     setTransactionError(null)
     setTransactionDialogOpen(true)
@@ -325,6 +344,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       date: transaction.date.slice(0, 10),
       note: transaction.note ?? '',
       isOpeningBalance: Boolean(transaction.isOpeningBalance),
+      isAdjustment: Boolean(transaction.isAdjustment),
       postAs: transaction.expenseId ? 'expense' : 'cash_maintenance',
     })
     setTransactionError(null)
@@ -352,6 +372,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           date: transactionForm.date,
           note: transactionForm.note || undefined,
           isOpeningBalance: transactionForm.isOpeningBalance,
+          isAdjustment: transactionForm.isAdjustment,
           postAs: transactionForm.postAs,
         },
         editingTransactionId ?? undefined
@@ -471,11 +492,6 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     () => filteredCashEntries.filter(isCashMaintenanceIn).reduce((sum, entry) => sum + entry.amount, 0),
     [filteredCashEntries]
   )
-  const directExpenseTotal = useMemo(
-    () => filteredCashEntries.filter((entry) => entry.direction !== 'in' && entry.isDirectExpense).reduce((sum, entry) => sum + entry.amount, 0),
-    [filteredCashEntries]
-  )
-
   // "খাত অনুযায়ী মোট" (client request, 2026-09-13): the flat entry list above
   // only shows the Cash Maintenance chart's own categories (পণ্য ক্রয়,
   // প্যাকেজিং, ডিপো ভাড়া, ...); a Cash Maintenance cash-out and an Expense's
@@ -583,7 +599,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const loanWithdrawalsThisPeriod = useMemo(
     () =>
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance)
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment)
         .filter((entry) => (cashMode === 'daily' ? isSameDate(entry.date, cashDate) : isSameMonth(entry.date, cashMonth)))
         .reduce((sum, entry) => sum + entry.amount, 0),
     [loanTransactions, cashMode, cashDate, cashMonth]
@@ -612,7 +628,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const openingBalance = useMemo(() => {
     const cashInBefore =
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isBeforeDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0) +
       collectedCashRows
         .filter((row) => isBeforeDate(row.date, periodStartDate))
@@ -656,7 +672,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           {showCash ? (
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Cash-out this period</p>
+              <p className="text-sm text-muted-foreground">Total Cash Out this period</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(totalCashOut, currency)}</p>
             </CardContent>
           </Card>
@@ -875,22 +891,24 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <TableBody>
                   {loanTransactions.map((transaction) => (
                     <TableRow key={transaction.id}>
-                      <TableCell className="font-medium">{transaction.memberName}</TableCell>
+                      <TableCell className="font-medium">{transaction.memberName}<RecordApprovalTag record={transaction} /></TableCell>
                       <TableCell>
                         <Badge
                           variant="outline"
                           className={cn(
                             'rounded-full',
-                            transaction.isOpeningBalance
+                            transaction.isAdjustment
+                              ? 'border-violet-200 bg-violet-500/10 text-violet-700 dark:border-violet-900 dark:text-violet-300'
+                              : transaction.isOpeningBalance
                               ? 'border-sky-200 bg-sky-500/10 text-sky-700 dark:border-sky-900 dark:text-sky-300'
                               : transaction.type === 'withdrawal'
                                 ? 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
                                 : 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
                           )}
                         >
-                          {transaction.isOpeningBalance ? 'Existing Loan' : transaction.type === 'withdrawal' ? 'Withdrawal' : 'Repayment'}
+                          {loanTransactionTypeLabel(transaction)}
                         </Badge>
-                        {transaction.type === 'repayment' && !transaction.isOpeningBalance ? (
+                        {transaction.type === 'repayment' && !transaction.isOpeningBalance && !transaction.isAdjustment ? (
                           <span className="ml-1.5 text-xs text-muted-foreground">
                             {transaction.expenseId ? '(as Expense)' : '(as Cash Maintenance)'}
                           </span>
@@ -1049,7 +1067,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <TableBody>
                   {filteredInvestors.map((investor) => (
                     <TableRow key={investor.id}>
-                      <TableCell className="font-medium">{investor.name}</TableCell>
+                      <TableCell className="font-medium">{investor.name}<RecordApprovalTag record={investor} /></TableCell>
                       <TableCell className="text-muted-foreground">{investor.location || '—'}</TableCell>
                       <TableCell>{investor.mobile || '—'}</TableCell>
                       <TableCell className="max-w-[200px] truncate text-muted-foreground">{investor.products || '—'}</TableCell>
@@ -1133,19 +1151,19 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             {cashError ? <p className="text-sm text-destructive">{cashError}</p> : null}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Cash-in total (Cash Maintenance)</span>
+                <span className="text-muted-foreground">Cash In (Cash Maintenance entries)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(cashMaintenanceInTotal, currency)}</p>
               </div>
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Cash-out total (excl. direct expense)</span>
+                <span className="text-muted-foreground">Cash Out (Cash Maintenance entries)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(cashOutTotal, currency)}</p>
               </div>
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Direct-expense entries (for reconciling only)</span>
-                <p className="mt-1 text-lg font-semibold">{formatCurrency(directExpenseTotal, currency)}</p>
+                <span className="text-muted-foreground">Direct Expense (Expense দপ্তরের মোট খরচ, এই একই দিন/মাসের)</span>
+                <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseTotalThisPeriod, currency)}</p>
               </div>
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-                <span className="text-muted-foreground">Total cash-out (Cash Maintenance + Expense)</span>
+                <span className="text-muted-foreground">Total Cash Out (Cash Maintenance + Expense)</span>
                 <p className="mt-1 text-lg font-semibold">{formatCurrency(totalCashOut, currency)}</p>
               </div>
             </div>
@@ -1203,6 +1221,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                       <TableCell>{formatDate(entry.date)}</TableCell>
                       <TableCell className="font-medium">
                         {entry.category}
+                        <RecordApprovalTag record={entry} />
                         {entry.direction === 'in' ? (
                           <Badge variant="outline" className="ml-2 rounded-full border-emerald-300 text-[10px] text-emerald-700 dark:text-emerald-300">
                             Cash In
@@ -1284,22 +1303,22 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   <span className="tabular-nums">{formatCurrency(cashMaintenanceInTotal, currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
-                  <span>Total</span>
+                  <span>Total Cash In</span>
                   <span className="tabular-nums">{formatCurrency(totalCashIn, currency)}</span>
                 </div>
               </div>
               <div className="space-y-2 rounded-xl border border-border/60 p-4">
                 <p className="text-sm font-medium text-foreground">Cash Out</p>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Expense chart total</span>
+                  <span className="text-muted-foreground">Direct Expense (Expense দপ্তরের মোট খরচ)</span>
                   <span className="tabular-nums">{formatCurrency(expenseTotalThisPeriod, currency)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Cash Maintenance chart total</span>
+                  <span className="text-muted-foreground">Cash Maintenance entries (direct expense নয়)</span>
                   <span className="tabular-nums">{formatCurrency(cashOutTotal, currency)}</span>
                 </div>
                 <div className="flex justify-between border-t border-border/60 pt-2 text-sm font-semibold">
-                  <span>Total</span>
+                  <span>Total Cash Out</span>
                   <span className="tabular-nums">{formatCurrency(totalCashOut, currency)}</span>
                 </div>
               </div>
@@ -1316,7 +1335,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
               <span className="tabular-nums font-semibold">{formatCurrency(reconciliationGap, currency)}</span>
             </div>
             <div className="mt-3 flex items-center justify-between rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">
-              <span className="font-medium text-foreground">নিট ক্যাশ স্থিতি — Net Cash Position (closing)</span>
+              <span className="font-medium text-foreground">Cash on Hand — নিট ক্যাশ স্থিতি (closing)</span>
               <span className="text-lg font-semibold tabular-nums">{formatCurrency(closingBalance, currency)}</span>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
@@ -1351,6 +1370,20 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
               <label className="text-xs font-medium text-muted-foreground">Address</label>
               <Textarea value={accountForm.address} onChange={(event) => setAccountForm((current) => ({ ...current, address: event.target.value }))} rows={2} />
             </div>
+            {editingAccountId ? (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Balance</label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  value={accountForm.balance}
+                  onChange={(event) => setAccountForm((current) => ({ ...current, balance: event.target.value }))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Fix a wrongly entered balance. The difference is saved as a “Balance Correction” in Loan Transactions — no cash in/out is posted.
+                </p>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAccountDialogOpen(false)}>
@@ -1413,7 +1446,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 </Select>
               </div>
             )}
-            {!transactionForm.isOpeningBalance && transactionForm.type === 'repayment' ? (
+            {!transactionForm.isOpeningBalance && !transactionForm.isAdjustment && transactionForm.type === 'repayment' ? (
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Post this repayment as</label>
                 <Select

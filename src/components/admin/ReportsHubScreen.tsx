@@ -19,7 +19,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { computeVendorDue, formatCurrency, formatDate, isCashMaintenanceOut, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { computeVendorDue, formatCurrency, formatDate, isCashMaintenanceOut, loanTransactionTypeLabel, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SectionId = 'fund' | 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
@@ -320,7 +320,7 @@ export function ReportsHubScreen() {
       filteredLoanTransactions.map((entry) => [
         formatDate(entry.date),
         entry.memberName,
-        entry.type === 'withdrawal' ? 'Withdrawal' : 'Repayment',
+        loanTransactionTypeLabel(entry),
         entry.amount.toFixed(2),
         entry.note ?? '',
       ]),

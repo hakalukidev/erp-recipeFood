@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -1223,7 +1224,7 @@ export default function RateCardPage() {
                     const isTradeSales = isTradeSalesType(card.saleType, dealerCategories)
                     return (
                     <TableRow key={card.id}>
-                      <TableCell className="font-medium">{card.invoiceNo}</TableCell>
+                      <TableCell className="font-medium">{card.invoiceNo}<RecordApprovalTag record={card} /></TableCell>
                       <TableCell>{card.recipientName}</TableCell>
                       <TableCell>{formatDate(card.date)}</TableCell>
                       <TableCell>
@@ -1882,7 +1883,7 @@ export default function RateCardPage() {
                   .map((collection) => (
                     <TableRow key={collection.id}>
                       <TableCell>{formatDate(collection.collectionDate)}</TableCell>
-                      <TableCell>{collection.receiptNumber}</TableCell>
+                      <TableCell>{collection.receiptNumber}<RecordApprovalTag record={collection} /></TableCell>
                       <TableCell className="capitalize">{collection.method}</TableCell>
                       <TableCell className="max-w-40 truncate text-muted-foreground">{collection.note ?? ''}</TableCell>
                       <TableCell className="text-right">{formatAmount(collection.amount)}</TableCell>

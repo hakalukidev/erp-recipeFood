@@ -19,9 +19,12 @@ import toast from 'react-hot-toast'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 
 import { ALL_PERMISSION_IDS, createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
+import { APPROVAL_SOURCES, getApprovalStatus, pendingApprovalFields, type ApprovalCollection } from '@/lib/erp/approvals'
 import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
 import type {
   BankAccountInput,
+  RecordApprovalFields,
+  RecordApprovalStatus,
   BankAccountRecord,
   BankTransactionInput,
   BankTransactionRecord,
@@ -119,6 +122,7 @@ import {
   STANDARD_CHART_OF_ACCOUNTS,
 } from '@/lib/erp/standardChartOfAccounts'
 import {
+  computeLoanBalance,
   createId,
   getPermissions,
   getProductStatus,
@@ -194,6 +198,12 @@ type ERPContextValue = {
   markAllNotificationsRead: (notificationIds: string[]) => Promise<void>
   saveExpense: (input: ExpenseInput, expenseId?: string) => Promise<void>
   updateExpenseApproval: (expenseId: string, approvalStatus: ExpenseApprovalStatus) => Promise<void>
+  reviewRecordApproval: (
+    collection: ApprovalCollection,
+    recordId: string,
+    approvalStatus: Exclude<RecordApprovalStatus, 'pending'>,
+    note?: string
+  ) => Promise<void>
   saveInvestor: (input: InvestorInput, investorId?: string) => Promise<void>
   deleteInvestor: (investorId: string) => Promise<void>
   deleteExpense: (expenseId: string) => Promise<void>
@@ -1104,7 +1114,8 @@ function normalizeLoanTransactionInput(input: LoanTransactionInput) {
     note: input.note?.trim() ?? '',
     // Only meaningful on a withdrawal — an opening balance is never "repaid
     // back" as its own concept, that's just a regular repayment against it.
-    isOpeningBalance: input.type === 'withdrawal' && Boolean(input.isOpeningBalance),
+    isOpeningBalance: input.type === 'withdrawal' && !input.isAdjustment && Boolean(input.isOpeningBalance),
+    isAdjustment: Boolean(input.isAdjustment),
     // Only meaningful on a repayment — defaults to the pre-existing
     // Cash Maintenance behaviour when not given.
     postAs: input.type === 'repayment' && input.postAs === 'expense' ? 'expense' : ('cash_maintenance' as const),
@@ -2296,6 +2307,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       paid,
       due,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -2345,6 +2357,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!existing) {
       throw new Error('Purchase not found.')
     }
+    assertApprovalUnlocked('purchases', existing)
     if (!input.items.length) {
       throw new Error('Add at least one material to the purchase.')
     }
@@ -2442,6 +2455,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       // Carried forward untouched — only purchases saved before 2026-09-22
       // have any; deletePurchase still cleans them up.
       ...(existing.cashMaintenanceIds?.length ? { cashMaintenanceIds: existing.cashMaintenanceIds } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: existing.createdBy,
       createdByName: existing.createdByName,
       createdAt: existing.createdAt,
@@ -2465,6 +2479,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!purchase) {
       throw new Error('Purchase not found.')
     }
+    assertApprovalUnlocked('purchases', purchase)
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -2545,6 +2560,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -2579,6 +2595,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!existing) {
       throw new Error('Vendor payment not found.')
     }
+    assertApprovalUnlocked('vendorPayments', existing)
     const purchase = data.purchases[existing.purchaseId]
     if (!purchase) {
       throw new Error('Purchase not found.')
@@ -2610,6 +2627,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : { note: undefined }),
+      ...pendingApprovalFields(currentUser, now),
     }
     // Drop undefined keys rather than write them literally — Firebase
     // rejects `undefined` values outright.
@@ -2658,6 +2676,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       qty,
       date,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -2695,6 +2714,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!usage) {
       throw new Error('Material usage entry not found.')
     }
+    assertApprovalUnlocked('materialUsages', usage)
 
     const material = data.purchaseMaterials[usage.materialId]
     const db = getDatabaseOrThrow()
@@ -2861,6 +2881,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       outputs,
       materialUsageId: usageId,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -2919,6 +2940,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!batch) {
       throw new Error('Production batch not found.')
     }
+    assertApprovalUnlocked('productionBatches', batch)
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -2981,11 +3003,53 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/loanAccounts'), { [id]: account })
+    const updates: Record<string, unknown> = { [`loanAccounts/${id}`]: account }
+
+    // memberName is copied onto every transaction and linked expense, so a
+    // rename has to follow it there too — otherwise the Loan Transactions
+    // table, Reports Hub, Approvals and Finance keep showing the old name.
+    if (existingAccount && existingAccount.memberName !== account.memberName) {
+      Object.values(data.loanTransactions).forEach((entry) => {
+        if (entry.loanAccountId === id) updates[`loanTransactions/${entry.id}/memberName`] = account.memberName
+      })
+      Object.values(data.expenses).forEach((expense) => {
+        if (expense.loanAccountId === id) updates[`expenses/${expense.id}/loanMemberName`] = account.memberName
+      })
+    }
+
+    // Balance correction (2026-09-28): the balance is derived from
+    // transactions, so a mistyped balance is fixed by posting the difference
+    // as a cash-free isAdjustment transaction rather than overwriting it.
+    let adjustmentNote = ''
+    if (existingAccount && input.balance !== undefined && Number.isFinite(input.balance) && currentUser) {
+      const difference = Math.round((input.balance - computeLoanBalance(data, id).balance) * 100) / 100
+      if (difference !== 0) {
+        const transactionId = createId('loan_txn')
+        const transaction: LoanTransactionRecord = {
+          id: transactionId,
+          loanAccountId: id,
+          memberName: account.memberName,
+          type: difference > 0 ? 'withdrawal' : 'repayment',
+          amount: Math.abs(difference),
+          date: now.slice(0, 10),
+          note: `Balance correction — set to ${input.balance}`,
+          isOpeningBalance: false,
+          isAdjustment: true,
+          ...pendingApprovalFields(currentUser, now),
+          createdBy: currentUser.id,
+          createdByName: currentUser.name,
+          createdAt: now,
+        }
+        updates[`loanTransactions/${transactionId}`] = transaction
+        adjustmentNote = ` Balance corrected to ${input.balance}.`
+      }
+    }
+
+    await update(ref(db, 'erp'), updates)
     await writeActivity(
       existingAccount ? 'loan_account_updated' : 'loan_account_created',
       'finance',
-      existingAccount ? `Updated loan member ${account.memberName}.` : `Added loan member ${account.memberName}.`
+      existingAccount ? `Updated loan member ${account.memberName}.${adjustmentNote}` : `Added loan member ${account.memberName}.`
     )
 
     return id
@@ -3023,6 +3087,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const existingTransaction = transactionId ? data.loanTransactions[transactionId] : null
+    assertApprovalUnlocked('loanTransactions', existingTransaction)
     const normalized = normalizeLoanTransactionInput(input)
     const account = data.loanAccounts[normalized.loanAccountId]
     if (!account) {
@@ -3050,8 +3115,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // needs neither — it's already counted as Cash In directly from
     // loanTransactions (see loanWithdrawalsThisPeriod on the Loan & Cash
     // Maintenance page).
-    const postAsCash = normalized.type === 'repayment' && normalized.postAs === 'cash_maintenance'
-    const postAsExpense = normalized.type === 'repayment' && normalized.postAs === 'expense'
+    // A balance correction (isAdjustment) never posts cash either way.
+    const postAsCash = normalized.type === 'repayment' && !normalized.isAdjustment && normalized.postAs === 'cash_maintenance'
+    const postAsExpense = normalized.type === 'repayment' && !normalized.isAdjustment && normalized.postAs === 'expense'
     const cashMaintenanceId = postAsCash ? existingTransaction?.cashMaintenanceId ?? createId('cash_maintenance') : undefined
     const expenseId = postAsExpense ? existingTransaction?.expenseId ?? createId('expense') : undefined
 
@@ -3064,8 +3130,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: normalized.date,
       note: normalized.note,
       isOpeningBalance: normalized.isOpeningBalance,
+      ...(normalized.isAdjustment ? { isAdjustment: true } : {}),
       ...(cashMaintenanceId ? { cashMaintenanceId } : {}),
       ...(expenseId ? { expenseId } : {}),
+      ...pendingApprovalFields(currentUser, now),
       createdBy: existingTransaction?.createdBy ?? currentUser.id,
       createdByName: existingTransaction?.createdByName ?? currentUser.name,
       createdAt: existingTransaction?.createdAt ?? now,
@@ -3147,7 +3215,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       existingTransaction ? 'loan_transaction_updated' : 'loan_transaction_created',
       'finance',
-      `${normalized.isOpeningBalance ? 'Recorded existing loan balance of' : normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}${postAsExpense ? ' (posted as Expense)' : ''}.`
+      `${normalized.isAdjustment ? `Recorded balance correction (${normalized.type === 'withdrawal' ? '+' : '-'}) of` : normalized.isOpeningBalance ? 'Recorded existing loan balance of' : normalized.type === 'withdrawal' ? 'Recorded new loan withdrawal of' : 'Recorded loan repayment of'} ${normalized.amount} for ${account.memberName}${postAsExpense ? ' (posted as Expense)' : ''}.`
     )
 
     return id
@@ -3162,6 +3230,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!transaction) {
       throw new Error('Loan transaction not found.')
     }
+    assertApprovalUnlocked('loanTransactions', transaction)
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -3194,6 +3263,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const existingRecord = recordId ? data.cashMaintenance[recordId] : null
+    assertApprovalUnlocked('cashMaintenance', existingRecord)
     const normalized = normalizeCashMaintenanceInput(input)
 
     if (!normalized.category) {
@@ -3215,6 +3285,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       date: normalized.date,
       note: normalized.note,
       isDirectExpense: normalized.direction === 'out' && normalized.category === DIRECT_EXPENSE_CATEGORY,
+      ...pendingApprovalFields(currentUser, now),
       createdBy: existingRecord?.createdBy ?? currentUser.id,
       createdByName: existingRecord?.createdByName ?? currentUser.name,
       createdAt: existingRecord?.createdAt ?? now,
@@ -3239,6 +3310,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!record) {
       throw new Error('Cash maintenance entry not found.')
     }
+    assertApprovalUnlocked('cashMaintenance', record)
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
@@ -3624,6 +3696,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       method: input.method,
       collectionDate,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...pendingApprovalFields(currentUser, now),
       collectedBy: currentUser.id,
       collectedByName: currentUser.name,
       createdAt: now,
@@ -3654,6 +3727,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!existing) {
       throw new Error('Collection not found.')
     }
+    assertApprovalUnlocked('collections', existing)
     const rateCard = data.rateCards[existing.rateCardId]
     if (!rateCard) {
       throw new Error('Invoice not found.')
@@ -3677,6 +3751,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount,
       method: input.method,
       collectionDate: date,
+      ...pendingApprovalFields(currentUser, new Date().toISOString()),
     }
     if (input.note?.trim()) updatedCollection.note = input.note.trim()
     else delete updatedCollection.note
@@ -4583,6 +4658,84 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await checkBudgetOverrun(data.budgets, { ...data.expenses, [id]: expense }, writeNotification, category, expenseDate)
   }
 
+  // ---- Input & Authorization ---------------------------------------------
+  // An authorized (approved) entry is locked — only someone who holds the
+  // department's approve permission may edit or delete it afterwards, and
+  // doing so re-submits it as pending (every save writes
+  // pendingApprovalFields). Pending/rejected entries, and older entries with
+  // no approvalStatus at all, stay editable by the department as before.
+  function assertApprovalUnlocked(collection: ApprovalCollection, record: RecordApprovalFields | null | undefined) {
+    if (!record || record.approvalStatus !== 'approved') {
+      return
+    }
+    const source = APPROVAL_SOURCES[collection]
+    if (!hasPermissionCheck(data, currentUser, source.permission)) {
+      throw new Error(
+        `This ${source.label.toLowerCase()} is already authorized and locked. Ask an approver (${source.permission}) to change it.`
+      )
+    }
+  }
+
+  // The authorization half of Input & Authorization: approve or reject one
+  // pending department entry. Same "post first, approve as a review gate"
+  // shape as updateExpenseApproval — a rejection does not undo the entry's
+  // stock/due effects; it flags it so the department corrects it (edit
+  // re-submits it) or deletes it. Nobody but Super Admin may authorize their
+  // own entry (maker-checker).
+  async function reviewRecordApproval(
+    collection: ApprovalCollection,
+    recordId: string,
+    approvalStatus: Exclude<RecordApprovalStatus, 'pending'>,
+    note?: string
+  ) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before authorizing an entry.')
+    }
+
+    const source = APPROVAL_SOURCES[collection]
+    if (!hasPermissionCheck(data, currentUser, source.permission)) {
+      throw new Error(`You do not have permission to authorize ${source.label.toLowerCase()} entries.`)
+    }
+
+    const record = (data[collection] as Record<string, RecordApprovalFields & { createdBy?: string }>)[recordId]
+    if (!record) {
+      throw new Error(`${source.label} not found.`)
+    }
+    if (getApprovalStatus(record) !== 'pending') {
+      throw new Error(`This ${source.label.toLowerCase()} has already been reviewed.`)
+    }
+
+    const submittedBy = record.submittedBy || record.createdBy || ''
+    if (submittedBy === currentUser.id && currentUser.roleId !== 'super_admin') {
+      throw new Error('You cannot authorize an entry you submitted yourself — another approver has to review it.')
+    }
+
+    const trimmedNote = note?.trim() ?? ''
+    if (approvalStatus === 'rejected' && !trimmedNote) {
+      throw new Error('Give a reason for rejecting this entry.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const path = `${collection}/${recordId}`
+    await update(ref(db, 'erp'), {
+      [`${path}/approvalStatus`]: approvalStatus,
+      [`${path}/approvedBy`]: currentUser.id,
+      [`${path}/approvedByName`]: currentUser.name,
+      [`${path}/approvedAt`]: now,
+      [`${path}/approvalNote`]: trimmedNote,
+    })
+
+    const row = source.describe(record as never, data)
+    const message = `${source.label} ${row.reference} was ${approvalStatus} by ${currentUser.name}${trimmedNote ? ` — ${trimmedNote}` : ''}.`
+    await writeActivity(`${collection}_${approvalStatus}`, source.department, message, { reason: trimmedNote || undefined })
+
+    const submitterRoleId = submittedBy ? data.users[submittedBy]?.roleId : undefined
+    if (approvalStatus === 'rejected' && submitterRoleId) {
+      await writeNotification(`${source.label} rejected`, message, 'warning', [submitterRoleId])
+    }
+  }
+
   // Section 36 (Expense Approval Workflow): an expense posts to the ledger
   // immediately at entry (see buildExpenseLedgerEntries) and sits at
   // "pending" until someone with finance:edit signs off — same "post
@@ -4994,6 +5147,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (input.amount <= 0) throw new Error('Investment amount must be greater than zero.')
 
     const existing = investorId ? data.investors[investorId] : null
+    assertApprovalUnlocked('investors', existing)
     const id = existing?.id ?? createId('investor')
     const now = new Date().toISOString()
     // 2026-09-12 client request: hits cash flow the same way a Purchase's
@@ -5011,6 +5165,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount: input.amount,
       note: input.note?.trim() ?? '',
       cashMaintenanceId,
+      ...pendingApprovalFields(currentUser, now),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -5041,6 +5196,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!investor) {
       throw new Error('Investor not found.')
     }
+    assertApprovalUnlocked('investors', investor)
 
     const updates: Record<string, unknown> = { [`investors/${investorId}`]: null }
     if (investor.cashMaintenanceId) {
@@ -5281,6 +5437,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       narration,
       lines: resolvedLines,
       status: 'posted',
+      ...pendingApprovalFields(currentUser, now),
       createdBy: currentUser.id,
       createdByName: currentUser.name,
       createdAt: now,
@@ -5819,6 +5976,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const existing = rateCardId ? data.rateCards[rateCardId] : null
+    assertApprovalUnlocked('rateCards', existing)
     const db = getDatabaseOrThrow()
     const id = existing?.id ?? createId('ratecard')
     const now = new Date().toISOString()
@@ -5855,6 +6013,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       ...totals,
       paid,
       due,
+      ...pendingApprovalFields(currentUser, now),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
@@ -5903,6 +6062,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!rateCard) {
       throw new Error('Rate card not found.')
     }
+    assertApprovalUnlocked('rateCards', rateCard)
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -6074,6 +6234,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       ...totals,
       manufacturingExpenseAmount,
       rawMaterialExpenseAmount,
+      ...pendingApprovalFields(currentUser, now),
       processedBy: currentUser.id,
       processedByName: currentUser.name,
       createdAt: now,
@@ -6104,6 +6265,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!existing) {
       throw new Error('Product return not found.')
     }
+    assertApprovalUnlocked('productReturns', existing)
     if (!input.items.length) {
       throw new Error('Add at least one product to return.')
     }
@@ -6188,6 +6350,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       ...totals,
       manufacturingExpenseAmount,
       rawMaterialExpenseAmount,
+      ...pendingApprovalFields(currentUser, now),
       processedBy: existing.processedBy,
       processedByName: existing.processedByName,
       createdAt: existing.createdAt,
@@ -6211,6 +6374,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!productReturn) {
       throw new Error('Product return not found.')
     }
+    assertApprovalUnlocked('productReturns', productReturn)
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
@@ -6387,6 +6551,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       markAllNotificationsRead,
       saveExpense,
       updateExpenseApproval,
+      reviewRecordApproval,
       saveInvestor,
       deleteInvestor,
       deleteExpense,

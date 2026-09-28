@@ -11,6 +11,7 @@ import {
   Calculator,
   CheckCheck,
   ChevronDown,
+  ClipboardCheck,
   FileBarChart,
   HandCoins,
   Handshake,
@@ -36,6 +37,7 @@ import {
 } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
+import { buildApprovalQueue } from '@/lib/erp/approvals'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -80,6 +82,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Company earnings, recent rate cards/expenses, and low stock alerts',
         href: '/admin/dashboard',
         icon: LayoutDashboard,
+        permission: 'dashboard:view',
+      },
+      {
+        label: 'Approvals',
+        description: 'Input & Authorization — approve or reject every department entry, or track your own submissions',
+        href: '/admin/approvals',
+        icon: ClipboardCheck,
         permission: 'dashboard:view',
       },
     ],
@@ -245,7 +254,19 @@ function SidebarContent({
   collapsed?: boolean
   onToggleCollapse?: () => void
 }) {
-  const { hasPermission, currentUser } = useERP()
+  const { hasPermission, currentUser, data } = useERP()
+
+  // Entries this user can authorize right now — shown as a count on the
+  // Approvals nav item.
+  const pendingApprovalCount = useMemo(() => {
+    const records = buildApprovalQueue(data).filter(
+      (row) => row.status === 'pending' && hasPermission(row.permission)
+    ).length
+    const expenses = hasPermission('finance:approve')
+      ? Object.values(data?.expenses ?? {}).filter((expense) => expense.approvalStatus === 'pending').length
+      : 0
+    return records + expenses
+  }, [data, hasPermission])
 
   const visibleGroups = navigationGroups
     .map((group) => ({
@@ -370,7 +391,14 @@ function SidebarContent({
                       </span>
                       {!collapsed ? (
                         <span className="min-w-0">
-                          <span className="block text-sm font-semibold">{item.label}</span>
+                          <span className="flex items-center gap-2 text-sm font-semibold">
+                            {item.label}
+                            {item.href === '/admin/approvals' && pendingApprovalCount > 0 ? (
+                              <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold leading-none text-white">
+                                {pendingApprovalCount}
+                              </span>
+                            ) : null}
+                          </span>
                           <span
                             className={cn(
                               'mt-1 block text-xs leading-5',

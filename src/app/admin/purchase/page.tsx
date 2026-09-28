@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -1186,7 +1187,7 @@ export default function PurchasePage() {
                     <TableBody>
                       {filteredPurchases.map((purchase) => (
                         <TableRow key={purchase.id}>
-                          <TableCell className="font-medium">{purchase.purchaseNumber}</TableCell>
+                          <TableCell className="font-medium">{purchase.purchaseNumber}<RecordApprovalTag record={purchase} /></TableCell>
                           <TableCell>{purchase.vendorName}</TableCell>
                           <TableCell>{formatDate(purchase.date)}</TableCell>
                           <TableCell className="max-w-64 truncate text-muted-foreground">
@@ -1456,7 +1457,7 @@ export default function PurchasePage() {
                     <TableBody>
                       {usages.slice(0, 15).map((usage) => (
                         <TableRow key={usage.id}>
-                          <TableCell className="font-medium">{usage.materialName}</TableCell>
+                          <TableCell className="font-medium">{usage.materialName}<RecordApprovalTag record={usage} /></TableCell>
                           <TableCell>{formatDate(usage.date)}</TableCell>
                           <TableCell className="text-right text-destructive">
                             -{formatQty(usage.qty)} {UNIT_LABEL[usage.unit]}
@@ -1577,7 +1578,7 @@ export default function PurchasePage() {
                     <TableBody>
                       {filteredProductionBatches.map((batch) => (
                         <TableRow key={batch.id}>
-                          <TableCell className="font-medium">{batch.batchNumber}</TableCell>
+                          <TableCell className="font-medium">{batch.batchNumber}<RecordApprovalTag record={batch} /></TableCell>
                           <TableCell>{batch.rawMaterialName}</TableCell>
                           <TableCell>{formatDate(batch.date)}</TableCell>
                           <TableCell className="max-w-64 truncate text-muted-foreground">
@@ -2268,7 +2269,7 @@ export default function PurchasePage() {
                   .map((payment) => (
                     <TableRow key={payment.id}>
                       <TableCell>{formatDate(payment.date)}</TableCell>
-                      <TableCell>{payment.receiptNumber}</TableCell>
+                      <TableCell>{payment.receiptNumber}<RecordApprovalTag record={payment} /></TableCell>
                       <TableCell className="max-w-40 truncate text-muted-foreground">{payment.note ?? ''}</TableCell>
                       <TableCell className="text-right">{formatAmount(payment.amount)}</TableCell>
                       <TableCell className="text-right">

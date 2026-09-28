@@ -43,19 +43,64 @@
       "loanTransactions": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))",
+          "approvalStatus": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedBy": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedByName": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedAt": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvalNote": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          }
         }
       },
       "cashMaintenance": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))",
+          "approvalStatus": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedBy": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedByName": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedAt": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvalNote": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          }
         }
       },
       "investors": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
-          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+          ".write": "((!data.exists() && newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && newData.exists() && (root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:edit').val() === true))\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))",
+          "approvalStatus": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedBy": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedByName": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvedAt": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          },
+          "approvalNote": {
+            ".write": "data.parent().exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true"
+          }
         }
       },
       "users": {

@@ -333,7 +333,7 @@ export type JournalEntryLine = {
 
 export type JournalEntryStatus = 'posted' | 'reversed'
 
-export type JournalEntryRecord = {
+export type JournalEntryRecord = RecordApprovalFields & {
   id: string
   journalNumber: string
   date: string
@@ -556,7 +556,7 @@ export type RateCardLineItem = {
 // bucketed into either side.
 export type SaleType = string
 
-export type RateCardRecord = {
+export type RateCardRecord = RecordApprovalFields & {
   id: string
   invoiceNo: string
   // The dealer this shipment is ultimately for — shown as "Dealer Name" on
@@ -732,7 +732,7 @@ export type ProductReturnItem = {
   perCtnBgs?: string
 }
 
-export type ProductReturnRecord = {
+export type ProductReturnRecord = RecordApprovalFields & {
   id: string
   returnNumber: string
   rateCardId?: string
@@ -936,7 +936,7 @@ export type PurchaseItem = {
 // pattern as OrderRecord (paid entered at save time, due = totalAmount -
 // paid, further paydowns tracked as VendorPaymentRecord the way
 // CollectionRecord tracks a dealer paydown against an OrderRecord).
-export type PurchaseRecord = {
+export type PurchaseRecord = RecordApprovalFields & {
   id: string
   purchaseNumber: string
   vendorId?: string
@@ -968,7 +968,7 @@ export type PurchaseInput = {
 // A paydown against one purchase's outstanding due — same role as
 // CollectionRecord against an OrderRecord (see recordCollection in
 // provider.tsx), just on the payable side instead of the receivable side.
-export type VendorPaymentRecord = {
+export type VendorPaymentRecord = RecordApprovalFields & {
   id: string
   receiptNumber: string
   purchaseId: string
@@ -997,7 +997,7 @@ export type VendorPaymentInput = {
 // spec (points 2 and 3). Freeform `note` records why (e.g. "Packed into
 // Batch #12", "Issued to Mymensingh Depot") since there's no production/BOM
 // module yet for this to link to automatically.
-export type MaterialUsageRecord = {
+export type MaterialUsageRecord = RecordApprovalFields & {
   id: string
   materialId: string
   materialName: string
@@ -1097,7 +1097,7 @@ export type ProductionOutputLine = {
 // by that line's qtyProduced. Whatever raw material doesn't get consumed
 // stays as leftover stock automatically — there's no separate "leftover"
 // field, it's just PurchaseMaterialRecord.stockQty after the deduction.
-export type ProductionBatchRecord = {
+export type ProductionBatchRecord = RecordApprovalFields & {
   id: string
   batchNumber: string
   date: string
@@ -1271,7 +1271,7 @@ export type SalesReturnInput = {
 // running-due shape, just on the receivable side.
 export type CollectionMethod = 'cash' | 'bank' | 'mfs'
 
-export type CollectionRecord = {
+export type CollectionRecord = RecordApprovalFields & {
   id: string
   receiptNumber: string
   rateCardId: string
@@ -1410,13 +1410,17 @@ export type LoanAccountInput = {
   memberName: string
   phone?: string
   address?: string
+  // Edit only — the corrected outstanding balance. When it differs from the
+  // derived balance, saveLoanAccount records the difference as an
+  // isAdjustment LoanTransactionRecord (balance stays derived, never stored).
+  balance?: number
 }
 
 // 'withdrawal' = a new loan draw against the account (raises the balance
 // owed); 'repayment' = money paid back against it (lowers the balance).
 export type LoanTransactionType = 'withdrawal' | 'repayment'
 
-export type LoanTransactionRecord = {
+export type LoanTransactionRecord = RecordApprovalFields & {
   id: string
   loanAccountId: string
   memberName: string
@@ -1434,6 +1438,12 @@ export type LoanTransactionRecord = {
   // balance or monthly schedule is computed (both already just sum
   // withdrawals vs repayments by date).
   isOpeningBalance?: boolean
+  // 2026-09-28 client request — a manual balance correction entered from
+  // the Loan Chart's "Edit loan member" dialog (fixing a mistyped balance).
+  // Written as a withdrawal (balance raised) or repayment (balance lowered)
+  // for the difference, but never posts any cash — no Cash Maintenance /
+  // Expense entry, and excluded from Cash In like isOpeningBalance.
+  isAdjustment?: boolean
   // The auto-posted CashMaintenanceRecord (category ঋণ পরিশোধ) mirroring
   // this transaction — only set on a 'repayment' entered directly here on
   // the Loan Chart and posted as `postAs: 'cash_maintenance'` (the default;
@@ -1466,6 +1476,7 @@ export type LoanTransactionInput = {
   date?: string
   note?: string
   isOpeningBalance?: boolean
+  isAdjustment?: boolean
   // Only meaningful on a 'repayment' — which chart it posts real cash-out
   // to. Defaults to 'cash_maintenance' (the pre-2026-09-15 behaviour) when
   // omitted. See LoanTransactionRecord.cashMaintenanceId/expenseId above.
@@ -1495,7 +1506,7 @@ export type LoanTransactionInput = {
 // record saved before this field existed.
 export type CashDirection = 'in' | 'out'
 
-export type CashMaintenanceRecord = {
+export type CashMaintenanceRecord = RecordApprovalFields & {
   id: string
   category: string
   amount: number
@@ -1700,7 +1711,7 @@ export type ERPData = {
   }
 }
 
-export type InvestorRecord = {
+export type InvestorRecord = RecordApprovalFields & {
   id: string
   name: string
   location: string
@@ -1841,4 +1852,30 @@ export type UserInput = {
   password?: string
   roleId: string
   title: string
+}
+
+// ---- Input & Authorization (client spec, 2026-09-25: "প্রতিটি বিভাগে ইনপুট ও
+// অথরাইজের ব্যবস্থা রাখতে হবে") -------------------------------------------
+// Every department's day-to-day input (Invoice, Collection, Product Return,
+// Purchase, Vendor Payment, Material Usage, Production, Cash Maintenance,
+// Loan, Investor, Journal) is saved as "pending" and then authorized
+// (approved/rejected) by someone holding that department's `<module>:approve`
+// permission — same "post first, approve as a review gate" shape Expense
+// approval already uses. A record with no approvalStatus predates this (or
+// was auto-posted by another flow) and counts as approved. See
+// src/lib/erp/approvals.ts for the department registry and
+// reviewRecordApproval in provider.tsx for the authorization step.
+export type RecordApprovalStatus = 'pending' | 'approved' | 'rejected'
+
+export type RecordApprovalFields = {
+  approvalStatus?: RecordApprovalStatus
+  // Who entered (or last edited) the record — an edit re-submits it.
+  submittedBy?: string
+  submittedByName?: string
+  submittedAt?: string
+  // Who authorized it — filled on both approve and reject.
+  approvedBy?: string
+  approvedByName?: string
+  approvedAt?: string
+  approvalNote?: string
 }

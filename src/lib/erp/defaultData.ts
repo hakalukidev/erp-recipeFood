@@ -30,7 +30,7 @@ export const MODULE_DEFINITIONS: Array<{
   { module: 'invoice-voucher', label: 'Invoice', actions: ['company', 'depot', 'dealer'] },
   { module: 'orders', label: 'Sales & orders', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { module: 'dealers', label: 'Dealers', actions: ['view', 'create', 'edit', 'delete', 'export'] },
-  { module: 'purchase', label: 'Purchase', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'purchase', label: 'Purchase', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { module: 'vendor', label: 'Vendor', actions: ['view', 'create', 'edit', 'delete', 'export'] },
   // 'approve' added 2026-09-13 (client request) — expense approval needs
   // its own permission, separate from finance:edit, so it can be locked to
@@ -41,7 +41,7 @@ export const MODULE_DEFINITIONS: Array<{
   // self-heal effect in provider.tsx backfills it onto an already-seeded
   // Super Admin role on next login, no manual Role Matrix step needed.
   { module: 'finance', label: 'Finance', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
-  { module: 'accounting', label: 'Accounting', actions: ['view', 'create', 'edit', 'delete', 'export'] },
+  { module: 'accounting', label: 'Accounting', actions: ['view', 'create', 'edit', 'delete', 'approve', 'export'] },
   { module: 'reports', label: 'Reports', actions: ['view', 'export'] },
   { module: 'users', label: 'Users & roles', actions: ['view', 'create', 'edit', 'delete'] },
 ]

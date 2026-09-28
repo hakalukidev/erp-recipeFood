@@ -2,6 +2,7 @@ import type {
   AccountType,
   ActivityRecord,
   CashMaintenanceRecord,
+  LoanTransactionRecord,
   ChartOfAccountRecord,
   DealerCategoryRecord,
   ERPData,
@@ -401,7 +402,7 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
     salesCashRows.push({ date: collection.collectionDate, amount: collection.amount })
   }
 
-  const loanWithdrawalRows = loanTransactions.filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance)
+  const loanWithdrawalRows = loanTransactions.filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment)
 
   function cashInBetween(fromDate: string, toDate: string) {
     const sales = salesCashRows.filter((row) => dateInRange(row.date, fromDate, toDate)).reduce((sum, row) => sum + row.amount, 0)
@@ -857,6 +858,14 @@ export function computeMaterialAvailablePieces(material: PurchaseMaterialRecord)
 // A loan member's running balance owed — every 'withdrawal' raises it, every
 // 'repayment' lowers it, never clamped (so an overpayment stays visible as a
 // negative balance). Reaches zero once fully repaid, per the Loan Chart spec.
+// One label for a loan transaction's kind, shared by the Loan Chart,
+// Reports Hub and Approvals so a Balance Correction reads the same everywhere.
+export function loanTransactionTypeLabel(entry: Pick<LoanTransactionRecord, 'type' | 'isOpeningBalance' | 'isAdjustment'>) {
+  if (entry.isAdjustment) return `Balance Correction (${entry.type === 'withdrawal' ? '+' : '−'})`
+  if (entry.isOpeningBalance) return 'Existing Loan'
+  return entry.type === 'withdrawal' ? 'Withdrawal' : 'Repayment'
+}
+
 export function computeLoanBalance(data: ERPData | null, loanAccountId: string) {
   const transactions = toArray(data?.loanTransactions).filter((entry) => entry.loanAccountId === loanAccountId)
   const totalWithdrawn = transactions
