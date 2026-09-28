@@ -317,6 +317,9 @@ const ERP_TOP_LEVEL_KEYS = [
   'purchases',
   'vendorPayments',
   'materialUsages',
+  'finishedGoods',
+  'productionBatches',
+  'stockShortfalls',
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
