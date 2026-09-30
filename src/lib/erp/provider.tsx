@@ -2336,12 +2336,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (!item.materialId) return
       stockDeltas.set(item.materialId, (stockDeltas.get(item.materialId) ?? 0) + item.qty)
     })
-    stockDeltas.forEach((delta, materialId) => {
-      const material = data.purchaseMaterials[materialId]
-      if (!material) return
-      updates[`purchaseMaterials/${materialId}/stockQty`] = material.stockQty + delta
+    // A material typed fresh on the purchase form is created by
+    // savePurchaseMaterial just before this call, so it isn't in `data` yet —
+    // read its stock from the database instead of skipping it (which left
+    // the first purchase of every new material out of stock).
+    for (const [materialId, delta] of stockDeltas) {
+      let stockQty = data.purchaseMaterials[materialId]?.stockQty
+      if (stockQty === undefined) {
+        const snapshot = await get(ref(db, `erp/purchaseMaterials/${materialId}`))
+        if (!snapshot.exists()) continue
+        stockQty = Number(snapshot.val()?.stockQty) || 0
+      }
+      updates[`purchaseMaterials/${materialId}/stockQty`] = stockQty + delta
       updates[`purchaseMaterials/${materialId}/updatedAt`] = now
-    })
+    }
 
     await update(ref(db, 'erp'), updates)
     await writeActivity(
@@ -2457,14 +2465,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       newStockDeltas.set(item.materialId, (newStockDeltas.get(item.materialId) ?? 0) + item.qty)
     })
     const materialIds = new Set([...oldStockDeltas.keys(), ...newStockDeltas.keys()])
-    materialIds.forEach((materialId) => {
-      const material = data.purchaseMaterials[materialId]
-      if (!material) return
+    // Same fresh-material fallback as createPurchase.
+    for (const materialId of materialIds) {
       const netDelta = (newStockDeltas.get(materialId) ?? 0) - (oldStockDeltas.get(materialId) ?? 0)
-      if (netDelta === 0) return
-      updates[`purchaseMaterials/${materialId}/stockQty`] = material.stockQty + netDelta
+      if (netDelta === 0) continue
+      let stockQty = data.purchaseMaterials[materialId]?.stockQty
+      if (stockQty === undefined) {
+        const snapshot = await get(ref(db, `erp/purchaseMaterials/${materialId}`))
+        if (!snapshot.exists()) continue
+        stockQty = Number(snapshot.val()?.stockQty) || 0
+      }
+      updates[`purchaseMaterials/${materialId}/stockQty`] = stockQty + netDelta
       updates[`purchaseMaterials/${materialId}/updatedAt`] = now
-    })
+    }
 
     const updatedPurchase: PurchaseRecord = {
       id: existing.id,
