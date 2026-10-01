@@ -165,7 +165,7 @@ export const APPROVAL_SOURCES: Record<ApprovalCollection, ApprovalSource> = {
     href: '/admin/cash-maintenance',
     describe: (record: ERPData['cashMaintenance'][string]) => ({
       reference: record.category,
-      party: record.direction === 'in' ? 'Cash In' : 'Cash Out',
+      party: record.employeeName || (record.direction === 'in' ? 'Cash In' : 'Cash Out'),
       amount: record.amount,
       date: record.date,
       detail: record.note ?? '',

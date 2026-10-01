@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { CheckCircle2, ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck, XCircle } from 'lucide-react'
+import { CheckCircle2, ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck, Wallet, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ExportMenu } from '@/components/admin/ExportMenu'
@@ -20,10 +20,19 @@ import {
   COMPANY_INVOICE_FOOTER_NOTE,
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
-import { EXPENSE_CATEGORIES, EXPENSE_LOAN_REPAYMENT_CATEGORY, EXPENSE_SALARY_CATEGORY } from '@/lib/erp/standardChartOfAccounts'
+import {
+  CASH_CATEGORY_ADVANCE_SALARY,
+  EXPENSE_CATEGORIES,
+  EXPENSE_LOAN_REPAYMENT_CATEGORY,
+  EXPENSE_SALARY_CATEGORY,
+} from '@/lib/erp/standardChartOfAccounts'
 import type { ExpenseInput, ExpenseRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
-import { computeEmployeeSalaryTotals, expenseCategoryLabel, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import {
+  computeEmployeeAdvances,
+  computeEmployeeSalaryTotals,
+  employeeAdvanceOutstanding,
+  expenseCategoryLabel, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const ALL_CATEGORIES = '__all__'
@@ -159,6 +168,7 @@ const emptyExpenseForm = {
   date: dateInputValue(),
   paymentMethod: 'cash' as 'cash' | 'bank',
   employeeName: '',
+  advanceAdjusted: '',
   loanAccountId: '',
 }
 
@@ -210,13 +220,27 @@ export default function ExpensesPage() {
   const currency = data?.settings.currency
   // Free-text employee name, not a Users/login lookup — see
   // ExpenseRecord.employeeName in types.ts. Suggestions are every distinct
-  // name already used on a সেলারি entry, for a <datalist>.
+  // name already used on a সেলারি entry or an Advance Salary cash entry,
+  // for a <datalist>.
   const employeeNameSuggestions = useMemo(
     () =>
-      Array.from(new Set(expenses.map((expense) => expense.employeeName).filter((name): name is string => !!name?.trim()))).sort(
-        (left, right) => left.localeCompare(right)
-      ),
-    [expenses]
+      Array.from(
+        new Set(
+          [...expenses.map((expense) => expense.employeeName), ...toArray(data?.cashMaintenance).map((entry) => entry.employeeName)]
+            .map((name) => name?.trim())
+            .filter((name): name is string => !!name)
+        )
+      ).sort((left, right) => left.localeCompare(right)),
+    [expenses, data?.cashMaintenance]
+  )
+  // Advance Salary still to be deducted for the employee typed on the salary
+  // form — not counting this expense's own adjustment while it's edited.
+  const formAdvanceOutstanding = useMemo(
+    () =>
+      expenseForm.category === EXPENSE_SALARY_CATEGORY
+        ? employeeAdvanceOutstanding(data ?? null, expenseForm.employeeName, editingExpenseId ?? undefined)
+        : 0,
+    [data, expenseForm.category, expenseForm.employeeName, editingExpenseId]
   )
   const loanAccountOptions: ComboboxOption[] = useMemo(
     () =>
@@ -301,6 +325,47 @@ export default function ExpensesPage() {
 
   // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
   const salaryTotals = useMemo(() => computeEmployeeSalaryTotals(data ?? null), [data])
+  // ---- Advance Salary tracker (2026-10-02 client request) -----------------
+  const advanceRows = useMemo(() => computeEmployeeAdvances(data ?? null), [data])
+  const totalAdvanceOutstanding = advanceRows.reduce((sum, row) => sum + row.outstanding, 0)
+  const [selectedAdvanceEmployee, setSelectedAdvanceEmployee] = useState('')
+  // Every advance given and every salary deduction for the selected
+  // employee, oldest first, with a running outstanding balance.
+  const selectedAdvanceMovements = useMemo(() => {
+    const key = selectedAdvanceEmployee.toLowerCase()
+    if (!key) return []
+    const movements = [
+      ...toArray(data?.cashMaintenance)
+        .filter(
+          (entry) =>
+            entry.category === CASH_CATEGORY_ADVANCE_SALARY &&
+            entry.direction !== 'in' &&
+            entry.approvalStatus !== 'rejected' &&
+            entry.employeeName?.trim().toLowerCase() === key
+        )
+        .map((entry) => ({ id: entry.id, date: entry.date, kind: 'Advance given', note: entry.note ?? '', given: entry.amount, adjusted: 0 })),
+      ...expenses
+        .filter(
+          (expense) =>
+            (expense.advanceAdjusted ?? 0) > 0 &&
+            expense.approvalStatus !== 'rejected' &&
+            expense.employeeName?.trim().toLowerCase() === key
+        )
+        .map((expense) => ({
+          id: expense.id,
+          date: expense.date.slice(0, 10),
+          kind: 'Deducted from salary',
+          note: expense.note,
+          given: 0,
+          adjusted: expense.advanceAdjusted ?? 0,
+        })),
+    ].sort((left, right) => left.date.localeCompare(right.date))
+    let balance = 0
+    return movements.map((movement) => {
+      balance += movement.given - movement.adjusted
+      return { ...movement, balance }
+    })
+  }, [data?.cashMaintenance, expenses, selectedAdvanceEmployee])
   const [salaryNameQuery, setSalaryNameQuery] = useState('')
   const filteredSalaryTotals = useMemo(() => {
     const query = salaryNameQuery.trim().toLowerCase()
@@ -324,6 +389,10 @@ export default function ExpensesPage() {
         date: expenseForm.date,
         paymentMethod: expenseForm.paymentMethod,
         employeeName: expenseForm.category === EXPENSE_SALARY_CATEGORY ? expenseForm.employeeName.trim() || undefined : undefined,
+        advanceAdjusted:
+          expenseForm.category === EXPENSE_SALARY_CATEGORY && expenseForm.employeeName.trim()
+            ? Number(expenseForm.advanceAdjusted) || undefined
+            : undefined,
         loanAccountId:
           expenseForm.category === EXPENSE_LOAN_REPAYMENT_CATEGORY ? expenseForm.loanAccountId || undefined : undefined,
       }
@@ -350,6 +419,7 @@ export default function ExpensesPage() {
       date: expense.date.slice(0, 10),
       paymentMethod: expense.paymentMethod ?? 'cash',
       employeeName: expense.employeeName ?? '',
+      advanceAdjusted: expense.advanceAdjusted ? String(expense.advanceAdjusted) : '',
       loanAccountId: expense.loanAccountId ?? '',
     })
   }
@@ -524,7 +594,7 @@ export default function ExpensesPage() {
                     <Select
                       value={expenseForm.category}
                       onValueChange={(value) =>
-                        setExpenseForm((current) => ({ ...current, category: value, employeeName: '', loanAccountId: '' }))
+                        setExpenseForm((current) => ({ ...current, category: value, employeeName: '', advanceAdjusted: '', loanAccountId: '' }))
                       }
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
@@ -568,6 +638,37 @@ export default function ExpensesPage() {
                       </datalist>
                     </div>
                   ) : null}
+                  {expenseForm.category === EXPENSE_SALARY_CATEGORY &&
+                  expenseForm.employeeName.trim() &&
+                  (formAdvanceOutstanding > 0 || Number(expenseForm.advanceAdjusted) > 0) ? (
+                    <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+                      <p className="text-sm font-medium text-foreground">
+                        অ্যাডভান্স সমন্বয় <span className="font-normal text-muted-foreground">(Advance adjust)</span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        বকেয়া অ্যাডভান্স: <span className="font-semibold text-foreground">{formatCurrency(formAdvanceOutstanding, currency)}</span>
+                        {' '}— বেতন থেকে যত টাকা কাটা হচ্ছে লিখুন। Amount ঘরে শুধু এখন নগদ যা দেয়া হচ্ছে তা লিখুন।
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          max={formAdvanceOutstanding}
+                          value={expenseForm.advanceAdjusted}
+                          onChange={(event) => setExpenseForm((current) => ({ ...current, advanceAdjusted: event.target.value }))}
+                          placeholder="0"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="shrink-0 rounded-xl"
+                          onClick={() => setExpenseForm((current) => ({ ...current, advanceAdjusted: String(formAdvanceOutstanding) }))}
+                        >
+                          Full
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   {expenseForm.category === EXPENSE_LOAN_REPAYMENT_CATEGORY ? (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-foreground">
@@ -592,7 +693,7 @@ export default function ExpensesPage() {
                       </p>
                       <Input
                         type="number"
-                        min="1"
+                        min={expenseForm.category === EXPENSE_SALARY_CATEGORY && Number(expenseForm.advanceAdjusted) > 0 ? '0' : '1'}
                         value={expenseForm.amount}
                         onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))}
                         placeholder="0"
@@ -674,7 +775,14 @@ export default function ExpensesPage() {
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
                           <TableCell className="font-medium">{labelOf(expense.category)}</TableCell>
-                          <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
+                          <TableCell>
+                            {formatCurrency(expense.amount, currency)}
+                            {expense.advanceAdjusted ? (
+                              <p className="text-[11px] text-muted-foreground">
+                                + {formatCurrency(expense.advanceAdjusted, currency)} advance adjusted
+                              </p>
+                            ) : null}
+                          </TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
                           <TableCell>
                             <Badge
@@ -822,7 +930,113 @@ export default function ExpensesPage() {
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
                           <TableCell className="text-muted-foreground">{expense.note || '-'}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(expense.amount, currency)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatCurrency(expense.amount, currency)}
+                            {expense.advanceAdjusted ? (
+                              <p className="text-[11px] text-muted-foreground">
+                                + {formatCurrency(expense.advanceAdjusted, currency)} advance adjusted
+                              </p>
+                            ) : null}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="space-y-4">
+          <SectionHeader
+            icon={Wallet}
+            title="Advance Salary"
+            description="কাকে কত অ্যাডভান্স দেয়া হয়েছে, বেতন থেকে কত কাটা হয়েছে, আর কত বাকি। অ্যাডভান্স দিন Cash Maintenance → Cash Out → অ্যাডভান্স সেলারি থেকে; বেতন দেয়ার সময় উপরের সেলারি ফর্মে কেটে নিন।"
+          />
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="space-y-4 pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Total outstanding:{' '}
+                  <span className="font-semibold text-foreground">{formatCurrency(totalAdvanceOutstanding, currency)}</span>
+                </p>
+                <ExportMenu
+                  filenameBase="advance-salary"
+                  title="Advance Salary"
+                  headers={['Employee', 'Advances', 'Given', 'Deducted', 'Outstanding', 'Last Advance']}
+                  rows={advanceRows.map((row) => [
+                    row.employeeName,
+                    row.advanceCount,
+                    row.given,
+                    row.adjusted,
+                    row.outstanding,
+                    row.lastAdvanceDate,
+                  ])}
+                />
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Employee</TableHead>
+                      <TableHead>Last Advance</TableHead>
+                      <TableHead className="text-right">Given</TableHead>
+                      <TableHead className="text-right">Deducted</TableHead>
+                      <TableHead className="text-right">Outstanding</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {advanceRows.map((row) => (
+                      <TableRow
+                        key={row.employeeName}
+                        className={cn('cursor-pointer', selectedAdvanceEmployee === row.employeeName && 'bg-muted/40')}
+                        onClick={() => setSelectedAdvanceEmployee(row.employeeName === selectedAdvanceEmployee ? '' : row.employeeName)}
+                      >
+                        <TableCell className="font-medium">{row.employeeName}</TableCell>
+                        <TableCell className="text-muted-foreground">{row.lastAdvanceDate ? formatDate(row.lastAdvanceDate) : '-'}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.given, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.adjusted, currency)}</TableCell>
+                        <TableCell className={cn('text-right font-semibold tabular-nums', row.outstanding > 0 && 'text-amber-600')}>
+                          {formatCurrency(row.outstanding, currency)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {advanceRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                          No advance salary given yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {selectedAdvanceEmployee ? (
+                <div className="overflow-x-auto rounded-xl border border-border/60">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Note</TableHead>
+                        <TableHead className="text-right">Given</TableHead>
+                        <TableHead className="text-right">Deducted</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedAdvanceMovements.map((movement) => (
+                        <TableRow key={movement.id}>
+                          <TableCell>{formatDate(movement.date)}</TableCell>
+                          <TableCell>{movement.kind}</TableCell>
+                          <TableCell className="text-muted-foreground">{movement.note || '-'}</TableCell>
+                          <TableCell className="text-right tabular-nums">{movement.given ? formatCurrency(movement.given, currency) : '-'}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {movement.adjusted ? formatCurrency(movement.adjusted, currency) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">{formatCurrency(movement.balance, currency)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

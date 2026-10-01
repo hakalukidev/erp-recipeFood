@@ -13,6 +13,7 @@ import type {
   SaleType,
   UserRecord,
 } from '@/lib/erp/types'
+import { CASH_CATEGORY_ADVANCE_SALARY } from '@/lib/erp/standardChartOfAccounts'
 
 // Legacy fixed Sale type labels — still the fallback for an invoice whose
 // saleType is one of these two literals (pre-dealer-category invoices, or one
@@ -590,10 +591,47 @@ export type ProductSalesReportRow = {
 // (rate-card/page.tsx) — invoices saved before that field existed have no
 // saleType and land in "unclassified" rather than being guessed into either
 // bucket.
-export function buildSalesReportSummary(data: ERPData | null) {
-  const rateCards = toArray(data?.rateCards)
+// Today as YYYY-MM-DD in Bangladesh time — toISOString() is UTC, which is
+// still the previous day between 00:00 and 06:00 in Dhaka.
+const dhakaDateFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' })
+export function dhakaTodayIso() {
+  return dhakaDateFormat.format(new Date())
+}
+
+// Date-wise sales reporting — an inclusive YYYY-MM-DD range (either end
+// optional) that scopes every Sales report figure by invoice/return date.
+export type SalesReportDateRange = { from?: string; to?: string }
+
+export function isInDateRange(date: string, range?: SalesReportDateRange) {
+  const day = date.slice(0, 10)
+  if (range?.from && day < range.from) return false
+  if (range?.to && day > range.to) return false
+  return true
+}
+
+export type DateSalesReportRow = {
+  date: string
+  invoiceCount: number
+  totalAmount: number
+  returnAmount: number
+  netAmount: number
+}
+
+export function buildSalesReportSummary(data: ERPData | null, range?: SalesReportDateRange) {
+  const rateCards = toArray(data?.rateCards).filter((card) => isInDateRange(card.date, range))
   const dealerCategories = toArray(data?.dealerCategories)
-  const productReturns = toArray(data?.productReturns)
+  const productReturns = toArray(data?.productReturns).filter((entry) => isInDateRange(entry.date, range))
+  const dateMap = new Map<string, DateSalesReportRow>()
+
+  function dateRowFor(date: string) {
+    const key = date.slice(0, 10)
+    let row = dateMap.get(key)
+    if (!row) {
+      row = { date: key, invoiceCount: 0, totalAmount: 0, returnAmount: 0, netAmount: 0 }
+      dateMap.set(key, row)
+    }
+    return row
+  }
 
   const bySaleType = { commission: 0, others: 0, unclassified: 0 }
   const dealerMap = new Map<string, DealerSalesReportRow>()
@@ -622,6 +660,10 @@ export function buildSalesReportSummary(data: ERPData | null) {
     const amount = card.dealerRateTotal
     const bucket = !card.saleType ? 'unclassified' : isCommissionSaleType(card.saleType, dealerCategories) ? 'commission' : 'others'
     bySaleType[bucket] += amount
+
+    const dateRow = dateRowFor(card.date)
+    dateRow.invoiceCount += 1
+    dateRow.totalAmount += amount
 
     const dealerRow = dealerRowFor(card.dealerId || card.recipientName, card.recipientName)
     dealerRow.invoiceCount += 1
@@ -658,9 +700,13 @@ export function buildSalesReportSummary(data: ERPData | null) {
     if (entry.returnParty !== 'dealer') continue
     const dealerRow = dealerRowFor(entry.dealerId || entry.recipientName, entry.recipientName)
     dealerRow.returnAmount += entry.dealerRateTotal
+    dateRowFor(entry.date).returnAmount += entry.dealerRateTotal
     totalReturnAmount += entry.dealerRateTotal
   }
   for (const row of dealerMap.values()) {
+    row.netAmount = row.totalAmount - row.returnAmount
+  }
+  for (const row of dateMap.values()) {
     row.netAmount = row.totalAmount - row.returnAmount
   }
 
@@ -674,6 +720,7 @@ export function buildSalesReportSummary(data: ERPData | null) {
     bySaleType,
     dealers: Array.from(dealerMap.values()).sort((a, b) => b.netAmount - a.netAmount),
     products: Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+    dates: Array.from(dateMap.values()).sort((a, b) => b.date.localeCompare(a.date)),
   }
 }
 
@@ -705,9 +752,9 @@ export type CategorySalesReportRow = {
 // glance. A line whose product was deleted, or that was never linked to a
 // Product record at all (productId absent), falls into "Uncategorized"
 // rather than being dropped.
-export function buildCategorySalesReportSummary(data: ERPData | null) {
-  const rateCards = toArray(data?.rateCards)
-  const productReturns = toArray(data?.productReturns)
+export function buildCategorySalesReportSummary(data: ERPData | null, range?: SalesReportDateRange) {
+  const rateCards = toArray(data?.rateCards).filter((card) => isInDateRange(card.date, range))
+  const productReturns = toArray(data?.productReturns).filter((entry) => isInDateRange(entry.date, range))
   const categoryByProductId = new Map(toArray(data?.products).map((product) => [product.id, product.category]))
 
   function categoryFor(item: { productId?: string }) {
@@ -1305,6 +1352,71 @@ export function computeEmployeeSalaryTotals(data: ERPData | null) {
       }
     })
   return Array.from(rows.values()).sort((left, right) => right.total - left.total)
+}
+
+// Advance Salary tracker (2026-10-02 client request): per employee, every
+// Advance Salary cash-out entry (CashMaintenanceRecord.employeeName) against
+// every salary expense's advanceAdjusted — what's still to be deducted from
+// a future salary. Grouped by the same trimmed, case-insensitive name as
+// computeEmployeeSalaryTotals. Rejected entries never happened, so they're
+// left out; pending ones count so an advance can't be adjusted twice while
+// it waits for approval. `excludeExpenseId` drops one salary expense so the
+// expense form can show the outstanding amount while that expense is edited.
+export type EmployeeAdvanceRow = {
+  employeeName: string
+  given: number
+  adjusted: number
+  outstanding: number
+  advanceCount: number
+  lastAdvanceDate: string
+}
+
+export function computeEmployeeAdvances(data: ERPData | null, excludeExpenseId?: string) {
+  const rows = new Map<string, EmployeeAdvanceRow>()
+  function rowFor(name: string) {
+    const employeeName = name.trim()
+    const key = employeeName.toLowerCase()
+    let row = rows.get(key)
+    if (!row) {
+      row = { employeeName, given: 0, adjusted: 0, outstanding: 0, advanceCount: 0, lastAdvanceDate: '' }
+      rows.set(key, row)
+    }
+    return row
+  }
+  toArray(data?.cashMaintenance)
+    .filter(
+      (entry) =>
+        entry.category === CASH_CATEGORY_ADVANCE_SALARY &&
+        entry.direction !== 'in' &&
+        entry.employeeName?.trim() &&
+        entry.approvalStatus !== 'rejected'
+    )
+    .forEach((entry) => {
+      const row = rowFor(entry.employeeName!)
+      row.given += entry.amount
+      row.advanceCount += 1
+      if (entry.date > row.lastAdvanceDate) row.lastAdvanceDate = entry.date
+    })
+  toArray(data?.expenses)
+    .filter(
+      (expense) =>
+        expense.id !== excludeExpenseId &&
+        (expense.advanceAdjusted ?? 0) > 0 &&
+        expense.employeeName?.trim() &&
+        expense.approvalStatus !== 'rejected'
+    )
+    .forEach((expense) => {
+      rowFor(expense.employeeName!).adjusted += expense.advanceAdjusted ?? 0
+    })
+  return Array.from(rows.values())
+    .map((row) => ({ ...row, outstanding: row.given - row.adjusted }))
+    .sort((left, right) => right.outstanding - left.outstanding || left.employeeName.localeCompare(right.employeeName))
+}
+
+export function employeeAdvanceOutstanding(data: ERPData | null, employeeName: string, excludeExpenseId?: string) {
+  const key = employeeName.trim().toLowerCase()
+  if (!key) return 0
+  return computeEmployeeAdvances(data, excludeExpenseId).find((row) => row.employeeName.toLowerCase() === key)?.outstanding ?? 0
 }
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {

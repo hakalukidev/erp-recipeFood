@@ -199,6 +199,34 @@ export const CASH_CATEGORY_NEW_MARKET_INVESTMENT = 'নতুন মার্ক
 // Was excluded from all totals until 2026-09-29 (client spec §20–21).
 export const DIRECT_EXPENSE_CATEGORY = 'সরাসরি এক্সপেন্স (হিসাব মেলানোর জন্য)'
 
+// Damage (ড্যামেজ) on the Cash Maintenance chart (2026-10-02 client request)
+// — cash paid out for damaged goods. Unlike the rest of
+// CASH_MAINTENANCE_CATEGORIES it is a real loss, so it is treated like
+// DIRECT_EXPENSE_CATEGORY: cash out everywhere AND a P&L expense in Company
+// Earnings / Fund-Cash Flow (isDirectExpense). It can optionally be linked
+// to the Product Return it settles (CashMaintenanceRecord.productReturnId),
+// which then shows the cash damage on the Product Returns list. Same Bangla
+// name as the retired Expense category, so old Damage expenses and new
+// Damage cash entries group together in the by-category totals.
+export const CASH_CATEGORY_DAMAGE = 'ড্যামেজ'
+
+// Advance Salary (অ্যাডভান্স সেলারি) on the Cash Out side (2026-10-02 client
+// request) — salary handed to an employee ahead of payday, tagged with the
+// employee's name (CashMaintenanceRecord.employeeName). Counted as cash out
+// and as a P&L salary cost the day it's paid, so when that month's salary
+// is recorded on the Finance page only the remaining cash goes in `amount`
+// and the deducted part goes in ExpenseRecord.advanceAdjusted — nothing is
+// counted twice. Outstanding per employee = advances − adjusted
+// (computeEmployeeAdvances in utils.ts).
+export const CASH_CATEGORY_ADVANCE_SALARY = 'অ্যাডভান্স সেলারি'
+
+// Cash-out categories that also count as a P&L expense.
+export const CASH_PNL_EXPENSE_CATEGORIES: readonly string[] = [
+  DIRECT_EXPENSE_CATEGORY,
+  CASH_CATEGORY_DAMAGE,
+  CASH_CATEGORY_ADVANCE_SALARY,
+]
+
 // The EXPENSE_CATEGORIES entry an expense must carry to be eligible for the
 // per-employee tag (ExpenseRecord.employeeId) that powers the Salary History
 // section of the Finance page.

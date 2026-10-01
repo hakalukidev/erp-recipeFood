@@ -44,9 +44,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import {
+  CASH_CATEGORY_ADVANCE_SALARY,
+  CASH_CATEGORY_DAMAGE,
   CASH_DEFAULT_OUT_CATEGORY,
   CASH_IN_CATEGORIES,
   CASH_MAINTENANCE_CATEGORIES,
+  CASH_PNL_EXPENSE_CATEGORIES,
   CASH_QUICK_CATEGORIES,
   DIRECT_EXPENSE_CATEGORY,
 } from '@/lib/erp/standardChartOfAccounts'
@@ -55,6 +58,7 @@ import {
   computeLoanBalance,
   loanTransactionTypeLabel,
   computeLoanMonthlySchedule,
+  employeeAdvanceOutstanding,
   expenseCategoryLabel,
   formatCurrency,
   formatDate,
@@ -93,7 +97,12 @@ function isBeforeDate(value: string, target: string) {
   return value.slice(0, 10) < target
 }
 
-const CASH_OUT_CATEGORY_OPTIONS: string[] = [...CASH_MAINTENANCE_CATEGORIES, DIRECT_EXPENSE_CATEGORY]
+const CASH_OUT_CATEGORY_OPTIONS: string[] = [
+  ...CASH_MAINTENANCE_CATEGORIES,
+  CASH_CATEGORY_ADVANCE_SALARY,
+  CASH_CATEGORY_DAMAGE,
+  DIRECT_EXPENSE_CATEGORY,
+]
 const CASH_IN_CATEGORY_OPTIONS: string[] = [...CASH_IN_CATEGORIES]
 
 const emptyLoanAccountForm = { memberName: '', phone: '', address: '', balance: '' }
@@ -124,6 +133,8 @@ function newCashForm() {
     amount: '',
     date: todayIso(),
     note: '',
+    productReturnId: '',
+    employeeName: '',
   }
 }
 type CashFormState = ReturnType<typeof newCashForm>
@@ -194,6 +205,25 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     [loanTransactions, data?.expenses]
   )
   const cashEntries = useMemo(() => sortByCreatedAtDesc(toArray(data?.cashMaintenance)), [data?.cashMaintenance])
+  // Product Returns a Damage cash entry can be linked to (newest first).
+  const productReturnOptions = useMemo(
+    () => sortByCreatedAtDesc(toArray(data?.productReturns)).filter((entry) => entry.approvalStatus !== 'rejected'),
+    [data?.productReturns]
+  )
+  // Names already used for salary / advance salary, for the Advance Salary
+  // employee <datalist> (free text — no employee master, see
+  // ExpenseRecord.employeeName).
+  const employeeNameSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...toArray(data?.expenses).map((expense) => expense.employeeName), ...toArray(data?.cashMaintenance).map((entry) => entry.employeeName)]
+            .map((name) => name?.trim())
+            .filter((name): name is string => !!name)
+        )
+      ).sort((left, right) => left.localeCompare(right)),
+    [data?.expenses, data?.cashMaintenance]
+  )
   const investors = useMemo(() => sortByCreatedAtDesc(toArray(data?.investors)), [data?.investors])
   const collections = useMemo(() => toArray(data?.collections), [data?.collections])
   // Expenses (P&L chart) feed the reconciliation check below alongside Cash
@@ -534,6 +564,8 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       amount: String(entry.amount),
       date: entry.date,
       note: entry.note ?? '',
+      productReturnId: entry.productReturnId ?? '',
+      employeeName: entry.employeeName ?? '',
     })
     setCashError(null)
     setCashDialogOpen(true)
@@ -555,6 +587,8 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           amount,
           date: cashForm.date,
           note: cashForm.note || undefined,
+          productReturnId: cashForm.category === CASH_CATEGORY_DAMAGE ? cashForm.productReturnId || undefined : undefined,
+          employeeName: cashForm.category === CASH_CATEGORY_ADVANCE_SALARY ? cashForm.employeeName.trim() || undefined : undefined,
         },
         editingCashId ?? undefined
       )
@@ -726,7 +760,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
         direction,
         source: 'Cash Maintenance',
         category: entry.category,
-        party: '',
+        party: entry.employeeName ?? '',
         note: entry.note ?? '',
         amount: entry.amount,
       })
@@ -1248,13 +1282,15 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
               <ExportMenu
                 filenameBase="cash-maintenance"
                 title="Cash Maintenance Chart"
-                headers={['Date', 'Category', 'Direction', 'Amount', 'Direct Expense', 'Note']}
+                headers={['Date', 'Category', 'Direction', 'Amount', 'P&L Expense', 'Product Return', 'Employee', 'Note']}
                 rows={filteredCashEntries.map((entry) => [
                   entry.date,
                   entry.category,
                   entry.direction === 'in' ? 'Cash In' : 'Cash Out',
                   entry.amount,
                   entry.isDirectExpense ? 'Yes' : 'No',
+                  entry.productReturnNumber ?? '',
+                  entry.employeeName ?? '',
                   entry.note ?? '',
                 ])}
               />
@@ -1345,8 +1381,14 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                         ) : null}
                         {entry.isDirectExpense ? (
                           <Badge variant="outline" className="ml-2 rounded-full text-[10px]">
-                            Direct
+                            {entry.category === CASH_CATEGORY_DAMAGE ? 'Loss' : 'Direct'}
                           </Badge>
+                        ) : null}
+                        {entry.productReturnNumber ? (
+                          <p className="text-[11px] font-normal text-muted-foreground">Return {entry.productReturnNumber}</p>
+                        ) : null}
+                        {entry.employeeName ? (
+                          <p className="text-[11px] font-normal text-muted-foreground">{entry.employeeName}</p>
                         ) : null}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{entry.note || '-'}</TableCell>
@@ -1655,7 +1697,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           <DialogHeader>
             <DialogTitle>{editingCashId ? 'Edit cash entry' : 'Record cash entry'}</DialogTitle>
             <DialogDescription>
-              ক্যাশ ইন টাকা বাড়ায়, ক্যাশ আউট টাকা কমায় — কোনোটাই প্রফিটে হিট করে না।
+              ক্যাশ ইন টাকা বাড়ায়, ক্যাশ আউট টাকা কমায় — ড্যামেজ ও সরাসরি এক্সপেন্স ছাড়া কোনোটাই প্রফিটে হিট করে না।
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1715,7 +1757,61 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   ))}
                 </SelectContent>
               </Select>
+              {cashForm.direction === 'out' && CASH_PNL_EXPENSE_CATEGORIES.includes(cashForm.category) ? (
+                <p className="text-xs text-muted-foreground">এই খাতের টাকা ক্যাশ আউট এবং খরচ (Company Earnings / প্রফিট থেকে বাদ) — দুটোতেই হিসাব হবে।</p>
+              ) : null}
             </div>
+            {cashForm.direction === 'out' && cashForm.category === CASH_CATEGORY_ADVANCE_SALARY ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  Employee<span className="ml-0.5 text-rose-500">*</span>
+                </p>
+                <Input
+                  list="advance-employee-suggestions"
+                  value={cashForm.employeeName}
+                  onChange={(event) => setCashForm((current) => ({ ...current, employeeName: event.target.value }))}
+                  placeholder="কাকে অ্যাডভান্স দেয়া হচ্ছে"
+                />
+                <datalist id="advance-employee-suggestions">
+                  {employeeNameSuggestions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                {cashForm.employeeName.trim() ? (
+                  <p className="text-xs text-muted-foreground">
+                    আগের বকেয়া অ্যাডভান্স:{' '}
+                    {formatCurrency(
+                      employeeAdvanceOutstanding(data ?? null, cashForm.employeeName) -
+                        (editingCashId && data?.cashMaintenance?.[editingCashId]?.employeeName?.trim().toLowerCase() ===
+                        cashForm.employeeName.trim().toLowerCase()
+                          ? data.cashMaintenance[editingCashId].amount
+                          : 0),
+                      currency
+                    )}{' '}
+                    — পরে বেতন দেয়ার সময় Finance পেজের সেলারি ফর্মে এটা কেটে নেয়া যাবে।
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            {cashForm.direction === 'out' && cashForm.category === CASH_CATEGORY_DAMAGE ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">Linked Product Return (optional)</p>
+                <Select
+                  value={cashForm.productReturnId || 'none'}
+                  onValueChange={(value) => setCashForm((current) => ({ ...current, productReturnId: value === 'none' ? '' : value }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No link</SelectItem>
+                    {productReturnOptions.map((entry) => (
+                      <SelectItem key={entry.id} value={entry.id}>
+                        {entry.returnNumber} — {entry.recipientName} ({formatDate(entry.date)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Amount</label>

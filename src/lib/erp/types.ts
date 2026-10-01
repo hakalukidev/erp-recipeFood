@@ -1431,6 +1431,12 @@ export type ExpenseRecord = {
   // record saved before that change and is otherwise unused.
   employeeId?: string
   employeeName?: string
+  // Salary entries only (2026-10-02 client request): part of this month's
+  // salary settled against an earlier Advance Salary cash entry instead of
+  // being paid in cash now. `amount` stays the cash actually paid — the
+  // advance already counted as cash out and P&L when it was handed over —
+  // so this only reduces the employee's outstanding advance.
+  advanceAdjusted?: number
   // Only meaningful on an EXPENSE_LOAN_REPAYMENT_CATEGORY entry (2026-09-12
   // client request): which loan account this repayment was against.
   // loanTransactionId is the matching LoanTransactionRecord (type
@@ -1575,6 +1581,14 @@ export type CashMaintenanceRecord = RecordApprovalFields & {
   note?: string
   direction?: CashDirection
   isDirectExpense?: boolean
+  // Damage entries only (CASH_CATEGORY_DAMAGE): the Product Return this cash
+  // damage settles, plus its number copied in at save time for display.
+  productReturnId?: string
+  productReturnNumber?: string
+  // Advance Salary entries only (CASH_CATEGORY_ADVANCE_SALARY): who got the
+  // advance — free text, same as ExpenseRecord.employeeName, so the two
+  // match up by name in computeEmployeeAdvances (utils.ts).
+  employeeName?: string
   createdBy: string
   createdByName: string
   createdAt: string
@@ -1586,6 +1600,8 @@ export type CashMaintenanceInput = {
   amount: number
   date?: string
   note?: string
+  productReturnId?: string
+  employeeName?: string
 }
 
 // Section 37 (Budget Management): a plan for one expense category over one
@@ -1880,6 +1896,9 @@ export type ExpenseInput = {
   // Only kept when category is EXPENSE_SALARY_CATEGORY — free text (no
   // separate employee master exists), see ExpenseRecord.employeeName.
   employeeName?: string
+  // Only kept on a salary entry with an employee — see
+  // ExpenseRecord.advanceAdjusted.
+  advanceAdjusted?: number
   // Only kept when category is EXPENSE_LOAN_REPAYMENT_CATEGORY — see
   // ExpenseRecord.loanAccountId.
   loanAccountId?: string

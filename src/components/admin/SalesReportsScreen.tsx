@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { BadgePercent, FileBarChart, Package, Printer, Receipt, Search, Store, Tags } from 'lucide-react'
+import { BadgePercent, CalendarDays, FileBarChart, Package, Printer, Receipt, Search, Store, Tags } from 'lucide-react'
 
 import { ExportMenu } from './ExportMenu'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +18,15 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { buildCategorySalesReportSummary, buildSalesReportSummary, formatCurrency, type CategorySalesReportRow } from '@/lib/erp/utils'
+import {
+  buildCategorySalesReportSummary,
+  buildSalesReportSummary,
+  dhakaTodayIso,
+  formatCurrency,
+  formatDate,
+  type CategorySalesReportRow,
+  type SalesReportDateRange,
+} from '@/lib/erp/utils'
 import type { SaleType } from '@/lib/erp/types'
 
 const SALE_TYPE_LABELS: Record<SaleType, string> = {
@@ -51,7 +59,7 @@ function openPrintWindow(html: string) {
 // category instead of per line item, with the Depot's and the Company's
 // profit for that category shown the same way the Company Voucher highlights
 // Usable money / Depot Net Profit.
-function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
+function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[], periodLabel: string) {
   const totals = categories.reduce(
     (sum, row) => ({
       qty: sum.qty + row.qty,
@@ -105,6 +113,7 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
         <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
         <p class="subtitle">Total Sales Invoice — by Category</p>
+        <p class="company-meta">Period: ${escapeHtml(periodLabel)}</p>
         <table class="doc">
           <thead>
             <tr>
@@ -146,8 +155,36 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[]) {
 export function SalesReportsContent() {
   const { data, classifyRateCardSaleType } = useERP()
   const currency = data?.settings.currency
-  const summary = useMemo(() => buildSalesReportSummary(data), [data])
-  const categorySummary = useMemo(() => buildCategorySalesReportSummary(data), [data])
+  // Date-wise reporting — every figure on this tab (stat cards, dealer,
+  // product, category and date-wise tables) is scoped to this range. Both
+  // ends empty = all time.
+  const [fromDate, setFromDate] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [toDate, setToDate] = useState(() => dhakaTodayIso())
+  const range = useMemo<SalesReportDateRange>(() => ({ from: fromDate || undefined, to: toDate || undefined }), [fromDate, toDate])
+  const periodLabel =
+    fromDate && toDate
+      ? `${formatDate(fromDate)} – ${formatDate(toDate)}`
+      : fromDate
+        ? `From ${formatDate(fromDate)}`
+        : toDate
+          ? `Up to ${formatDate(toDate)}`
+          : 'All time'
+  const summary = useMemo(() => buildSalesReportSummary(data, range), [data, range])
+  const categorySummary = useMemo(() => buildCategorySalesReportSummary(data, range), [data, range])
+
+  function applyPreset(preset: 'today' | 'month' | 'all') {
+    const today = dhakaTodayIso()
+    if (preset === 'today') {
+      setFromDate(today)
+      setToDate(today)
+    } else if (preset === 'month') {
+      setFromDate(`${today.slice(0, 7)}-01`)
+      setToDate(today)
+    } else {
+      setFromDate('')
+      setToDate('')
+    }
+  }
 
   const [dealerQuery, setDealerQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
@@ -229,6 +266,24 @@ export function SalesReportsContent() {
 
   return (
       <div className="space-y-6">
+        <Card className="border-border/70 shadow-sm">
+          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Report period:</span>
+              <span className="text-muted-foreground">{periodLabel}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input className="w-full sm:w-40" type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} aria-label="From date" />
+              <span className="text-sm text-muted-foreground">to</span>
+              <Input className="w-full sm:w-40" type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} aria-label="To date" />
+              <Button variant="outline" size="sm" onClick={() => applyPreset('today')}>Today</Button>
+              <Button variant="outline" size="sm" onClick={() => applyPreset('month')}>This month</Button>
+              <Button variant="outline" size="sm" onClick={() => applyPreset('all')}>All time</Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
@@ -286,6 +341,72 @@ export function SalesReportsContent() {
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
+              <CardTitle>Date-wise sales report</CardTitle>
+              <CardDescription>Invoiced sales, dealer returns and net sales for each day in the selected period.</CardDescription>
+            </div>
+            <ExportMenu
+              filenameBase="date-wise-sales-report"
+              title={`Date-wise Sales Report (${periodLabel})`}
+              headers={['Date', 'Invoices', 'Sales', 'Return Product', 'Net Sale Amount']}
+              rows={[
+                ...summary.dates.map((row) => [
+                  formatDate(row.date),
+                  row.invoiceCount,
+                  row.totalAmount.toFixed(2),
+                  row.returnAmount.toFixed(2),
+                  row.netAmount.toFixed(2),
+                ]),
+                ['Total', summary.totalInvoices, summary.totalAmount.toFixed(2), summary.totalReturnAmount.toFixed(2), summary.netAmount.toFixed(2)],
+              ]}
+            />
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Invoices</TableHead>
+                    <TableHead className="text-right">Sales</TableHead>
+                    <TableHead className="text-right">Return Product</TableHead>
+                    <TableHead className="text-right">Net Sale Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {summary.dates.map((row) => (
+                    <TableRow key={row.date}>
+                      <TableCell className="font-medium">{formatDate(row.date)}</TableCell>
+                      <TableCell className="text-right">{row.invoiceCount.toLocaleString('en-BD')}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.returnAmount, currency)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatCurrency(row.netAmount, currency)}</TableCell>
+                    </TableRow>
+                  ))}
+                  {summary.dates.length > 0 ? (
+                    <TableRow className="bg-muted/40 font-semibold">
+                      <TableCell>Total</TableCell>
+                      <TableCell className="text-right">{summary.totalInvoices.toLocaleString('en-BD')}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(summary.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(summary.totalReturnAmount, currency)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(summary.netAmount, currency)}</TableCell>
+                    </TableRow>
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                        <CalendarDays className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                        No sales in this period.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
               <CardTitle>Dealer-wise sales report</CardTitle>
               <CardDescription>Search a dealer to see their total invoiced sales, split by sale type.</CardDescription>
             </div>
@@ -301,7 +422,7 @@ export function SalesReportsContent() {
               </div>
               <ExportMenu
                 filenameBase="dealer-sales-report"
-                title="Dealer-wise Sales Report"
+                title={`Dealer-wise Sales Report (${periodLabel})`}
                 headers={['Dealer', 'Invoices', 'Commission-based', 'Others', 'Unclassified', 'Return Product', 'Net Sale Amount']}
                 rows={filteredDealers.map((row) => [
                   row.dealerName,
@@ -349,7 +470,7 @@ export function SalesReportsContent() {
                     <TableRow>
                       <TableCell colSpan={hasUnclassified ? 7 : 6} className="py-10 text-center text-sm text-muted-foreground">
                         <Store className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                        {summary.dealers.length === 0 ? 'No invoiced sales yet.' : 'No dealer matches this search.'}
+                        {summary.dealers.length === 0 ? 'No invoiced sales in this period.' : 'No dealer matches this search.'}
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -363,7 +484,7 @@ export function SalesReportsContent() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Product-wise sales report</CardTitle>
-              <CardDescription>Total quantity and amount sold per product, across every invoice.</CardDescription>
+              <CardDescription>Total quantity and amount sold per product in the selected period.</CardDescription>
             </div>
             <div className="flex gap-3">
               <div className="relative">
@@ -377,7 +498,7 @@ export function SalesReportsContent() {
               </div>
               <ExportMenu
                 filenameBase="product-sales-report"
-                title="Product-wise Sales Report"
+                title={`Product-wise Sales Report (${periodLabel})`}
                 headers={['Product', 'Quantity sold (pcs)', 'Total sale amount']}
                 rows={filteredProducts.map((row) => [row.productName, row.qty, row.totalAmount.toFixed(2)])}
               />
@@ -405,7 +526,7 @@ export function SalesReportsContent() {
                     <TableRow>
                       <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
                         <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                        {summary.products.length === 0 ? 'No invoiced sales yet.' : 'No product matches this search.'}
+                        {summary.products.length === 0 ? 'No invoiced sales in this period.' : 'No product matches this search.'}
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -436,7 +557,7 @@ export function SalesReportsContent() {
               </div>
               <Button
                 variant="outline"
-                onClick={() => openPrintWindow(buildCategoryInvoiceHtml(filteredCategories))}
+                onClick={() => openPrintWindow(buildCategoryInvoiceHtml(filteredCategories, periodLabel))}
                 disabled={filteredCategories.length === 0}
               >
                 <Printer className="mr-2 h-4 w-4" />
@@ -444,7 +565,7 @@ export function SalesReportsContent() {
               </Button>
               <ExportMenu
                 filenameBase="category-sales-report"
-                title="Category-wise Sales Report"
+                title={`Category-wise Sales Report (${periodLabel})`}
                 headers={['Category', 'Quantity sold (pcs)', 'Total sale amount', 'Depot profit', 'Company profit']}
                 rows={filteredCategories.map((row) => [
                   row.category,
@@ -484,7 +605,7 @@ export function SalesReportsContent() {
                     <TableRow>
                       <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                         <Tags className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                        {categorySummary.categories.length === 0 ? 'No invoiced sales yet.' : 'No category matches this search.'}
+                        {categorySummary.categories.length === 0 ? 'No invoiced sales in this period.' : 'No category matches this search.'}
                       </TableCell>
                     </TableRow>
                   ) : null}

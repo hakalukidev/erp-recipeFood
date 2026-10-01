@@ -61,6 +61,7 @@ import type {
 import {
   computeDiscountProductRates,
   createId,
+  dhakaTodayIso,
   formatDate,
   isCommissionSaleType,
   isTradeSalesType,
@@ -910,7 +911,7 @@ export default function RateCardPage() {
   const [query, setQuery] = useState('')
   // Invoice list defaults to the current month (all of that month's
   // invoices); clearing the month input shows every month.
-  const [listMonth, setListMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [listMonth, setListMonth] = useState(() => dhakaTodayIso().slice(0, 7))
   const [dateSort, setDateSort] = useState<'desc' | 'asc'>('desc')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)

@@ -115,7 +115,9 @@ import type {
 import {
   CASH_CATEGORY_LOAN_REPAYMENT,
   CASH_CATEGORY_NEW_MARKET_INVESTMENT,
-  DIRECT_EXPENSE_CATEGORY,
+  CASH_CATEGORY_ADVANCE_SALARY,
+  CASH_CATEGORY_DAMAGE,
+  CASH_PNL_EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LEDGER_ACCOUNT,
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
   EXPENSE_SALARY_CATEGORY,
@@ -127,6 +129,7 @@ import {
   computePackWeightKg,
   computeVendorDue,
   createId,
+  employeeAdvanceOutstanding,
   getPermissions,
   getProductStatus,
   hasPermission as hasPermissionCheck,
@@ -1147,6 +1150,8 @@ function normalizeCashMaintenanceInput(input: CashMaintenanceInput) {
     amount: Math.max(input.amount ?? 0, 0),
     date: input.date?.trim() || new Date().toISOString().slice(0, 10),
     note: input.note?.trim() ?? '',
+    productReturnId: input.productReturnId?.trim() ?? '',
+    employeeName: input.employeeName?.trim() ?? '',
   }
 }
 
@@ -3423,6 +3428,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Category is required.')
     }
 
+    const isDamage = normalized.direction === 'out' && normalized.category === CASH_CATEGORY_DAMAGE
+    const linkedReturn = isDamage && normalized.productReturnId ? data.productReturns[normalized.productReturnId] : undefined
+    if (isDamage && normalized.productReturnId && !linkedReturn) {
+      throw new Error('Linked product return not found.')
+    }
+
+    const isAdvanceSalary = normalized.direction === 'out' && normalized.category === CASH_CATEGORY_ADVANCE_SALARY
+    if (isAdvanceSalary && !normalized.employeeName) {
+      throw new Error('Employee name is required for an advance salary entry.')
+    }
+
     if (normalized.amount <= 0) {
       throw new Error('Amount must be greater than zero.')
     }
@@ -3437,7 +3453,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount: normalized.amount,
       date: normalized.date,
       note: normalized.note,
-      isDirectExpense: normalized.direction === 'out' && normalized.category === DIRECT_EXPENSE_CATEGORY,
+      isDirectExpense: normalized.direction === 'out' && CASH_PNL_EXPENSE_CATEGORIES.includes(normalized.category),
+      ...(linkedReturn ? { productReturnId: linkedReturn.id, productReturnNumber: linkedReturn.returnNumber } : {}),
+      ...(isAdvanceSalary ? { employeeName: normalized.employeeName } : {}),
       ...pendingApprovalFields(currentUser, now),
       createdBy: existingRecord?.createdBy ?? currentUser.id,
       createdByName: existingRecord?.createdByName ?? currentUser.name,
@@ -4711,10 +4729,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Expense category is required.')
     }
 
-    if (input.amount <= 0) {
-      throw new Error('Expense amount must be greater than zero.')
-    }
-
     const db = getDatabaseOrThrow()
     const existingExpense = expenseId ? data.expenses[expenseId] : null
     const id = existingExpense?.id ?? createId('expense')
@@ -4727,6 +4741,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // ExpenseRecord.employeeName in types.ts.
     const employeeName =
       category === EXPENSE_SALARY_CATEGORY && input.employeeName?.trim() ? input.employeeName.trim() : undefined
+    // Part of this salary deducted from the employee's outstanding Advance
+    // Salary (see ExpenseRecord.advanceAdjusted) — capped at what's still
+    // outstanding, not counting this expense's own earlier adjustment.
+    const advanceAdjusted = employeeName ? Math.max(input.advanceAdjusted ?? 0, 0) : 0
+    if (advanceAdjusted > 0) {
+      const outstanding = employeeAdvanceOutstanding(data, employeeName!, existingExpense?.id)
+      if (advanceAdjusted > outstanding + 0.005) {
+        throw new Error(`Advance adjustment is more than ${employeeName}'s outstanding advance (${outstanding}).`)
+      }
+    }
+    // A salary fully covered by the advance pays no cash now (amount 0).
+    if (input.amount < 0 || (input.amount === 0 && advanceAdjusted <= 0)) {
+      throw new Error('Expense amount must be greater than zero.')
+    }
     // Only an EXPENSE_LOAN_REPAYMENT_CATEGORY entry can carry the loan tag
     // (2026-09-12 client request) — see the ExpenseRecord.loanAccountId
     // comment in types.ts for why this also auto-posts a LoanTransactionRecord.
@@ -4756,6 +4784,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       approvedByName: existingExpense?.approvedByName ?? '',
       approvedAt: existingExpense?.approvedAt ?? '',
       ...(employeeName ? { employeeName } : {}),
+      ...(advanceAdjusted > 0 ? { advanceAdjusted } : {}),
       ...(loanAccount
         ? { loanAccountId: loanAccount.id, loanMemberName: loanAccount.memberName, loanTransactionId: loanTxnId ?? undefined }
         : {}),
@@ -6664,6 +6693,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const updates: Record<string, unknown> = { [`productReturns/${productReturnId}`]: null }
+    // Damage cash entries linked to this return (productReturnId) are left
+    // as-is: the cash was really paid out, and touching cashMaintenance here
+    // would need finance:edit on top of the return's own delete permission.
     // Give the invoice back whatever due this return had credited off it.
     applyReturnDueAdjustment(updates, productReturn, { returnParty: productReturn.returnParty })
 

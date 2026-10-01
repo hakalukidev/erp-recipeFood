@@ -19,12 +19,16 @@ type CompanyEarningsChartProps = {
   bare?: boolean
 }
 
+// Compact Y-axis ticks (800K, 1.2M) so large BDT totals fit a narrow axis
+// instead of being clipped on the left edge.
+const compactTick = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
+
 const chart = (data: EarningExpenseRow[], xKey: string, currency?: string) => (
   <ResponsiveContainer width="100%" height="100%">
-    <BarChart data={data}>
+    <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
       <CartesianGrid strokeDasharray="3 3" vertical={false} />
       <XAxis dataKey={xKey} tickLine={false} axisLine={false} />
-      <YAxis tickLine={false} axisLine={false} />
+      <YAxis tickLine={false} axisLine={false} width={44} tickFormatter={(value: number) => compactTick.format(value)} />
       <Tooltip formatter={(value: number) => formatCurrency(value, currency)} />
       <Legend />
       <Bar dataKey="earning" name="Earning" fill="hsl(var(--chart-2))" radius={[8, 8, 0, 0]} />

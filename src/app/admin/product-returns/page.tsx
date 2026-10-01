@@ -458,6 +458,16 @@ export default function ProductReturnsPage() {
   const dealerCategories = useMemo(() => toArray(data?.dealerCategories), [data?.dealerCategories])
   const rateCards = useMemo(() => toArray(data?.rateCards), [data?.rateCards])
   const productReturns = useMemo(() => sortByCreatedAtDesc(toArray(data?.productReturns)), [data?.productReturns])
+  // Cash paid out as Damage on the Cash Maintenance chart, linked to a return
+  // (CashMaintenanceRecord.productReturnId) — rejected entries left out.
+  const cashDamageByReturnId = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const entry of toArray(data?.cashMaintenance)) {
+      if (!entry.productReturnId || entry.approvalStatus === 'rejected') continue
+      totals.set(entry.productReturnId, (totals.get(entry.productReturnId) ?? 0) + entry.amount)
+    }
+    return totals
+  }, [data?.cashMaintenance])
 
   // Which of the three fixed buckets a dealer's own category (DealerRecord.
   // categoryId) falls into — reuses the same name-matching rules the invoice
@@ -982,6 +992,11 @@ export default function ProductReturnsPage() {
                         {entry.dueAdjustment ? (
                           <p className="text-[11px] text-muted-foreground">
                             {formatAmount(entry.dueAdjustment)} off {entry.invoiceNo} due
+                          </p>
+                        ) : null}
+                        {cashDamageByReturnId.get(entry.id) ? (
+                          <p className="text-[11px] text-muted-foreground">
+                            cash damage paid {formatAmount(cashDamageByReturnId.get(entry.id) ?? 0)}
                           </p>
                         ) : null}
                       </TableCell>
