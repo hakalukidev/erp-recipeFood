@@ -206,7 +206,8 @@ export function hasPermission(data: ERPData | null, user: UserRecord | null, per
 export function buildOperationsOverview(data: ERPData | null) {
   const products = toArray(data?.products)
   const dealers = toArray(data?.dealers)
-  const rateCards = sortByCreatedAtDesc(toArray(data?.rateCards))
+  // Rejected invoices never count toward sales figures (see isCountedEntry).
+  const rateCards = sortByCreatedAtDesc(toArray(data?.rateCards).filter(isCountedEntry))
   const expenses = sortByCreatedAtDesc(toArray(data?.expenses))
 
   const lowStock = products.filter((product) => product.stockQty <= product.minStock)
