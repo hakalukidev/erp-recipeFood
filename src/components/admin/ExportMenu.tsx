@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { exportCsv, exportPdf, exportXlsx } from '@/lib/erp/utils'
+import { exportCsv, exportPdf, exportXlsx, roundExportNumber } from '@/lib/erp/utils'
 
 // ---- Section 82 (Import/Export) ------------------------------------------
 // One "Export" button — Excel / CSV / PDF — for any list screen. Every
@@ -40,7 +40,7 @@ export function ExportMenu({ filenameBase, title, headers, rows, disabled }: Exp
           <FileSpreadsheet className="mr-2 h-4 w-4" />
           Excel (.xlsx)
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => exportCsv(`${filenameBase}.csv`, headers, rows.map((row) => row.map(String)))}>
+        <DropdownMenuItem onClick={() => exportCsv(`${filenameBase}.csv`, headers, rows.map((row) => row.map((value) => String(typeof value === 'number' ? roundExportNumber(value) : value))))}>
           <FileType className="mr-2 h-4 w-4" />
           CSV
         </DropdownMenuItem>

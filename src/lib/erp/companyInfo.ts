@@ -9,3 +9,9 @@ export const COMPANY_EMAIL = 'recipeinfo2020@gmail.com'
 export const COMPANY_HELPLINE = '01350462274'
 // Printed at the bottom of every generated invoice/voucher/challan.
 export const COMPANY_INVOICE_FOOTER_NOTE = 'This is Computer Generated Invoice no need any seal & signature.'
+
+// The company started running its books on this ERP in September 2026, so
+// every opening balance (Daily Cash Book, Fund/Cash Flow report) starts at
+// zero on this date — anything dated earlier (test entries, backdated
+// records) is never carried forward into an opening balance.
+export const BOOKS_START_DATE = '2026-09-01'

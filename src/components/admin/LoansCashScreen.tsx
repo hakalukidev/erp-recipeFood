@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { CashCategoryStatement } from '@/components/admin/CashCategoryStatement'
 import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
@@ -42,6 +43,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { BOOKS_START_DATE } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import {
   CASH_CATEGORY_ADVANCE_SALARY,
@@ -95,6 +97,13 @@ function isSameMonth(value: string, target: string) {
 
 function isBeforeDate(value: string, target: string) {
   return value.slice(0, 10) < target
+}
+
+// Counts toward an opening balance: dated before the period, but not before
+// the books started (BOOKS_START_DATE — opening balance is zero then).
+function isOpeningDate(value: string, periodStart: string) {
+  const date = value.slice(0, 10)
+  return date >= BOOKS_START_DATE && date < periodStart
 }
 
 const CASH_OUT_CATEGORY_OPTIONS: string[] = [
@@ -324,6 +333,13 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   }
 
   async function handleDeleteAccount(account: LoanAccountRecord) {
+    const transactionCount = loanTransactions.filter((entry) => entry.loanAccountId === account.id).length
+    const message = transactionCount
+      ? `Delete ${account.memberName}? This also deletes their ${transactionCount} loan transaction(s) and any cash/expense entries posted from them.`
+      : `Delete ${account.memberName}?`
+    if (!window.confirm(message)) {
+      return
+    }
     try {
       await deleteLoanAccount(account.id)
     } catch (reason) {
@@ -655,28 +671,27 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   // স্থিতি") — derived, not stored, same as every other running balance in
   // this codebase (computeLoanBalance, Budget's Actual, etc.): the sum of
   // every cash-in/cash-out source this card already tracks, for everything
-  // dated strictly before the selected period. Assumes the books start at
-  // zero on the very first transaction on file — if the business actually
-  // had cash on hand before that, Opening Balance here will read low by
-  // that fixed amount for every period, consistently.
+  // dated strictly before the selected period and on/after BOOKS_START_DATE
+  // (1 Sept 2026 — the books start at zero then, client request; earlier-
+  // dated entries never carry into an opening balance).
   const periodStartDate = cashMode === 'daily' ? cashDate : `${cashMonth}-01`
   const openingBalance = useMemo(() => {
     const cashInBefore =
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isOpeningDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0) +
       collectedCashRows
-        .filter((row) => isBeforeDate(row.date, periodStartDate))
+        .filter((row) => isOpeningDate(row.date, periodStartDate))
         .reduce((sum, row) => sum + row.amount, 0) +
       cashEntries
-        .filter((entry) => isCashMaintenanceIn(entry) && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => isCashMaintenanceIn(entry) && isOpeningDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0)
     const cashOutBefore =
       expenses
-        .filter((expense) => isBeforeDate(expense.date, periodStartDate))
+        .filter((expense) => isOpeningDate(expense.date, periodStartDate))
         .reduce((sum, expense) => sum + expense.amount, 0) +
       cashEntries
-        .filter((entry) => isCashMaintenanceOut(entry) && isBeforeDate(entry.date, periodStartDate))
+        .filter((entry) => isCashMaintenanceOut(entry) && isOpeningDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0)
     return cashInBefore - cashOutBefore
   }, [loanTransactions, collectedCashRows, expenses, cashEntries, periodStartDate])
@@ -830,14 +845,26 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           {showCash ? (
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Reconciliation</p>
+              {/* Was "Reconciliation", shown amber as a "mismatch" whenever
+                  in ≠ out — but money in and out are almost never equal in a
+                  real month, so it read as an error when it was just the
+                  period's net cash. */}
+              <p className="text-sm text-muted-foreground">Net Cash Flow — এই সময়ের নিট ক্যাশ</p>
               <p
                 className={cn(
                   'mt-2 text-2xl font-semibold tracking-tight',
-                  isBalanced ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                  reconciliationGap < 0 ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'
                 )}
               >
-                {isBalanced ? 'Balanced' : formatCurrency(reconciliationGap, currency)}
+                {formatCurrency(reconciliationGap, currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {isBalanced
+                  ? 'Cash In = Cash Out'
+                  : reconciliationGap > 0
+                    ? 'খরচের চেয়ে বেশি টাকা এসেছে'
+                    : 'যা এসেছে তার চেয়ে বেশি খরচ হয়েছে'}
+                {' · '}Cash In {formatCurrency(totalCashIn, currency)} − Cash Out {formatCurrency(totalCashOut, currency)}
               </p>
             </CardContent>
           </Card>
@@ -1282,7 +1309,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
               <ExportMenu
                 filenameBase="cash-maintenance"
                 title="Cash Maintenance Chart"
-                headers={['Date', 'Category', 'Direction', 'Amount', 'P&L Expense', 'Product Return', 'Employee', 'Note']}
+                headers={['Date', 'Category', 'Direction', 'Amount', 'P&L Expense', 'Product Return', 'Employee', 'Note', 'Status']}
                 rows={filteredCashEntries.map((entry) => [
                   entry.date,
                   entry.category,
@@ -1292,6 +1319,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   entry.productReturnNumber ?? '',
                   entry.employeeName ?? '',
                   entry.note ?? '',
+                  entry.approvalStatus === 'rejected' ? 'Rejected (not counted)' : entry.approvalStatus === 'pending' ? 'Pending' : 'Approved',
                 ])}
               />
               <Button onClick={openCreateCash}>
@@ -1429,6 +1457,9 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           </CardContent>
         </Card>
 
+        {/* Per-category statement (spec §4) */}
+        <CashCategoryStatement entries={cashEntries} categoryOptions={CASH_OUT_CATEGORY_OPTIONS} currency={currency} />
+
         {/* Reconciliation */}
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1520,12 +1551,12 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             <div
               className={cn(
                 'mt-4 flex items-center justify-between rounded-xl border p-4 text-sm',
-                isBalanced
-                  ? 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
-                  : 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+                reconciliationGap < 0
+                  ? 'border-red-200 bg-red-500/10 text-red-700 dark:border-red-900 dark:text-red-300'
+                  : 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
               )}
             >
-              <span className="font-medium">{isBalanced ? 'Books balanced for this period.' : 'Mismatch found for this period.'}</span>
+              <span className="font-medium">Net Cash Flow (Cash In − Cash Out) — এই সময়ের নিট ক্যাশ</span>
               <span className="tabular-nums font-semibold">{formatCurrency(reconciliationGap, currency)}</span>
             </div>
             <div className="mt-3 flex items-center justify-between rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">

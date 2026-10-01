@@ -3223,16 +3223,40 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Loan member not found.')
     }
 
-    const hasTransactions = Object.values(data.loanTransactions).some((entry) => entry.loanAccountId === loanAccountId)
-    if (hasTransactions) {
-      throw new Error('Loan members with recorded transactions cannot be deleted.')
-    }
+    // Deleting a member cascades to all of their loan transactions, with the
+    // same cleanup deleteLoanTransaction does per entry: the Cash Maintenance
+    // row or Expense (+ reversed ledger lines) a transaction owns goes too.
+    // A transaction owned by an Expense (ExpenseRecord.loanTransactionId) is
+    // removed but the Expense itself stays — it's a real recorded cost.
+    const transactions = Object.values(data.loanTransactions ?? {}).filter((entry) => entry.loanAccountId === loanAccountId)
+    transactions.forEach((transaction) => assertApprovalUnlocked('loanTransactions', transaction))
 
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {
       [`loanAccounts/${loanAccountId}`]: null,
+    }
+    transactions.forEach((transaction) => {
+      updates[`loanTransactions/${transaction.id}`] = null
+      if (transaction.cashMaintenanceId) {
+        updates[`cashMaintenance/${transaction.cashMaintenanceId}`] = null
+      }
+      if (transaction.expenseId) {
+        const active = getActiveLedgerEntries(data.ledgerEntries, transaction.expenseId)
+        Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
+          updates[`ledgerEntries/${entry.id}`] = entry
+        })
+        updates[`expenses/${transaction.expenseId}`] = null
+      }
     })
-    await writeActivity('loan_account_deleted', 'finance', `Deleted loan member ${account.memberName}.`)
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'loan_account_deleted',
+      'finance',
+      transactions.length
+        ? `Deleted loan member ${account.memberName} and ${transactions.length} loan transaction(s).`
+        : `Deleted loan member ${account.memberName}.`
+    )
   }
 
   // A withdrawal raises the loan account's derived balance, a repayment

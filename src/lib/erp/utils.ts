@@ -13,7 +13,9 @@ import type {
   SaleType,
   UserRecord,
 } from '@/lib/erp/types'
+import { COMPANY_ADDRESS, COMPANY_EMAIL, COMPANY_HELPLINE, COMPANY_NAME } from '@/lib/erp/companyInfo'
 import { CASH_CATEGORY_ADVANCE_SALARY } from '@/lib/erp/standardChartOfAccounts'
+import { BOOKS_START_DATE } from '@/lib/erp/companyInfo'
 
 // Legacy fixed Sale type labels — still the fallback for an invoice whose
 // saleType is one of these two literals (pre-dealer-category invoices, or one
@@ -376,8 +378,11 @@ export type FundCashFlowProductRow = { productId: string; productName: string; q
 // counts as cash out like any other since 2026-09-29 (client spec §20–21:
 // it showed in the history but never in the summary/reports) — it used to
 // be excluded as a book-balancing-only entry.
+// Rejected entries count as neither in nor out (same as rejected expenses) —
+// they still show in the entry list with their Rejected tag, but never reach
+// a total, the Cash Book, the reconciliation or any report.
 export function isCashMaintenanceOut(entry: CashMaintenanceRecord) {
-  return entry.direction !== 'in'
+  return entry.direction !== 'in' && entry.approvalStatus !== 'rejected'
 }
 
 // Direct-expense Cash Maintenance rows (DIRECT_EXPENSE_CATEGORY) are also a
@@ -391,7 +396,7 @@ export function directExpenseCashEntries(data: ERPData | null) {
 }
 
 export function isCashMaintenanceIn(entry: CashMaintenanceRecord) {
-  return entry.direction === 'in'
+  return entry.direction === 'in' && entry.approvalStatus !== 'rejected'
 }
 
 export function buildFundCashFlowReport(data: ERPData | null, from: string, to: string) {
@@ -440,7 +445,11 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
     return expenseTotal + cashTotal
   }
 
-  const openingBalance = from ? cashInBetween('', dayBefore(from)).total - cashOutBetween('', dayBefore(from)) : 0
+  // Only cash on or after BOOKS_START_DATE carries into the opening balance —
+  // the books start at zero on that date (see companyInfo.ts).
+  const openingBalance = from
+    ? cashInBetween(BOOKS_START_DATE, dayBefore(from)).total - cashOutBetween(BOOKS_START_DATE, dayBefore(from))
+    : 0
   const inflow = cashInBetween(from, to)
   const outflowTotal = cashOutBetween(from, to)
 
@@ -1335,20 +1344,25 @@ export function computeLoanMonthlySchedule(data: ERPData | null, loanAccountId: 
 // payslip/cheque history. A rejected expense was never actually paid out,
 // so it's excluded here the same way buildCompanyEarningsSummary excludes it
 // from total expense. Grouped by a case-insensitive, trimmed name so "রহিম"
-// and "রহিম " land in the same row.
-export function computeEmployeeSalaryTotals(data: ERPData | null) {
-  const rows = new Map<string, { employeeName: string; total: number; count: number }>()
+// and "রহিম " land in the same row. `month` (YYYY-MM) limits it to salary
+// paid in that month — the Finance page's month-wise Salary History.
+export function computeEmployeeSalaryTotals(data: ERPData | null, month?: string) {
+  const rows = new Map<string, { employeeName: string; total: number; advanceAdjusted: number; count: number }>()
   toArray(data?.expenses)
-    .filter((entry) => entry.employeeName?.trim() && entry.approvalStatus !== 'rejected')
+    .filter(
+      (entry) =>
+        entry.employeeName?.trim() && entry.approvalStatus !== 'rejected' && (!month || entry.date.slice(0, 7) === month)
+    )
     .forEach((entry) => {
       const employeeName = entry.employeeName!.trim()
       const key = employeeName.toLowerCase()
       const existing = rows.get(key)
       if (existing) {
         existing.total += entry.amount
+        existing.advanceAdjusted += entry.advanceAdjusted ?? 0
         existing.count += 1
       } else {
-        rows.set(key, { employeeName, total: entry.amount, count: 1 })
+        rows.set(key, { employeeName, total: entry.amount, advanceAdjusted: entry.advanceAdjusted ?? 0, count: 1 })
       }
     })
   return Array.from(rows.values()).sort((left, right) => right.total - left.total)
@@ -1421,7 +1435,7 @@ export function employeeAdvanceOutstanding(data: ERPData | null, employeeName: s
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {
   const XLSX = await import('xlsx')
-  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...roundExportRows(rows)])
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
   XLSX.writeFile(workbook, filename)
@@ -1467,51 +1481,182 @@ export async function parseSpreadsheetFile(file: File): Promise<{ headers: strin
 // Bengali, covers both Bangla and Latin) from /public and register it with
 // jsPDF only when a PDF export actually runs, so the ~450KB font file never
 // touches the main JS bundle.
-const PDF_FONT_NAME = 'NotoSansBengali'
+// ---- PDF export ------------------------------------------------------------
+// jsPDF draws text glyph-by-glyph with no complex-script shaping, so Bangla
+// came out broken (e.g. "বিক্রয়" printed as "বক্রিয়" — the ি vowel sign was
+// never moved in front of its consonant) and raw floats like
+// -101863.8999999999 went straight into the table. The report is now laid out
+// as an HTML page inside a hidden iframe (the browser shapes Bangla
+// correctly, and the iframe keeps the app's Tailwind/oklch styles away from
+// html2canvas), captured with html2canvas, and cut into A4 pages at row
+// boundaries so no row is ever split across two pages.
 const PDF_FONT_URL = '/fonts/NotoSansBengali.ttf'
-let pdfFontBase64Promise: Promise<string> | null = null
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  let binary = ''
-  const bytes = new Uint8Array(buffer)
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
+// Float noise from summing amounts (0.1 + 0.2 …) → 2 decimals.
+export function roundExportNumber(value: number) {
+  return Math.round(value * 100) / 100
 }
 
-async function loadPdfFontBase64() {
-  if (!pdfFontBase64Promise) {
-    pdfFontBase64Promise = fetch(PDF_FONT_URL)
-      .then((response) => response.arrayBuffer())
-      .then(arrayBufferToBase64)
-  }
-  return pdfFontBase64Promise
+function roundExportRows(rows: (string | number)[][]) {
+  return rows.map((row) => row.map((value) => (typeof value === 'number' ? roundExportNumber(value) : value)))
+}
+
+const pdfMoneyFormat = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const pdfCountFormat = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 })
+const PDF_MONEY_HEADER_PATTERN = /amount|total|balance|due|paid|price|rate|cash|debit|credit|opening|closing|salary|value|cost|profit/i
+
+function escapeHtml(value: string) {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+}
+
+// Opening / Total / Closing lines are shown bold and shaded.
+const PDF_EMPHASIS_PATTERN = /^(opening|closing|total|grand total|net)\b/i
+
+function buildPdfHtml(title: string, headers: string[], rows: (string | number)[][], pageWidthPx: number) {
+  // A column is numeric when every non-empty value in it is a number.
+  const numericColumns = headers.map((_, index) =>
+    rows.some((row) => typeof row[index] === 'number') &&
+    rows.every((row) => row[index] === undefined || row[index] === '' || typeof row[index] === 'number')
+  )
+  // Money columns always show 2 decimals; counts (Entries, Qty …) stay whole.
+  const moneyColumns = headers.map(
+    (header, index) =>
+      numericColumns[index] &&
+      (PDF_MONEY_HEADER_PATTERN.test(header) || rows.some((row) => typeof row[index] === 'number' && !Number.isInteger(row[index])))
+  )
+  const head = headers
+    .map((header, index) => `<th class="${numericColumns[index] ? 'num' : ''}">${escapeHtml(header)}</th>`)
+    .join('')
+  const body = rows
+    .map((row) => {
+      const emphasis = row.some((value) => typeof value === 'string' && PDF_EMPHASIS_PATTERN.test(value.trim()))
+      const isSection = row.filter((value) => value !== '' && value !== undefined).length === 1 && typeof row[0] === 'string' && row[0] !== ''
+      const cells = headers
+        .map((_, index) => {
+          const value = row[index] ?? ''
+          const text =
+            typeof value === 'number'
+              ? (moneyColumns[index] ? pdfMoneyFormat : pdfCountFormat).format(value)
+              : escapeHtml(String(value))
+          const negative = typeof value === 'number' && value < 0 ? ' neg' : ''
+          return `<td class="${numericColumns[index] ? 'num' : ''}${negative}">${text}</td>`
+        })
+        .join('')
+      return `<tr class="${emphasis ? 'em' : ''}${isSection ? ' section' : ''}">${cells}</tr>`
+    })
+    .join('')
+  const generated = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Dhaka',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date())
+
+  return `<!doctype html><html><head><meta charset="utf-8" />
+<style>
+  @font-face { font-family: 'NotoSansBengali'; src: url('${PDF_FONT_URL}') format('truetype'); }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #ffffff; color: #0f172a; }
+  body { width: ${pageWidthPx}px; padding: 36px 40px; font-family: 'NotoSansBengali', 'Noto Sans Bengali', Arial, sans-serif; font-size: 12px; line-height: 1.45; }
+  .letterhead { text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+  .company { font-size: 20px; font-weight: 700; letter-spacing: 0.2px; }
+  .address, .contact { font-size: 11px; color: #475569; }
+  .title-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .title { font-size: 15px; font-weight: 700; }
+  .generated { font-size: 10px; color: #64748b; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #1e293b; color: #ffffff; font-weight: 600; text-align: left; padding: 7px 8px; border: 1px solid #1e293b; }
+  td { padding: 6px 8px; border: 1px solid #e2e8f0; vertical-align: top; }
+  tbody tr:nth-child(even) td { background: #f8fafc; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .neg { color: #b91c1c; }
+  tr.em td { background: #eef2f7 !important; font-weight: 700; }
+  tr.section td { background: #e2e8f0 !important; font-weight: 700; color: #1e293b; }
+  .empty { text-align: center; color: #64748b; padding: 18px; }
+</style></head><body>
+  <div class="letterhead">
+    <div class="company">${escapeHtml(COMPANY_NAME)}</div>
+    <div class="address">${escapeHtml(COMPANY_ADDRESS)}</div>
+    <div class="contact">Helpline: ${escapeHtml(COMPANY_HELPLINE)} · ${escapeHtml(COMPANY_EMAIL)}</div>
+  </div>
+  <div class="title-row"><div class="title">${escapeHtml(title)}</div><div class="generated">Generated ${escapeHtml(generated)}</div></div>
+  <table><thead><tr>${head}</tr></thead><tbody>${
+    body || `<tr><td class="empty" colspan="${headers.length}">No data</td></tr>`
+  }</tbody></table>
+</body></html>`
 }
 
 export async function exportPdf(filename: string, title: string, headers: string[], rows: (string | number)[][]) {
-  const { default: JsPDF } = await import('jspdf')
-  const { default: autoTable } = await import('jspdf-autotable')
-  const doc = new JsPDF({ orientation: rows.length && headers.length > 6 ? 'landscape' : 'portrait' })
+  const [{ default: JsPDF }, { default: html2canvas }] = await Promise.all([import('jspdf'), import('html2canvas')])
+  const landscape = headers.length > 6
+  // A4 at 96 dpi.
+  const pageWidthPx = landscape ? 1123 : 794
+  const pageHeightPx = landscape ? 794 : 1123
 
-  const fontBase64 = await loadPdfFontBase64()
-  doc.addFileToVFS(`${PDF_FONT_NAME}.ttf`, fontBase64)
-  doc.addFont(`${PDF_FONT_NAME}.ttf`, PDF_FONT_NAME, 'normal')
-  doc.addFont(`${PDF_FONT_NAME}.ttf`, PDF_FONT_NAME, 'bold')
-  doc.setFont(PDF_FONT_NAME)
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.cssText = `position:fixed;left:-20000px;top:0;width:${pageWidthPx}px;height:${pageHeightPx}px;border:0;visibility:hidden;`
+  document.body.appendChild(iframe)
 
-  doc.setFontSize(14)
-  doc.text(title, 14, 16)
-  autoTable(doc, {
-    head: [headers],
-    body: rows.map((row) => row.map((value) => String(value))),
-    startY: 22,
-    styles: { font: PDF_FONT_NAME, fontSize: 8 },
-    headStyles: { fillColor: [30, 41, 59], font: PDF_FONT_NAME },
-  })
+  try {
+    const frameDocument = iframe.contentDocument
+    if (!frameDocument) throw new Error('Unable to prepare the PDF.')
+    frameDocument.open()
+    frameDocument.write(buildPdfHtml(title, headers, roundExportRows(rows), pageWidthPx))
+    frameDocument.close()
+    await frameDocument.fonts.load(`12px 'NotoSansBengali'`, 'বাংলা')
+    await frameDocument.fonts.ready
 
-  doc.save(filename)
+    const body = frameDocument.body
+    iframe.style.height = `${body.scrollHeight}px`
+    const scale = 2
+    const canvas = await html2canvas(body, {
+      scale,
+      backgroundColor: '#ffffff',
+      width: pageWidthPx,
+      height: body.scrollHeight,
+      windowWidth: pageWidthPx,
+      windowHeight: body.scrollHeight,
+    })
+
+    // Page breaks only between table rows. Page 1 keeps the body's own top
+    // padding; every later page gets the same margin top and bottom.
+    const margin = 36
+    const rowRects = Array.from(body.querySelectorAll('tr')).map((row) => row.getBoundingClientRect())
+    const slices: Array<{ start: number; end: number }> = []
+    let start = 0
+    let limit = pageHeightPx - margin
+    for (const row of rowRects) {
+      if (row.bottom - start > limit && row.top > start) {
+        slices.push({ start, end: row.top })
+        start = row.top
+        limit = pageHeightPx - margin * 2
+      }
+    }
+    slices.push({ start, end: body.scrollHeight })
+
+    const doc = new JsPDF({ orientation: landscape ? 'landscape' : 'portrait', unit: 'px', format: [pageWidthPx, pageHeightPx], hotfixes: ['px_scaling'] })
+    slices.forEach((slice, index) => {
+      const sliceHeight = Math.max(1, slice.end - slice.start)
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = pageWidthPx * scale
+      pageCanvas.height = sliceHeight * scale
+      const context = pageCanvas.getContext('2d')
+      if (!context) return
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      context.drawImage(canvas, 0, slice.start * scale, pageCanvas.width, pageCanvas.height, 0, 0, pageCanvas.width, pageCanvas.height)
+      if (index > 0) doc.addPage([pageWidthPx, pageHeightPx], landscape ? 'landscape' : 'portrait')
+      const top = index > 0 ? margin : 0
+      doc.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, top, pageWidthPx, sliceHeight)
+      doc.setFontSize(9)
+      doc.setTextColor(100, 116, 139)
+      doc.text(`Page ${index + 1} of ${slices.length}`, pageWidthPx - 40, pageHeightPx - 16, { align: 'right' })
+    })
+
+    doc.save(filename)
+  } finally {
+    iframe.remove()
+  }
 }
 
 // ---- Accounting Module — General Ledger / Trial Balance / Balance Sheet --

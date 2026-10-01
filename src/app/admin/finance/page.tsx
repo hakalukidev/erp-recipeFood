@@ -161,6 +161,13 @@ function isSameMonth(value: string, target: string) {
   return value.slice(0, 7) === target
 }
 
+// "2026-10" → "October 2026"
+function formatMonthLabel(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number)
+  if (!year || !monthIndex) return month
+  return new Date(year, monthIndex - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
 const emptyExpenseForm = {
   category: EXPENSE_CATEGORIES[0] as string,
   amount: '0',
@@ -324,7 +331,10 @@ export default function ExpensesPage() {
   const periodLabel = mode === 'daily' ? formatDate(selectedDate) : selectedMonth
 
   // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
-  const salaryTotals = useMemo(() => computeEmployeeSalaryTotals(data ?? null), [data])
+  // Month-wise (client request): defaults to the current month; clearing the
+  // month input shows the all-time totals.
+  const [salaryMonth, setSalaryMonth] = useState(monthInputValue())
+  const salaryTotals = useMemo(() => computeEmployeeSalaryTotals(data ?? null, salaryMonth || undefined), [data, salaryMonth])
   // ---- Advance Salary tracker (2026-10-02 client request) -----------------
   const advanceRows = useMemo(() => computeEmployeeAdvances(data ?? null), [data])
   const totalAdvanceOutstanding = advanceRows.reduce((sum, row) => sum + row.outstanding, 0)
@@ -373,9 +383,33 @@ export default function ExpensesPage() {
   }, [salaryTotals, salaryNameQuery])
   const [selectedEmployeeName, setSelectedEmployeeName] = useState('')
   const selectedEmployeeEntries = useMemo(
-    () => expenses.filter((expense) => expense.employeeName?.trim().toLowerCase() === selectedEmployeeName.toLowerCase()),
-    [expenses, selectedEmployeeName]
+    () =>
+      expenses
+        .filter(
+          (expense) =>
+            expense.employeeName?.trim().toLowerCase() === selectedEmployeeName.toLowerCase() &&
+            expense.approvalStatus !== 'rejected' &&
+            (!salaryMonth || isSameMonth(expense.date, salaryMonth))
+        )
+        .sort((left, right) => left.date.localeCompare(right.date)),
+    [expenses, selectedEmployeeName, salaryMonth]
   )
+  // The selected employee's salary grouped by month, newest first — shown
+  // when "All months" is picked, so the history reads month by month.
+  const selectedEmployeeMonths = useMemo(() => {
+    const months = new Map<string, { month: string; count: number; total: number; advanceAdjusted: number }>()
+    selectedEmployeeEntries.forEach((expense) => {
+      const month = expense.date.slice(0, 7)
+      const row = months.get(month) ?? { month, count: 0, total: 0, advanceAdjusted: 0 }
+      row.count += 1
+      row.total += expense.amount
+      row.advanceAdjusted += expense.advanceAdjusted ?? 0
+      months.set(month, row)
+    })
+    return Array.from(months.values()).sort((left, right) => right.month.localeCompare(left.month))
+  }, [selectedEmployeeEntries])
+  const salaryPeriodLabel = salaryMonth ? formatMonthLabel(salaryMonth) : 'All months'
+  const salaryMonthTotal = filteredSalaryTotals.reduce((sum, row) => sum + row.total, 0)
 
   async function handleExpenseSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -868,18 +902,43 @@ export default function ExpensesPage() {
           <SectionHeader
             icon={UserCheck}
             title="Salary History"
-            description="Per-employee running total of every সেলারি expense — a quick spot-check against a payslip or cheque history."
+            description="মাস ওয়াইজ সেলারি — pick a month to see who was paid how much that month, or All months for the running total."
           />
           <Card className="border-border/70 shadow-sm">
             <CardContent className="space-y-4 pt-6">
-              <div className="relative sm:max-w-xs">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative w-full sm:max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={salaryNameQuery}
+                    onChange={(event) => setSalaryNameQuery(event.target.value)}
+                    placeholder="Search employee name..."
+                    className="pl-9"
+                  />
+                </div>
                 <Input
-                  value={salaryNameQuery}
-                  onChange={(event) => setSalaryNameQuery(event.target.value)}
-                  placeholder="Search employee name..."
-                  className="pl-9"
+                  className="w-full sm:w-48"
+                  type="month"
+                  value={salaryMonth}
+                  onChange={(event) => setSalaryMonth(event.target.value)}
                 />
+                <Button
+                  type="button"
+                  variant={salaryMonth ? 'outline' : 'secondary'}
+                  onClick={() => setSalaryMonth(salaryMonth ? '' : monthInputValue())}
+                >
+                  {salaryMonth ? 'All months' : 'This month'}
+                </Button>
+                <ExportMenu
+                  filenameBase={`salary-history-${salaryMonth || 'all'}`}
+                  title={`Salary History — ${salaryPeriodLabel}`}
+                  headers={['Employee', 'Entries', 'Salary Paid', 'Advance Adjusted']}
+                  rows={filteredSalaryTotals.map((row) => [row.employeeName, row.count, row.total, row.advanceAdjusted])}
+                />
+                <p className="text-sm text-muted-foreground sm:ml-auto">
+                  {salaryPeriodLabel}:{' '}
+                  <span className="font-semibold text-foreground">{formatCurrency(salaryMonthTotal, currency)}</span>
+                </p>
               </div>
               <div className="overflow-x-auto">
                 <Table>
@@ -887,7 +946,8 @@ export default function ExpensesPage() {
                     <TableRow>
                       <TableHead>Employee</TableHead>
                       <TableHead className="text-right">Entries</TableHead>
-                      <TableHead className="text-right">Total Received</TableHead>
+                      <TableHead className="text-right">Advance Adjusted</TableHead>
+                      <TableHead className="text-right">Salary Paid</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -899,14 +959,19 @@ export default function ExpensesPage() {
                       >
                         <TableCell className="font-medium">{row.employeeName}</TableCell>
                         <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {row.advanceAdjusted ? formatCurrency(row.advanceAdjusted, currency) : '-'}
+                        </TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
                       </TableRow>
                     ))}
                     {filteredSalaryTotals.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
+                        <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
                           {salaryTotals.length === 0
-                            ? 'No salary entries tagged to an employee yet — type a name when recording a সেলারি expense above.'
+                            ? salaryMonth
+                              ? `No salary paid in ${salaryPeriodLabel}.`
+                              : 'No salary entries tagged to an employee yet — type a name when recording a সেলারি expense above.'
                             : 'No employee matches this search.'}
                         </TableCell>
                       </TableRow>
@@ -915,7 +980,34 @@ export default function ExpensesPage() {
                 </Table>
               </div>
 
-              {selectedEmployeeName ? (
+              {selectedEmployeeName && !salaryMonth && selectedEmployeeMonths.length > 0 ? (
+                <div className="overflow-x-auto rounded-xl border border-border/60">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Month</TableHead>
+                        <TableHead className="text-right">Entries</TableHead>
+                        <TableHead className="text-right">Advance Adjusted</TableHead>
+                        <TableHead className="text-right">Salary Paid</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedEmployeeMonths.map((row) => (
+                        <TableRow key={row.month} className="cursor-pointer" onClick={() => setSalaryMonth(row.month)}>
+                          <TableCell className="font-medium">{formatMonthLabel(row.month)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {row.advanceAdjusted ? formatCurrency(row.advanceAdjusted, currency) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(row.total, currency)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : null}
+
+              {selectedEmployeeName && selectedEmployeeEntries.length > 0 ? (
                 <div className="overflow-x-auto rounded-xl border border-border/60">
                   <Table>
                     <TableHeader>
