@@ -76,6 +76,7 @@ import {
   formatDateTime,
   sortByCreatedAtDesc,
   toArray,
+  dhakaTodayIso,
 } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -468,7 +469,7 @@ export default function PurchasePage() {
   const [usageDialogOpen, setUsageDialogOpen] = useState(false)
   const [usageMaterial, setUsageMaterial] = useState<PurchaseMaterialRecord | null>(null)
   const [usageQty, setUsageQty] = useState('0')
-  const [usageDate, setUsageDate] = useState(new Date().toISOString().slice(0, 10))
+  const [usageDate, setUsageDate] = useState(dhakaTodayIso())
   const [usageNote, setUsageNote] = useState('')
 
   const filteredMaterials = useMemo(() => {
@@ -537,7 +538,7 @@ export default function PurchasePage() {
   function openUsageDialog(material: PurchaseMaterialRecord) {
     setUsageMaterial(material)
     setUsageQty('0')
-    setUsageDate(new Date().toISOString().slice(0, 10))
+    setUsageDate(dhakaTodayIso())
     setUsageNote('')
     setFeedback(null)
     setUsageDialogOpen(true)
@@ -647,7 +648,7 @@ export default function PurchasePage() {
   // ---- Production entry --------------------------------------------------------
   const [productionDialogOpen, setProductionDialogOpen] = useState(false)
   const [productionRawMaterialId, setProductionRawMaterialId] = useState('')
-  const [productionDate, setProductionDate] = useState(new Date().toISOString().slice(0, 10))
+  const [productionDate, setProductionDate] = useState(dhakaTodayIso())
   const [productionOutputs, setProductionOutputs] = useState<ProductionOutputDraft[]>([emptyProductionOutput()])
   const [productionNote, setProductionNote] = useState('')
   const [productionSaving, setProductionSaving] = useState(false)
@@ -676,7 +677,7 @@ export default function PurchasePage() {
 
   function openCreateProductionDialog() {
     setProductionRawMaterialId('')
-    setProductionDate(new Date().toISOString().slice(0, 10))
+    setProductionDate(dhakaTodayIso())
     setProductionOutputs([emptyProductionOutput()])
     setProductionNote('')
     setProductionFormError(null)
@@ -757,7 +758,7 @@ export default function PurchasePage() {
   const [purchaseDialogOpen, setPurchaseDialogOpen] = useState(false)
   const [editingPurchase, setEditingPurchase] = useState<PurchaseRecord | null>(null)
   const [purchaseVendorId, setPurchaseVendorId] = useState('')
-  const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10))
+  const [purchaseDate, setPurchaseDate] = useState(dhakaTodayIso())
   const [purchaseLines, setPurchaseLines] = useState<PurchaseLineDraft[]>([emptyPurchaseLine()])
   const [purchasePaid, setPurchasePaid] = useState('0')
   const [purchaseNote, setPurchaseNote] = useState('')
@@ -767,7 +768,7 @@ export default function PurchasePage() {
   const [paymentPurchase, setPaymentPurchase] = useState<PurchaseRecord | null>(null)
   const [editingPayment, setEditingPayment] = useState<VendorPaymentRecord | null>(null)
   const [paymentAmount, setPaymentAmount] = useState('0')
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10))
+  const [paymentDate, setPaymentDate] = useState(dhakaTodayIso())
   const [paymentNote, setPaymentNote] = useState('')
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [paymentHistoryPurchase, setPaymentHistoryPurchase] = useState<PurchaseRecord | null>(null)
@@ -826,7 +827,7 @@ export default function PurchasePage() {
   function openCreatePurchaseDialog() {
     setEditingPurchase(null)
     setPurchaseVendorId('')
-    setPurchaseDate(new Date().toISOString().slice(0, 10))
+    setPurchaseDate(dhakaTodayIso())
     setPurchaseLines([emptyPurchaseLine()])
     setPurchasePaid('0')
     setPurchaseNote('')
@@ -1011,7 +1012,7 @@ export default function PurchasePage() {
     setPaymentPurchase(purchase)
     setEditingPayment(null)
     setPaymentAmount('0')
-    setPaymentDate(new Date().toISOString().slice(0, 10))
+    setPaymentDate(dhakaTodayIso())
     setPaymentNote('')
     setFeedback(null)
     setPaymentDialogOpen(true)

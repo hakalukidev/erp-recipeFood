@@ -32,7 +32,9 @@ import {
   computeEmployeeAdvances,
   computeEmployeeSalaryTotals,
   employeeAdvanceOutstanding,
-  expenseCategoryLabel, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+  expenseCategoryLabel, formatCurrency, formatDate, toArray,
+  dhakaTodayIso,
+} from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const ALL_CATEGORIES = '__all__'
@@ -146,11 +148,11 @@ function buildExpenseReportHtml(
 }
 
 function dateInputValue(date = new Date()) {
-  return date.toISOString().slice(0, 10)
+  return dhakaTodayIso(date)
 }
 
 function monthInputValue(date = new Date()) {
-  return date.toISOString().slice(0, 7)
+  return dhakaTodayIso(date).slice(0, 7)
 }
 
 function isSameDate(value: string, target: string) {

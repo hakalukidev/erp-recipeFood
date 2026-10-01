@@ -53,10 +53,12 @@ import {
   buildBalanceSheet,
   buildGeneralLedger,
   buildTrialBalance,
+  findUnmappedLedgerEntries,
   formatCurrency,
   formatDate,
   sortByCreatedAtDesc,
   toArray,
+  dhakaTodayIso,
 } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -198,7 +200,7 @@ const emptyBankTransactionForm = {
   bankAccountId: '',
   type: 'deposit' as BankTransactionType,
   amount: '',
-  date: new Date().toISOString().slice(0, 10),
+  date: dhakaTodayIso(),
   toBankAccountId: '',
   counterAccountId: '',
   chequeNumber: '',
@@ -329,7 +331,7 @@ export function AccountingScreen() {
   // ---- Journal --------------------------------------------------------------
   const journalEntries = useMemo(() => sortByCreatedAtDesc(toArray(data?.journalEntries)), [data?.journalEntries])
   const [journalDialogOpen, setJournalDialogOpen] = useState(false)
-  const [journalDate, setJournalDate] = useState(new Date().toISOString().slice(0, 10))
+  const [journalDate, setJournalDate] = useState(dhakaTodayIso())
   const [journalNarration, setJournalNarration] = useState('')
   const [journalLines, setJournalLines] = useState<JournalLineDraft[]>([emptyJournalLine(), emptyJournalLine()])
   const [journalSaving, setJournalSaving] = useState(false)
@@ -344,7 +346,7 @@ export function AccountingScreen() {
   }, [journalLines])
 
   function openCreateJournal() {
-    setJournalDate(new Date().toISOString().slice(0, 10))
+    setJournalDate(dhakaTodayIso())
     setJournalNarration('')
     setJournalLines([emptyJournalLine(), emptyJournalLine()])
     setJournalError(null)
@@ -548,6 +550,7 @@ export function AccountingScreen() {
 
   // ---- Trial Balance ----------------------------------------------------
   const trialBalance = useMemo(() => buildTrialBalance(data ?? null), [data])
+  const unmappedLedgerEntries = useMemo(() => findUnmappedLedgerEntries(data ?? null), [data])
   const trialExportHeaders = ['Code', 'Name', 'Type', 'Debit', 'Credit']
   const trialExportRows = useMemo(
     () =>
@@ -989,8 +992,8 @@ export function AccountingScreen() {
             <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader icon={Scale} title="Trial Balance" description={SECTIONS[4].description} />
               <div className="flex flex-wrap items-center gap-3">
-                <Badge variant={Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 1 ? 'outline' : 'destructive'}>
-                  {Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 1 ? 'Balanced' : 'Out of balance'}
+                <Badge variant={Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 0.01 ? 'outline' : 'destructive'}>
+                  {Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 0.01 ? 'Balanced' : 'Out of balance'}
                 </Badge>
                 <ExportMenu filenameBase="trial-balance" title="Trial Balance" headers={trialExportHeaders} rows={trialExportRows} />
                 <Button
@@ -1005,6 +1008,13 @@ export function AccountingScreen() {
               </div>
             </CardHeader>
             <CardContent>
+              {unmappedLedgerEntries.length ? (
+                <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                  {unmappedLedgerEntries.length} ledger {unmappedLedgerEntries.length === 1 ? 'entry is' : 'entries are'} posted to an account
+                  missing from the Chart of Accounts ({Array.from(new Set(unmappedLedgerEntries.map((entry) => entry.account))).join(', ')}) and
+                  can&apos;t be shown here — add that account to the chart.
+                </p>
+              ) : null}
               <div className="overflow-x-auto rounded-2xl border border-border/70">
                 <Table>
                   <TableHeader>

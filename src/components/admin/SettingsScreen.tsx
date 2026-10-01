@@ -103,7 +103,7 @@ export function SettingsScreen() {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${(data.settings.companyName || 'erp').replace(/\s+/g, '-').toLowerCase()}-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.download = `${(data.settings.companyName || 'erp').replace(/\s+/g, '-').toLowerCase()}-backup-${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(new Date())}.json`
     link.click()
     URL.revokeObjectURL(url)
   }

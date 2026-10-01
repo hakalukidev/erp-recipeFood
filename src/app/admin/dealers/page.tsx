@@ -167,6 +167,13 @@ export default function DealersPage() {
   async function handleCreateDepot(typedText: string) {
     const name = typedText.trim()
     if (!name) return
+    // Typing a name that's already a depot picks that depot instead of
+    // creating a second one with the same name.
+    const existing = Object.values(data?.depots ?? {}).find((depot) => depot.name.trim().toLowerCase() === name.toLowerCase())
+    if (existing) {
+      setDealerForm((current) => ({ ...current, depotId: existing.id }))
+      return
+    }
 
     try {
       const depotId = await saveDepot({ name, phone: '' })

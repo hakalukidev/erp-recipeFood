@@ -16,7 +16,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { buildFundCashFlowReport, expenseCategoryLabel, formatCurrency, formatDate } from '@/lib/erp/utils'
+import { dhakaTodayIso, buildFundCashFlowReport, expenseCategoryLabel, formatCurrency, formatDate } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -39,7 +39,7 @@ function monthStartValue(date = new Date()) {
 }
 
 function todayValue(date = new Date()) {
-  return date.toISOString().slice(0, 10)
+  return dhakaTodayIso(date)
 }
 
 function netToneClass(value: number) {
@@ -153,6 +153,7 @@ function buildFundReportHtml(
         <table class="doc">
           <tbody>
             ${row('Sales collection (cash received from dealers)', formatCurrency(report.inflow.sales, currency))}
+            ${report.inflow.legacy ? row('Legacy order collection (no invoice on file)', formatCurrency(report.inflow.legacy, currency)) : ''}
             ${row('Loan withdrawal', formatCurrency(report.inflow.loans, currency))}
             ${row('Other cash received (Cash Maintenance)', formatCurrency(report.inflow.other, currency))}
             ${row('Total Inflow', formatCurrency(report.inflow.total, currency), true)}
@@ -327,6 +328,15 @@ export function FundCashFlowReport() {
                   <TableCell>Sales collection (cash received)</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.sales, currency)}</TableCell>
                 </TableRow>
+                {report.inflow.legacy ? (
+                  <TableRow>
+                    <TableCell>
+                      Legacy order collection
+                      <span className="block text-xs text-muted-foreground">Collected against an old Sales Order — no invoice on file</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.legacy, currency)}</TableCell>
+                  </TableRow>
+                ) : null}
                 <TableRow>
                   <TableCell>Loan withdrawal</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.loans, currency)}</TableCell>

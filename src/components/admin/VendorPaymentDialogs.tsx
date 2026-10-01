@@ -20,7 +20,7 @@ import {
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import type { PurchaseMaterialUnit, VendorPaymentRecord } from '@/lib/erp/types'
-import { computeVendorDue, formatDate, toArray } from '@/lib/erp/utils'
+import { dhakaTodayIso, computeVendorDue, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function formatAmount(value: number) {
@@ -48,7 +48,7 @@ export function VendorPaymentDialog({
   const { data, recordVendorPayment, updateVendorPayment } = useERP()
   const [vendorId, setVendorId] = useState('')
   const [amount, setAmount] = useState('0')
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(dhakaTodayIso())
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -57,7 +57,7 @@ export function VendorPaymentDialog({
     if (!open) return
     setVendorId(editingPayment?.vendorId ?? initialVendorId ?? '')
     setAmount(editingPayment ? String(editingPayment.amount) : '0')
-    setDate(editingPayment?.date ?? new Date().toISOString().slice(0, 10))
+    setDate(editingPayment?.date ?? dhakaTodayIso())
     setNote(editingPayment?.note ?? '')
     setError(null)
   }, [open, editingPayment, initialVendorId])

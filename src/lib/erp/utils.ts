@@ -71,6 +71,14 @@ export function saleTypeLabel(saleType: SaleType | undefined, dealerCategories: 
   return category?.name ?? LEGACY_SALE_TYPE_LABELS[saleType]
 }
 
+// Input & Authorization: a rejected entry never happened as far as any
+// money total goes — Earnings, Sales, Cash Flow, Vendor due and Loan balance
+// all skip it, the same way rejected expenses/cash entries always were.
+// (Stock it moved stays moved until the entry is edited or deleted.)
+export function isCountedEntry(entry: { approvalStatus?: string } | null | undefined) {
+  return entry?.approvalStatus !== 'rejected'
+}
+
 export function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[]) {
   return [...items].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
@@ -87,10 +95,15 @@ export function toArray<T extends { id: string }>(record?: Record<string, T> | n
 // (qty already counts pieces, matching the old un-multiplied total) when
 // there's no leading number to parse — e.g. a blank field or plain "1 bg".
 export function parsePerCtnMultiplier(perCtnBgs?: string) {
-  const match = perCtnBgs?.match(/[\d.,]+/)
+  const match = toLatinDigits(perCtnBgs)?.match(/[\d.,]+/)
   if (!match) return 1
   const value = Number(match[0].replace(/,/g, ''))
   return value > 0 ? value : 1
+}
+
+// Bangla digits (০–৯) → 0–9, so "২৪ পিস" reads the same as "24 pcs".
+export function toLatinDigits(value?: string) {
+  return value?.replace(/[০-৯]/g, (digit) => String(digit.charCodeAt(0) - 0x09e6))
 }
 
 // Discount Product List — see DiscountProductRecord in types.ts. Depot S R
@@ -116,7 +129,7 @@ export function formatCurrency(value: number, currency = 'BDT') {
     style: 'currency',
     currency,
     minimumFractionDigits: 0,
-    maximumFractionDigits: 3,
+    maximumFractionDigits: 2,
   }).format(value)
 }
 
@@ -248,8 +261,8 @@ export function buildOperationsOverview(data: ERPData | null) {
 // original invoice pushed it up — see the type's comment in types.ts).
 // "Expense" is every non-rejected ExpenseRecord.
 export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
-  const rateCards = toArray(data?.rateCards)
-  const productReturns = toArray(data?.productReturns)
+  const rateCards = toArray(data?.rateCards).filter(isCountedEntry)
+  const productReturns = toArray(data?.productReturns).filter(isCountedEntry)
   // Every non-rejected ExpenseRecord plus direct-expense Cash Maintenance
   // entries (see directExpenseCashEntries).
   const expenses: Array<{ date: string; amount: number }> = [
@@ -400,14 +413,14 @@ export function isCashMaintenanceIn(entry: CashMaintenanceRecord) {
 }
 
 export function buildFundCashFlowReport(data: ERPData | null, from: string, to: string) {
-  const rateCards = toArray(data?.rateCards)
-  const productReturns = toArray(data?.productReturns)
-  const collections = toArray(data?.collections)
-  const loanTransactions = toArray(data?.loanTransactions)
+  const rateCards = toArray(data?.rateCards).filter(isCountedEntry)
+  const productReturns = toArray(data?.productReturns).filter(isCountedEntry)
+  const collections = toArray(data?.collections).filter(isCountedEntry)
+  const loanTransactions = toArray(data?.loanTransactions).filter(isCountedEntry)
   const expenses = toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected')
   const cashEntries = toArray(data?.cashMaintenance).filter(isCashMaintenanceOut)
   const cashInEntries = toArray(data?.cashMaintenance).filter(isCashMaintenanceIn)
-  const purchases = toArray(data?.purchases)
+  const purchases = toArray(data?.purchases).filter(isCountedEntry)
   const vendors = toArray(data?.vendors)
 
   // Same "paid at invoice time + every later collection" cash-received shape
@@ -421,8 +434,14 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
     const initialPaid = (card.paid ?? 0) - (collectionsByRateCardId.get(card.id) ?? 0)
     if (initialPaid > 0) salesCashRows.push({ date: card.date, amount: initialPaid })
   }
+  // A collection not tied to any invoice (legacy Sales Order payments, e.g.
+  // RCPT-06460670) is still real cash in, but shown on its own line so it
+  // isn't mistaken for invoice sales.
+  const legacyCashRows: Array<{ date: string; amount: number }> = []
   for (const collection of collections) {
-    salesCashRows.push({ date: collection.collectionDate, amount: collection.amount })
+    const row = { date: collection.collectionDate, amount: collection.amount }
+    if (isLegacyCollection(data, collection)) legacyCashRows.push(row)
+    else salesCashRows.push(row)
   }
 
   const loanWithdrawalRows = loanTransactions.filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment)
@@ -433,7 +452,8 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
       .filter((entry) => dateInRange(entry.date, fromDate, toDate))
       .reduce((sum, entry) => sum + entry.amount, 0)
     const other = cashInEntries.filter((entry) => dateInRange(entry.date, fromDate, toDate)).reduce((sum, entry) => sum + entry.amount, 0)
-    return { sales, loans, other, total: sales + loans + other }
+    const legacy = legacyCashRows.filter((row) => dateInRange(row.date, fromDate, toDate)).reduce((sum, row) => sum + row.amount, 0)
+    return { sales, legacy, loans, other, total: sales + legacy + loans + other }
   }
   function cashOutBetween(fromDate: string, toDate: string) {
     const expenseTotal = expenses
@@ -555,10 +575,19 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
   }
 }
 
+// Calendar math in UTC on both sides — a local-midnight Date read back with
+// toISOString() lands two days back in Bangladesh (UTC+6), which used to
+// drop the day just before `from` out of the opening balance.
 function dayBefore(dateStr: string) {
-  const date = new Date(`${dateStr}T00:00:00`)
-  date.setDate(date.getDate() - 1)
+  const date = new Date(`${dateStr.slice(0, 10)}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() - 1)
   return date.toISOString().slice(0, 10)
+}
+
+// A collection whose invoice isn't on file — pre-Invoice Sales Order
+// payments carry no rateCardId at all.
+export function isLegacyCollection(data: ERPData | null, collection: { rateCardId?: string }) {
+  return !collection.rateCardId || !data?.rateCards?.[collection.rateCardId]
 }
 
 export type DealerSalesReportRow = {
@@ -587,6 +616,10 @@ export type ProductSalesReportRow = {
   lineCount: number
   qty: number
   totalAmount: number
+  // Dealer-party returns of this product, at the dealer rate — so product
+  // rows net the same way dealer/date rows do.
+  returnAmount: number
+  netAmount: number
 }
 
 // Sales Reports (Section — Reports/admin/reports) — built entirely off saved
@@ -603,8 +636,8 @@ export type ProductSalesReportRow = {
 // Today as YYYY-MM-DD in Bangladesh time — toISOString() is UTC, which is
 // still the previous day between 00:00 and 06:00 in Dhaka.
 const dhakaDateFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' })
-export function dhakaTodayIso() {
-  return dhakaDateFormat.format(new Date())
+export function dhakaTodayIso(date = new Date()) {
+  return dhakaDateFormat.format(date)
 }
 
 // Date-wise sales reporting — an inclusive YYYY-MM-DD range (either end
@@ -627,9 +660,9 @@ export type DateSalesReportRow = {
 }
 
 export function buildSalesReportSummary(data: ERPData | null, range?: SalesReportDateRange) {
-  const rateCards = toArray(data?.rateCards).filter((card) => isInDateRange(card.date, range))
+  const rateCards = toArray(data?.rateCards).filter((card) => isCountedEntry(card) && isInDateRange(card.date, range))
   const dealerCategories = toArray(data?.dealerCategories)
-  const productReturns = toArray(data?.productReturns).filter((entry) => isInDateRange(entry.date, range))
+  const productReturns = toArray(data?.productReturns).filter((entry) => isCountedEntry(entry) && isInDateRange(entry.date, range))
   const dateMap = new Map<string, DateSalesReportRow>()
 
   function dateRowFor(date: string) {
@@ -691,6 +724,8 @@ export function buildSalesReportSummary(data: ERPData | null, range?: SalesRepor
         lineCount: 0,
         qty: 0,
         totalAmount: 0,
+        returnAmount: 0,
+        netAmount: 0,
       }
       productRow.lineCount += 1
       productRow.qty += pieces
@@ -711,6 +746,25 @@ export function buildSalesReportSummary(data: ERPData | null, range?: SalesRepor
     dealerRow.returnAmount += entry.dealerRateTotal
     dateRowFor(entry.date).returnAmount += entry.dealerRateTotal
     totalReturnAmount += entry.dealerRateTotal
+    // Same return, netted off each product it brought back (qty is already
+    // in Pcs/Kg — no per-carton multiplier, see computeProductReturnTotals).
+    for (const item of entry.items ?? []) {
+      const productKey = item.productId || item.productName
+      const productRow: ProductSalesReportRow = productMap.get(productKey) ?? {
+        productId: productKey,
+        productName: item.productName,
+        lineCount: 0,
+        qty: 0,
+        totalAmount: 0,
+        returnAmount: 0,
+        netAmount: 0,
+      }
+      productRow.returnAmount += item.qty * item.dealerRate
+      productMap.set(productKey, productRow)
+    }
+  }
+  for (const row of productMap.values()) {
+    row.netAmount = row.totalAmount - row.returnAmount
   }
   for (const row of dealerMap.values()) {
     row.netAmount = row.totalAmount - row.returnAmount
@@ -728,7 +782,7 @@ export function buildSalesReportSummary(data: ERPData | null, range?: SalesRepor
     netAmount: totalAmount - totalReturnAmount,
     bySaleType,
     dealers: Array.from(dealerMap.values()).sort((a, b) => b.netAmount - a.netAmount),
-    products: Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount),
+    products: Array.from(productMap.values()).sort((a, b) => b.netAmount - a.netAmount),
     dates: Array.from(dateMap.values()).sort((a, b) => b.date.localeCompare(a.date)),
   }
 }
@@ -762,8 +816,8 @@ export type CategorySalesReportRow = {
 // Product record at all (productId absent), falls into "Uncategorized"
 // rather than being dropped.
 export function buildCategorySalesReportSummary(data: ERPData | null, range?: SalesReportDateRange) {
-  const rateCards = toArray(data?.rateCards).filter((card) => isInDateRange(card.date, range))
-  const productReturns = toArray(data?.productReturns).filter((entry) => isInDateRange(entry.date, range))
+  const rateCards = toArray(data?.rateCards).filter((card) => isCountedEntry(card) && isInDateRange(card.date, range))
+  const productReturns = toArray(data?.productReturns).filter((entry) => isCountedEntry(entry) && isInDateRange(entry.date, range))
   const categoryByProductId = new Map(toArray(data?.products).map((product) => [product.id, product.category]))
 
   function categoryFor(item: { productId?: string }) {
@@ -922,7 +976,7 @@ export function computeVendorDue(data: ERPData | null, vendorId: string) {
   return (
     openingDue +
     toArray(data?.purchases)
-      .filter((purchase) => purchase.vendorId === vendorId)
+      .filter((purchase) => purchase.vendorId === vendorId && isCountedEntry(purchase))
       .reduce((sum, purchase) => sum + purchase.due, 0) -
     computeVendorAccountPayments(data, vendorId)
   )
@@ -934,7 +988,7 @@ export function computeVendorDue(data: ERPData | null, vendorId: string) {
 // currentDue always equals computeVendorDue.
 export function computeVendorSummary(data: ERPData | null, vendorId: string) {
   const openingDue = data?.vendors[vendorId]?.openingDue ?? 0
-  const vendorPurchases = toArray(data?.purchases).filter((purchase) => purchase.vendorId === vendorId)
+  const vendorPurchases = toArray(data?.purchases).filter((purchase) => purchase.vendorId === vendorId && isCountedEntry(purchase))
   const totalPurchase = vendorPurchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0)
   const totalPaid =
     vendorPurchases.reduce((sum, purchase) => sum + purchase.paid, 0) + computeVendorAccountPayments(data, vendorId)
@@ -945,7 +999,7 @@ export function computeVendorSummary(data: ERPData | null, vendorId: string) {
 // purchase — see VendorPaymentRecord in types.ts.
 export function computeVendorAccountPayments(data: ERPData | null, vendorId?: string) {
   return toArray(data?.vendorPayments)
-    .filter((payment) => !payment.purchaseId && (vendorId === undefined || payment.vendorId === vendorId))
+    .filter((payment) => !payment.purchaseId && isCountedEntry(payment) && (vendorId === undefined || payment.vendorId === vendorId))
     .reduce((sum, payment) => sum + payment.amount, 0)
 }
 
@@ -1235,12 +1289,18 @@ export function computeProductLedger(data: ERPData | null, materialId: string) {
 // shapes this covers (weight-based film vs. count-based sack/carton).
 // Returns undefined when the material carries neither conversion field (a
 // plain Kg/Pcs material with nothing to derive, or a raw material).
+// Rounds off float noise first so 2.01 kg × 1000 (= 2009.9999…) floors to
+// 2010, not 2009.
+function floorPieces(value: number) {
+  return Math.floor(Math.round(value * 1e6) / 1e6)
+}
+
 export function computeMaterialAvailablePieces(material: PurchaseMaterialRecord): number | undefined {
   if (material.unit === 'kg' && material.unitWeightGrams && material.unitWeightGrams > 0) {
-    return Math.floor((material.stockQty * 1000) / material.unitWeightGrams)
+    return floorPieces((material.stockQty * 1000) / material.unitWeightGrams)
   }
   if (material.unit === 'pcs' && material.capacityPerUnit && material.capacityPerUnit > 0) {
-    return Math.floor(material.stockQty * material.capacityPerUnit)
+    return floorPieces(material.stockQty * material.capacityPerUnit)
   }
   return undefined
 }
@@ -1258,7 +1318,7 @@ export function loanTransactionTypeLabel(entry: Pick<LoanTransactionRecord, 'typ
 }
 
 export function computeLoanBalance(data: ERPData | null, loanAccountId: string) {
-  const transactions = toArray(data?.loanTransactions).filter((entry) => entry.loanAccountId === loanAccountId)
+  const transactions = toArray(data?.loanTransactions).filter((entry) => entry.loanAccountId === loanAccountId && isCountedEntry(entry))
   const totalWithdrawn = transactions
     .filter((entry) => entry.type === 'withdrawal')
     .reduce((sum, entry) => sum + entry.amount, 0)
@@ -1290,7 +1350,7 @@ export type LoanMonthlyScheduleRow = {
 // balance instead of stopping at its last transaction).
 export function computeLoanMonthlySchedule(data: ERPData | null, loanAccountId: string): LoanMonthlyScheduleRow[] {
   const transactions = toArray(data?.loanTransactions)
-    .filter((entry) => entry.loanAccountId === loanAccountId)
+    .filter((entry) => entry.loanAccountId === loanAccountId && isCountedEntry(entry))
     .sort((left, right) => left.date.localeCompare(right.date))
   if (!transactions.length) {
     return []
@@ -1298,7 +1358,7 @@ export function computeLoanMonthlySchedule(data: ERPData | null, loanAccountId: 
 
   const firstPeriod = transactions[0].date.slice(0, 7)
   const lastTransactionPeriod = transactions[transactions.length - 1].date.slice(0, 7)
-  const currentPeriod = new Date().toISOString().slice(0, 7)
+  const currentPeriod = dhakaTodayIso().slice(0, 7)
   const endPeriod = lastTransactionPeriod > currentPeriod ? lastTransactionPeriod : currentPeriod
 
   const periods: string[] = []
@@ -1669,6 +1729,15 @@ export async function exportPdf(filename: string, title: string, headers: string
 // either scheme back to the one ChartOfAccountRecord a given entry actually
 // belongs to, so the General Ledger below never has to special-case which
 // scheme produced a row.
+// Ledger keys from retired modules, posted to the account that replaced
+// them — the old Customer/Sales Order flow posted receivables to
+// 'customer', which is the Dealer account now (Customers were replaced by
+// Dealers). Without this those entries were skipped and the Trial Balance
+// stopped balancing.
+const LEGACY_LEDGER_ACCOUNT_ALIASES: Partial<Record<string, LedgerAccount>> = {
+  customer: 'dealer',
+}
+
 export function resolveLedgerAccountRecord(
   chartOfAccounts: Record<string, ChartOfAccountRecord>,
   entry: { account: LedgerAccount; accountRef?: string }
@@ -1676,7 +1745,8 @@ export function resolveLedgerAccountRecord(
   if (entry.account === 'manual') {
     return entry.accountRef ? chartOfAccounts[entry.accountRef] : undefined
   }
-  return Object.values(chartOfAccounts).find((account) => account.ledgerAccount === entry.account)
+  const key = LEGACY_LEDGER_ACCOUNT_ALIASES[entry.account] ?? entry.account
+  return Object.values(chartOfAccounts).find((account) => account.ledgerAccount === key)
 }
 
 export type GeneralLedgerEntryRow = {
@@ -1779,6 +1849,14 @@ export type TrialBalanceRow = {
 // positive (net-debit) balance goes in Debit, negative (net-credit) in
 // Credit. The two column totals always match, since every ledger posting is
 // itself a balanced debit/credit pair.
+// Ledger entries whose account has no Chart of Accounts row — the General
+// Ledger can't place them, so the Trial Balance shows them as a warning
+// instead of silently going out of balance.
+export function findUnmappedLedgerEntries(data: ERPData | null) {
+  if (!data) return []
+  return Object.values(data.ledgerEntries ?? {}).filter((entry) => !resolveLedgerAccountRecord(data.chartOfAccounts, entry))
+}
+
 export function buildTrialBalance(data: ERPData | null): { rows: TrialBalanceRow[]; totalDebit: number; totalCredit: number } {
   const ledger = buildGeneralLedger(data)
   const rows: TrialBalanceRow[] = ledger
@@ -1863,7 +1941,7 @@ export function buildBalanceSheet(data: ERPData | null): BalanceSheetSummary {
     currentPeriodNetProfit,
     totalEquity,
     totalLiabilitiesAndEquity,
-    isBalanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 1,
+    isBalanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.01,
   }
 }
 

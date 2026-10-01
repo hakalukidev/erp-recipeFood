@@ -129,10 +129,12 @@ import {
   computePackWeightKg,
   computeVendorDue,
   createId,
+  dhakaTodayIso,
   employeeAdvanceOutstanding,
   getPermissions,
   getProductStatus,
   hasPermission as hasPermissionCheck,
+  isCountedEntry,
   parsePerCtnMultiplier,
   rateCardLineStockUnits,
   saleTypeLabel,
@@ -1131,7 +1133,7 @@ function normalizeLoanTransactionInput(input: LoanTransactionInput) {
     loanAccountId: input.loanAccountId.trim(),
     type: input.type,
     amount: Math.max(input.amount ?? 0, 0),
-    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
+    date: input.date?.trim() || dhakaTodayIso(),
     note: input.note?.trim() ?? '',
     // Only meaningful on a withdrawal — an opening balance is never "repaid
     // back" as its own concept, that's just a regular repayment against it.
@@ -1148,7 +1150,7 @@ function normalizeCashMaintenanceInput(input: CashMaintenanceInput) {
     category: input.category.trim(),
     direction: input.direction === 'in' ? ('in' as const) : ('out' as const),
     amount: Math.max(input.amount ?? 0, 0),
-    date: input.date?.trim() || new Date().toISOString().slice(0, 10),
+    date: input.date?.trim() || dhakaTodayIso(),
     note: input.note?.trim() ?? '',
     productReturnId: input.productReturnId?.trim() ?? '',
     employeeName: input.employeeName?.trim() ?? '',
@@ -2072,6 +2074,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!normalized.name) {
       throw new Error('Depot name is required.')
     }
+    const nameKey = normalized.name.trim().toLowerCase()
+    const duplicateDepot = Object.values(data.depots).find(
+      (depot) => depot.id !== existingDepot?.id && depot.name.trim().toLowerCase() === nameKey
+    )
+    if (duplicateDepot) {
+      throw new Error(`A depot named ${duplicateDepot.name} already exists.`)
+    }
 
     // Phone is not required here (unlike saveDealer) — the Dealer edit
     // dialog lets someone type a brand-new depot name inline with nothing
@@ -2321,7 +2330,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('purchase')
     const now = new Date().toISOString()
-    const date = input.date?.trim() || now.slice(0, 10)
+    const date = input.date?.trim() || dhakaTodayIso()
     const purchaseNumber = `PUR-${Date.now().toString().slice(-8)}`
 
     const purchase: PurchaseRecord = {
@@ -2617,7 +2626,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         vendorId: vendor.id,
         vendorName: vendor.name,
         amount,
-        date: input.date?.trim() || now.slice(0, 10),
+        date: input.date?.trim() || dhakaTodayIso(),
         ...(input.note?.trim() ? { note: input.note.trim() } : {}),
         ...pendingApprovalFields(currentUser, now),
         createdBy: currentUser.id,
@@ -2645,7 +2654,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('vendorpay')
     const now = new Date().toISOString()
-    const date = input.date?.trim() || now.slice(0, 10)
+    const date = input.date?.trim() || dhakaTodayIso()
     const receiptNumber = `VPAY-${Date.now().toString().slice(-8)}`
     const nextDue = purchase.due - amount
     const nextPaid = purchase.paid + amount
@@ -2703,7 +2712,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     if (!existing.purchaseId) {
-      const dueRoom = (existing.vendorId ? computeVendorDue(data, existing.vendorId) : 0) + existing.amount
+      const dueRoom = (existing.vendorId ? computeVendorDue(data, existing.vendorId) : 0) + (isCountedEntry(existing) ? existing.amount : 0)
       if (amount > dueRoom) {
         throw new Error(`Payment amount cannot exceed the vendor's outstanding due of ${dueRoom.toFixed(2)}.`)
       }
@@ -2731,15 +2740,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
     // The due room this payment can grow into is whatever's due today, plus
     // what this same payment is already contributing.
-    if (amount > purchase.due + existing.amount) {
+    const previousAmount = isCountedEntry(existing) ? existing.amount : 0
+    if (amount > purchase.due + previousAmount) {
       throw new Error('Payment amount cannot exceed the outstanding due.')
     }
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const date = input.date?.trim() || existing.date
-    const nextPaid = purchase.paid - existing.amount + amount
-    const nextDue = purchase.due + existing.amount - amount
+    const nextPaid = purchase.paid - previousAmount + amount
+    const nextDue = purchase.due + previousAmount - amount
 
     const updates: Record<string, unknown> = {
       [`purchases/${purchase.id}/paid`]: nextPaid,
@@ -2781,7 +2791,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const updates: Record<string, unknown> = { [`vendorPayments/${paymentId}`]: null }
     const purchase = payment.purchaseId ? data.purchases[payment.purchaseId] : undefined
-    if (purchase) {
+    if (purchase && isCountedEntry(payment)) {
       updates[`purchases/${purchase.id}/paid`] = purchase.paid - payment.amount
       updates[`purchases/${purchase.id}/due`] = purchase.due + payment.amount
     }
@@ -2819,7 +2829,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('usage')
     const now = new Date().toISOString()
-    const date = input.date?.trim() || now.slice(0, 10)
+    const date = input.date?.trim() || dhakaTodayIso()
     const nextStock = material.stockQty - qty
 
     const usage: MaterialUsageRecord = {
@@ -2906,10 +2916,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Raw material not found.')
     }
 
+    const packKg = computePackWeightKg(input.pieceWeightGrams, input.piecesPerUnit)
+    // Factory Stock counts a sale of this pack as packs × unit weight — with
+    // no weight every sale would silently read as 0 kg.
+    if (rawMaterial && !(packKg ?? Number(input.unitWeightKg) > 0)) {
+      throw new Error('Enter the pack weight (Unit Weight kg, or grams × pieces) for a pack made from a raw material.')
+    }
+
     const db = getDatabaseOrThrow()
     const id = existing?.id ?? createId('finishedgoods')
     const now = new Date().toISOString()
-    const packKg = computePackWeightKg(input.pieceWeightGrams, input.piecesPerUnit)
     const record: FinishedGoodsRecord = {
       id,
       name,
@@ -3010,7 +3026,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('production')
     const now = new Date().toISOString()
-    const date = input.date?.trim() || now.slice(0, 10)
+    const date = input.date?.trim() || dhakaTodayIso()
     const batchNumber = `PB-${Date.now().toString().slice(-8)}`
     const nextRawStock = rawMaterial.stockQty - rawKgConsumedTotal
 
@@ -3189,7 +3205,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           memberName: account.memberName,
           type: difference > 0 ? 'withdrawal' : 'repayment',
           amount: Math.abs(difference),
-          date: now.slice(0, 10),
+          date: dhakaTodayIso(),
           note: `Balance correction — set to ${input.balance}`,
           isOpeningBalance: false,
           isAdjustment: true,
@@ -3875,7 +3891,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('collection')
     const now = new Date().toISOString()
-    const collectionDate = input.collectionDate?.trim() || now.slice(0, 10)
+    const collectionDate = input.collectionDate?.trim() || dhakaTodayIso()
     const receiptNumber = `RCPT-${Date.now().toString().slice(-8)}`
     const nextDue = rateCard.due - amount
     const nextPaid = rateCard.paid + amount
@@ -3932,14 +3948,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (amount <= 0) {
       throw new Error('Collection amount must be greater than zero.')
     }
-    if (amount > rateCard.due + existing.amount) {
+    // A rejected collection was already backed out of the invoice, so
+    // editing it (which re-submits it) applies the new amount fresh.
+    const previousAmount = isCountedEntry(existing) ? existing.amount : 0
+    if (amount > rateCard.due + previousAmount) {
       throw new Error('Collection amount cannot exceed the outstanding due.')
     }
 
     const db = getDatabaseOrThrow()
     const date = input.date?.trim() || existing.collectionDate
-    const nextPaid = rateCard.paid - existing.amount + amount
-    const nextDue = rateCard.due + existing.amount - amount
+    const nextPaid = rateCard.paid - previousAmount + amount
+    const nextDue = rateCard.due + previousAmount - amount
 
     const updatedCollection: CollectionRecord = {
       ...existing,
@@ -4758,7 +4777,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const id = existingExpense?.id ?? createId('expense')
     const now = new Date().toISOString()
     const paymentMethod = input.paymentMethod ?? existingExpense?.paymentMethod ?? 'cash'
-    const expenseDate = input.date?.trim() || now
+    const expenseDate = input.date?.trim() || dhakaTodayIso()
     // Only a সেলারি-category expense can carry the employee tag (Loan/Cash
     // Maintenance spec's Section 5, salary history) — dropped otherwise even
     // if one was somehow passed in. Free text, not a Users lookup — see
@@ -4884,10 +4903,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
   // The authorization half of Input & Authorization: approve or reject one
   // pending department entry. Same "post first, approve as a review gate"
-  // shape as updateExpenseApproval — a rejection does not undo the entry's
-  // stock/due effects; it flags it so the department corrects it (edit
-  // re-submits it) or deletes it. Nobody but Super Admin may authorize their
-  // own entry (maker-checker).
+  // shape as updateExpenseApproval — a rejected entry drops out of every
+  // money total (and a rejected payment/return credit is given back to its
+  // invoice or purchase below); stock it moved stays moved. The department
+  // then corrects it (edit re-submits it) or deletes it. Nobody but Super
+  // Admin may authorize their own entry (maker-checker).
   async function reviewRecordApproval(
     collection: ApprovalCollection,
     recordId: string,
@@ -4924,13 +4944,38 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const path = `${collection}/${recordId}`
-    await update(ref(db, 'erp'), {
+    const updates: Record<string, unknown> = {
       [`${path}/approvalStatus`]: approvalStatus,
       [`${path}/approvedBy`]: currentUser.id,
       [`${path}/approvedByName`]: currentUser.name,
       [`${path}/approvedAt`]: now,
       [`${path}/approvalNote`]: trimmedNote,
-    })
+    }
+    // A rejected entry stops counting in every money total (isCountedEntry
+    // in utils.ts). Payments and return credits also live inside their
+    // parent's stored paid/due, so those are given back here, once — the
+    // edit/delete paths skip the reversal for an entry already rejected.
+    if (approvalStatus === 'rejected') {
+      if (collection === 'collections') {
+        const entry = data.collections[recordId]
+        const card = entry ? data.rateCards[entry.rateCardId] : undefined
+        if (entry && card) {
+          updates[`rateCards/${card.id}/paid`] = card.paid - entry.amount
+          updates[`rateCards/${card.id}/due`] = card.due + entry.amount
+        }
+      } else if (collection === 'vendorPayments') {
+        const entry = data.vendorPayments[recordId]
+        const purchase = entry?.purchaseId ? data.purchases[entry.purchaseId] : undefined
+        if (entry && purchase) {
+          updates[`purchases/${purchase.id}/paid`] = purchase.paid - entry.amount
+          updates[`purchases/${purchase.id}/due`] = purchase.due + entry.amount
+        }
+      } else if (collection === 'productReturns') {
+        const entry = data.productReturns[recordId]
+        if (entry) applyReturnDueAdjustment(updates, entry, { returnParty: entry.returnParty })
+      }
+    }
+    await update(ref(db, 'erp'), updates)
 
     const row = source.describe(record as never, data)
     const message = `${source.label} ${row.reference} was ${approvalStatus} by ${currentUser.name}${trimmedNote ? ` — ${trimmedNote}` : ''}.`
@@ -5412,7 +5457,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       id: cashMaintenanceId,
       category: CASH_CATEGORY_NEW_MARKET_INVESTMENT,
       amount: input.amount,
-      date: previousCashEntry?.date ?? now.slice(0, 10),
+      date: previousCashEntry?.date ?? dhakaTodayIso(),
       note: `Investment from ${name}`,
       createdBy: previousCashEntry?.createdBy ?? currentUser.id,
       createdByName: previousCashEntry?.createdByName ?? currentUser.name,
@@ -6035,6 +6080,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (delta === 0) return
       updates[`${collectionPath}/${id}/stockQty`] = record.stockQty - delta
       updates[`${collectionPath}/${id}/updatedAt`] = now
+      // Product List rows carry a stored status (active/low/out) — keep it in
+      // step with the new stock, or it stays at whatever it was last saved as.
+      if (collectionPath === 'products') {
+        updates[`products/${id}/status`] = getProductStatus(record.stockQty - delta, (record as ProductRecord).minStock ?? 0)
+      }
     })
   }
 
@@ -6213,9 +6263,24 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (items.length === 0) {
       throw new Error('Add at least one product line.')
     }
+    // A negative line used to save as an in-invoice "return" — it lowered the
+    // total and put stock back without ever reaching Product Return reports.
+    const badQtyLine = items.find((item) => !(item.qty > 0))
+    if (badQtyLine) {
+      throw new Error(
+        `Quantity for ${badQtyLine.productName} must be greater than zero. Record returned goods on the Product Return page instead.`
+      )
+    }
 
     const existing = rateCardId ? data.rateCards[rateCardId] : null
     assertApprovalUnlocked('rateCards', existing)
+    const invoiceKey = invoiceNo.toLowerCase()
+    const duplicateInvoice = Object.values(data.rateCards).find(
+      (card) => card.id !== existing?.id && String(card.invoiceNo ?? '').trim().toLowerCase() === invoiceKey
+    )
+    if (duplicateInvoice) {
+      throw new Error(`Invoice number ${invoiceNo} is already used (${duplicateInvoice.recipientName}, ${duplicateInvoice.date}).`)
+    }
     const db = getDatabaseOrThrow()
     const id = existing?.id ?? createId('ratecard')
     const now = new Date().toISOString()
@@ -6226,9 +6291,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // collections) and replaces the old figure — same fix as updatePurchase
     // (2026-09-28: it used to be added on top of the collections already on
     // file, so correcting 70,000 → 80,000 read as 1,50,000 paid).
+    // Rejected collections were already taken back out of paid/due when
+    // they were rejected (see reviewRecordApproval).
     const collectionsTotal = existing
       ? Object.values(data.collections)
-          .filter((collection) => collection.rateCardId === existing.id)
+          .filter((collection) => collection.rateCardId === existing.id && isCountedEntry(collection))
           .reduce((sum, collection) => sum + collection.amount, 0)
       : 0
     if (collectionsTotal > totals.dealerRateTotal) {
@@ -6236,7 +6303,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         `This invoice already has ${collectionsTotal.toFixed(2)} in recorded collections — the new total can't be less than that. Edit or delete those collections first.`
       )
     }
-    const paid = Math.min(Math.max(Number(input.paid) || 0, 0), totals.dealerRateTotal)
+    const typedPaid = Math.max(Number(input.paid) || 0, 0)
+    if (typedPaid > totals.dealerRateTotal + 0.005) {
+      throw new Error(
+        `Paid (${typedPaid.toFixed(2)}) can't be more than the invoice total of ${totals.dealerRateTotal.toFixed(2)}.`
+      )
+    }
+    const paid = Math.min(typedPaid, totals.dealerRateTotal)
     if (paid < collectionsTotal) {
       throw new Error(
         `Total paid can't be less than the ${collectionsTotal.toFixed(2)} already recorded as separate collections on this invoice — edit or delete those from Collection history first.`
@@ -6316,7 +6389,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Rate card not found.')
     }
     assertApprovalUnlocked('rateCards', rateCard)
-    const linkedReturn = Object.values(data.productReturns).find((entry) => entry.rateCardId === rateCardId && entry.dueAdjustment)
+    const linkedReturn = Object.values(data.productReturns).find(
+      (entry) => entry.rateCardId === rateCardId && entry.dueAdjustment && isCountedEntry(entry)
+    )
     if (linkedReturn) {
       throw new Error(
         `Product return ${linkedReturn.returnNumber} is credited against this invoice — edit that return to remove the adjustment (or delete it) first.`
@@ -6432,7 +6507,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return state
     }
 
-    if (previous?.rateCardId && previous.dueAdjustment && data.rateCards[previous.rateCardId]) {
+    // A rejected return's credit was already given back when it was rejected.
+    if (previous?.rateCardId && previous.dueAdjustment && isCountedEntry(previous) && data.rateCards[previous.rateCardId]) {
       const state = cardState(previous.rateCardId)
       state.due += previous.dueAdjustment
       state.returnAdjustment -= previous.dueAdjustment
@@ -6521,7 +6597,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = createId('prtn')
     const now = new Date().toISOString()
-    const returnDate = input.date?.trim() || now.slice(0, 10)
+    const returnDate = input.date?.trim() || dhakaTodayIso()
     const returnNumber = `PRTN-${Date.now().toString().slice(-8)}`
     const totals = computeProductReturnTotals(items)
 
@@ -6770,7 +6846,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
-    const date = input.date?.trim() || now.slice(0, 10)
+    const date = input.date?.trim() || dhakaTodayIso()
     const note = input.note?.trim()
 
     const updates: Record<string, unknown> = {

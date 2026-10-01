@@ -499,8 +499,8 @@ export function SalesReportsContent() {
               <ExportMenu
                 filenameBase="product-sales-report"
                 title={`Product-wise Sales Report (${periodLabel})`}
-                headers={['Product', 'Quantity sold (pcs)', 'Total sale amount']}
-                rows={filteredProducts.map((row) => [row.productName, row.qty, row.totalAmount.toFixed(2)])}
+                headers={['Product', 'Quantity sold (pcs)', 'Total sale amount', 'Return amount', 'Net sale amount']}
+                rows={filteredProducts.map((row) => [row.productName, row.qty, row.totalAmount.toFixed(2), row.returnAmount.toFixed(2), row.netAmount.toFixed(2)])}
               />
             </div>
           </CardHeader>
@@ -512,6 +512,8 @@ export function SalesReportsContent() {
                     <TableHead>Product</TableHead>
                     <TableHead className="text-right">Quantity sold (pcs)</TableHead>
                     <TableHead className="text-right">Total sale amount</TableHead>
+                    <TableHead className="text-right">Return</TableHead>
+                    <TableHead className="text-right">Net sale amount</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -519,12 +521,14 @@ export function SalesReportsContent() {
                     <TableRow key={row.productId}>
                       <TableCell className="font-medium">{row.productName}</TableCell>
                       <TableCell className="text-right">{row.qty.toLocaleString('en-BD')}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatCurrency(row.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right text-rose-600">{row.returnAmount ? formatCurrency(row.returnAmount, currency) : '—'}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatCurrency(row.netAmount, currency)}</TableCell>
                     </TableRow>
                   ))}
                   {filteredProducts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
                         <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         {summary.products.length === 0 ? 'No invoiced sales in this period.' : 'No product matches this search.'}
                       </TableCell>

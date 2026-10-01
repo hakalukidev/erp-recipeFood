@@ -66,6 +66,8 @@ import {
   formatDate,
   isCashMaintenanceIn,
   isCashMaintenanceOut,
+  isCountedEntry,
+  isLegacyCollection,
   sortByCreatedAtDesc,
   toArray,
 } from '@/lib/erp/utils'
@@ -84,7 +86,7 @@ function dateInputValue(date = new Date()) {
 }
 
 function monthInputValue(date = new Date()) {
-  return date.toISOString().slice(0, 7)
+  return dhakaDateFormat.format(date).slice(0, 7)
 }
 
 function isSameDate(value: string, target: string) {
@@ -234,7 +236,8 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     [data?.expenses, data?.cashMaintenance]
   )
   const investors = useMemo(() => sortByCreatedAtDesc(toArray(data?.investors)), [data?.investors])
-  const collections = useMemo(() => toArray(data?.collections), [data?.collections])
+  // Cash figures skip rejected entries (isCountedEntry), same as Fund/Cash Flow.
+  const collections = useMemo(() => toArray(data?.collections).filter(isCountedEntry), [data?.collections])
   // Expenses (P&L chart) feed the reconciliation check below alongside Cash
   // Maintenance — both are real cash out, just posted to two different
   // charts (see CashMaintenanceRecord comment in types.ts).
@@ -242,7 +245,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     () => toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected'),
     [data?.expenses]
   )
-  const rateCards = useMemo(() => toArray(data?.rateCards), [data?.rateCards])
+  const rateCards = useMemo(() => toArray(data?.rateCards).filter(isCountedEntry), [data?.rateCards])
   // Actual cash collected from dealers (client request, 2026-09-13 — the
   // Reconciliation card below used to sum invoiced value, not cash actually
   // received, which is why it never matched the manual daily tally): the
@@ -650,7 +653,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const loanWithdrawalsThisPeriod = useMemo(
     () =>
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment)
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isCountedEntry(entry))
         .filter((entry) => (cashMode === 'daily' ? isSameDate(entry.date, cashDate) : isSameMonth(entry.date, cashMonth)))
         .reduce((sum, entry) => sum + entry.amount, 0),
     [loanTransactions, cashMode, cashDate, cashMonth]
@@ -678,7 +681,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const openingBalance = useMemo(() => {
     const cashInBefore =
       loanTransactions
-        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isOpeningDate(entry.date, periodStartDate))
+        .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isCountedEntry(entry) && isOpeningDate(entry.date, periodStartDate))
         .reduce((sum, entry) => sum + entry.amount, 0) +
       collectedCashRows
         .filter((row) => isOpeningDate(row.date, periodStartDate))
@@ -748,12 +751,12 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
         source: 'Sales',
         category: 'বিক্রয় কালেকশন (Sales money)',
         party: collection.dealerName,
-        note: `${collection.receiptNumber} · ${collection.invoiceNo}${collection.note ? ` · ${collection.note}` : ''}`,
+        note: `${collection.receiptNumber} · ${isLegacyCollection(data ?? null, collection) ? 'Legacy order (no invoice)' : collection.invoiceNo}${collection.note ? ` · ${collection.note}` : ''}`,
         amount: collection.amount,
       })
     }
     for (const entry of loanTransactions) {
-      if (entry.type !== 'withdrawal' || entry.isOpeningBalance || entry.isAdjustment || !inPeriod(entry.date)) continue
+      if (entry.type !== 'withdrawal' || entry.isOpeningBalance || entry.isAdjustment || !isCountedEntry(entry) || !inPeriod(entry.date)) continue
       rows.push({
         key: `loan-${entry.id}`,
         date: entry.date,

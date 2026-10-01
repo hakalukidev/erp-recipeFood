@@ -43,6 +43,7 @@ import {
   isTradeSalesType,
   sortByCreatedAtDesc,
   toArray,
+  dhakaTodayIso,
 } from '@/lib/erp/utils'
 
 function formatAmount(value: number) {
@@ -549,7 +550,7 @@ export default function ProductReturnsPage() {
   const [depotId, setDepotId] = useState('')
   const [dealerId, setDealerId] = useState('')
   const [lines, setLines] = useState<ReturnLineDraft[]>([emptyLine()])
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(dhakaTodayIso())
   const [reason, setReason] = useState('')
   // Dealer due adjustment (spec §15) — which of the dealer's invoices this
   // damage return is credited against, and how much. The amount follows the
@@ -565,7 +566,7 @@ export default function ProductReturnsPage() {
   const [resaleEntry, setResaleEntry] = useState<ProductReturnRecord | null>(null)
   const [resaleDialogOpen, setResaleDialogOpen] = useState(false)
   const [resaleAmount, setResaleAmount] = useState('0')
-  const [resaleDate, setResaleDate] = useState(new Date().toISOString().slice(0, 10))
+  const [resaleDate, setResaleDate] = useState(dhakaTodayIso())
   const [resaleNote, setResaleNote] = useState('')
   const [resaleSaving, setResaleSaving] = useState(false)
   const [resaleError, setResaleError] = useState<string | null>(null)
@@ -628,7 +629,7 @@ export default function ProductReturnsPage() {
     setDepotId('')
     setDealerId('')
     setLines([emptyLine()])
-    setDate(new Date().toISOString().slice(0, 10))
+    setDate(dhakaTodayIso())
     setReason('')
     setAdjustInvoiceId('')
     setAdjustAmount('')
@@ -811,7 +812,7 @@ export default function ProductReturnsPage() {
   function openResaleDialog(entry: ProductReturnRecord) {
     setResaleEntry(entry)
     setResaleAmount(String(entry.resoldAmount ?? 0))
-    setResaleDate(entry.resoldDate || new Date().toISOString().slice(0, 10))
+    setResaleDate(entry.resoldDate || dhakaTodayIso())
     setResaleNote(entry.resoldNote ?? '')
     setResaleError(null)
     setFeedback(null)

@@ -148,8 +148,8 @@ function emptyRateCardForm(): RateCardForm {
   return {
     invoiceNo: '',
     recipientName: '',
-    date: new Date().toISOString().slice(0, 10),
-    deliveryDate: new Date().toISOString().slice(0, 10),
+    date: dhakaTodayIso(),
+    deliveryDate: dhakaTodayIso(),
     dealerId: '',
     saleType: DEFAULT_SALE_TYPE,
     remarks: '',
@@ -927,7 +927,7 @@ export default function RateCardPage() {
   const [collectionDialogOpen, setCollectionDialogOpen] = useState(false)
   const [collectionAmount, setCollectionAmount] = useState('0')
   const [collectionMethod, setCollectionMethod] = useState<CollectionMethod>('cash')
-  const [collectionDate, setCollectionDate] = useState(new Date().toISOString().slice(0, 10))
+  const [collectionDate, setCollectionDate] = useState(dhakaTodayIso())
   const [collectionNote, setCollectionNote] = useState('')
   const [collectionSaving, setCollectionSaving] = useState(false)
   const [collectionError, setCollectionError] = useState<string | null>(null)
@@ -1103,7 +1103,7 @@ export default function RateCardPage() {
     setEditingCollection(null)
     setCollectionAmount('0')
     setCollectionMethod('cash')
-    setCollectionDate(new Date().toISOString().slice(0, 10))
+    setCollectionDate(dhakaTodayIso())
     setCollectionNote('')
     setCollectionError(null)
     setFeedback(null)
@@ -1592,6 +1592,8 @@ export default function RateCardPage() {
                             <label className="text-sm text-muted-foreground">Qty</label>
                             <Input
                               type="number"
+                              min={0}
+                              step="any"
                               value={item.qty}
                               onChange={(event) => updateItem(item.key, { qty: event.target.value })}
                               className="h-10 bg-background text-base"
