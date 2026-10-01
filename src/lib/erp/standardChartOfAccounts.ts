@@ -139,10 +139,11 @@ export const CASH_MAINTENANCE_CATEGORIES = [
   'পণ্য ক্রয়',
   'প্যাকেজিং মেটেরিয়ালস ক্রয়',
   'ডিপো কমিশন',
-  // 2026-09-22 client request: depot rent (e.g. মাস্টারবাড়ি ভাড়া - ডিপো) is a
-  // cash movement that must not hit net profit, so it's entered directly here
-  // rather than on the Expense chart.
-  'ডিপো ভাড়া',
+  // 2026-09-22 client request: a depot cash movement that must not hit net
+  // profit, so it's entered directly here rather than on the Expense chart.
+  // Renamed from 'ডিপো ভাড়া' on 2026-10-02 (client request) — see
+  // LEGACY_CASH_CATEGORY_RENAMES for how older entries are mapped.
+  'ডিপো পণ্য পরিবহন',
   'ডিলার পেমেন্ট পণ্য পরিবহন',
   // 2026-09-15 client request: petty cash handed out day-to-day (e.g. the
   // factory mess/office's small market-money advances to staff) — the real
@@ -160,8 +161,15 @@ export const CASH_MAINTENANCE_CATEGORIES = [
 export const CASH_QUICK_CATEGORIES = [
   { label: 'পণ্য ক্রয়', category: 'পণ্য ক্রয়' },
   { label: 'পাউচ / প্যাকেট', category: 'প্যাকেজিং মেটেরিয়ালস ক্রয়' },
-  { label: 'ডিপো ভাড়া', category: 'ডিপো ভাড়া' },
+  { label: 'ডিপো পণ্য পরিবহন', category: 'ডিপো পণ্য পরিবহন' },
 ] as const
+
+// Cash Maintenance categories that were renamed after entries had already
+// been saved under the old name — mapped to the new name on load so old and
+// new entries group together in every report.
+export const LEGACY_CASH_CATEGORY_RENAMES: Record<string, string> = {
+  'ডিপো ভাড়া': 'ডিপো পণ্য পরিবহন',
+}
 export const CASH_DEFAULT_OUT_CATEGORY = CASH_QUICK_CATEGORIES[0].category
 
 // Cash Maintenance entries recorded with direction 'in' (2026-09-22 client

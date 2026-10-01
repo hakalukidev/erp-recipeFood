@@ -174,7 +174,7 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Cash Maintenance',
-        description: 'Cash In / Cash Out that never touches profit — goods purchase, pouch/packet, depot rent — plus the Daily Cash Book and reconciliation',
+        description: 'Cash In / Cash Out that never touches profit — goods purchase, pouch/packet, depot product transport — plus the Daily Cash Book and reconciliation',
         href: '/admin/cash-maintenance',
         icon: Wallet,
         permission: 'finance:view',
@@ -675,7 +675,7 @@ function GlobalSearch() {
   }
 
   return (
-    <div ref={containerRef} className="relative mr-2 hidden w-full max-w-sm md:block">
+    <div ref={containerRef} className="relative mr-2 hidden w-56 md:block xl:w-72">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={query}
@@ -783,7 +783,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
           <header className="sticky top-0 z-30 border-b border-border bg-card/90 backdrop-blur">
             <div className="flex h-16 flex-col justify-center px-4 sm:px-6 lg:px-8">
               <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                   <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                     <SheetTrigger asChild>
                       <Button variant="ghost" size="icon" className="lg:hidden">
@@ -807,7 +807,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
                   </div>
                 </div>
 
-                <div className="flex flex-1 items-center justify-end gap-2">
+                <div className="flex shrink-0 items-center justify-end gap-2">
                   <GlobalSearch />
 
                   <NotificationBell />
@@ -825,7 +825,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
                     </span>
                     <div className="leading-tight">
                       <p className="max-w-[10rem] truncate text-sm font-medium text-foreground">{currentUser.name}</p>
-                      <p className="text-[11px] text-muted-foreground">{roleName}</p>
+                      <p className="whitespace-nowrap text-[11px] text-muted-foreground">{roleName}</p>
                     </div>
                   </div>
 

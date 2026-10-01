@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import {
+  ArrowDown,
+  ArrowUp,
   Calculator,
   ChevronDown,
   ChevronRight,
@@ -906,6 +908,10 @@ export default function RateCardPage() {
   }, [dealers, dealerCategories])
 
   const [query, setQuery] = useState('')
+  // Invoice list defaults to the current month (all of that month's
+  // invoices); clearing the month input shows every month.
+  const [listMonth, setListMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [dateSort, setDateSort] = useState<'desc' | 'asc'>('desc')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<RateCardForm>(emptyRateCardForm)
@@ -930,9 +936,16 @@ export default function RateCardPage() {
 
   const filteredRateCards = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return rateCards
-    return rateCards.filter((card) => [card.invoiceNo, card.recipientName].join(' ').toLowerCase().includes(normalized))
-  }, [rateCards, query])
+    const matches = rateCards.filter(
+      (card) =>
+        (!listMonth || card.date.slice(0, 7) === listMonth) &&
+        (!normalized || [card.invoiceNo, card.recipientName].join(' ').toLowerCase().includes(normalized)),
+    )
+    // Stable sort on the invoice date; same-day invoices keep the
+    // newest-created-first order rateCards already has.
+    const direction = dateSort === 'asc' ? 1 : -1
+    return [...matches].sort((a, b) => direction * a.date.localeCompare(b.date))
+  }, [rateCards, query, listMonth, dateSort])
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
   const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
@@ -1192,7 +1205,21 @@ export default function RateCardPage() {
                 PDF) separately from the row actions below.
               </CardDescription>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
+              <Input
+                className="w-full sm:w-44"
+                type="month"
+                value={listMonth}
+                onChange={(event) => setListMonth(event.target.value)}
+                title="Clear to show all months"
+              />
+              <Select value={dateSort} onValueChange={(value) => setDateSort(value as 'desc' | 'asc')}>
+                <SelectTrigger className="w-full sm:w-44"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Date: newest first</SelectItem>
+                  <SelectItem value="asc">Date: oldest first</SelectItem>
+                </SelectContent>
+              </Select>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -1215,7 +1242,16 @@ export default function RateCardPage() {
                   <TableRow>
                     <TableHead>Invoice No</TableHead>
                     <TableHead>Dealer</TableHead>
-                    <TableHead>Date</TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        onClick={() => setDateSort((current) => (current === 'desc' ? 'asc' : 'desc'))}
+                      >
+                        Date
+                        {dateSort === 'desc' ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                      </button>
+                    </TableHead>
                     <TableHead>Sale Type</TableHead>
                     <TableHead className="text-right">Goods Amount</TableHead>
                     <TableHead className="text-right">Depot Net Profit</TableHead>
@@ -1309,7 +1345,9 @@ export default function RateCardPage() {
                     <TableRow>
                       <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                         <Calculator className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                        No rate cards yet. Create one to build a Company/Depot/Dealer voucher.
+                        {rateCards.length === 0
+                          ? 'No rate cards yet. Create one to build a Company/Depot/Dealer voucher.'
+                          : 'No invoices match this month / search.'}
                       </TableCell>
                     </TableRow>
                   ) : null}

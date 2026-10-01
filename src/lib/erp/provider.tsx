@@ -120,6 +120,7 @@ import {
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
   EXPENSE_SALARY_CATEGORY,
   STANDARD_CHART_OF_ACCOUNTS,
+  LEGACY_CASH_CATEGORY_RENAMES,
 } from '@/lib/erp/standardChartOfAccounts'
 import {
   computeLoanBalance,
@@ -487,6 +488,15 @@ function normalizeDepotRecord(depot: DepotRecord): DepotRecord {
 function normalizeDepotMap(depots?: Record<string, DepotRecord> | null) {
   return Object.fromEntries(
     Object.entries(depots ?? {}).map(([id, depot]) => [id, normalizeDepotRecord(depot)])
+  )
+}
+
+function normalizeCashMaintenanceMap(entries?: Record<string, CashMaintenanceRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(entries ?? {}).map(([id, entry]) => {
+      const renamed = LEGACY_CASH_CATEGORY_RENAMES[entry.category]
+      return [id, renamed ? { ...entry, category: renamed } : entry]
+    })
   )
 }
 
@@ -958,7 +968,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     expenses: normalizeExpenseMap(source.expenses),
     loanAccounts: source.loanAccounts ?? {},
     loanTransactions: source.loanTransactions ?? {},
-    cashMaintenance: source.cashMaintenance ?? {},
+    cashMaintenance: normalizeCashMaintenanceMap(source.cashMaintenance),
     budgets: source.budgets ?? {},
     salesTargets: source.salesTargets ?? {},
     commissionRules: source.commissionRules ?? {},

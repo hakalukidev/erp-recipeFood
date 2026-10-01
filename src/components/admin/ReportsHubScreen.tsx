@@ -178,7 +178,7 @@ export function ReportsHubScreen() {
   // no date filter needs to be applied first. Merges in Cash Maintenance's
   // own cash-out categories (পণ্য ক্রয়, প্যাকেজিং মেটেরিয়ালস ক্রয়, etc. —
   // see CASH_MAINTENANCE_CATEGORIES in standardChartOfAccounts.ts) alongside
-  // the Expense (P&L) chart: purchases/packaging/depot rent are entered
+  // the Expense (P&L) chart: purchases/packaging/depot product transport are entered
   // directly on Cash Maintenance instead of Expenses, so without this merge
   // the client's own daily cash tally — which treats every taka that left
   // the till the same way — never matched what this report showed. Direct-

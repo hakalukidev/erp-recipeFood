@@ -215,7 +215,7 @@ function buildFundReportHtml(
 // One consolidated screen tying together every inflow source (sales money
 // actually collected + loan withdrawal) against every outflow head (Expense
 // chart + Cash Maintenance chart — which includes goods/packaging purchases,
-// depot rent, loan repayment, depot commission, etc.), the P&L impact of product
+// depot product transport, loan repayment, depot commission, etc.), the P&L impact of product
 // returns, and vendor-wise/item-wise breakdowns underneath — everything the
 // Loan & Cash Maintenance, Company Earnings, and Reports Hub pages already
 // track individually, but never showed together on one printable page. See

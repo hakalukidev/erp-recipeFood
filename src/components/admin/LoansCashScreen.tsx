@@ -495,7 +495,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   )
   // "খাত অনুযায়ী মোট" (client request, 2026-09-13): the flat entry list above
   // only shows the Cash Maintenance chart's own categories (পণ্য ক্রয়,
-  // প্যাকেজিং, ডিপো ভাড়া, ...); a Cash Maintenance cash-out and an Expense's
+  // প্যাকেজিং, ডিপো পণ্য পরিবহন, ...); a Cash Maintenance cash-out and an Expense's
   // cash-out never land in the same table anywhere else in the app, so this
   // merges both —
   // same category+total shape as the Expense chart's "By category" table on
@@ -1230,7 +1230,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             <SectionHeader
               icon={Wallet}
               title="Cash Maintenance Chart"
-              description="পণ্য ক্রয়, পাউচ/প্যাকেট ও ডিপো ভাড়া সহ ক্যাশ জমা-খরচ এখানে সরাসরি এন্ট্রি দিন — এগুলো প্রফিটে হিট করে না। Purchase সেকশন থেকে এখানে আর অটো পোস্ট হয় না।"
+              description="পণ্য ক্রয়, পাউচ/প্যাকেট ও ডিপো পণ্য পরিবহন সহ ক্যাশ জমা-খরচ এখানে সরাসরি এন্ট্রি দিন — এগুলো প্রফিটে হিট করে না। Purchase সেকশন থেকে এখানে আর অটো পোস্ট হয় না।"
             />
             <div className="flex flex-wrap gap-3">
               <Select value={cashMode} onValueChange={(value) => setCashMode(value as typeof cashMode)}>

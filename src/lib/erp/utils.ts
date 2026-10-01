@@ -361,7 +361,7 @@ export type FundCashFlowProductRow = { productId: string; productName: string; q
 // consolidated fund/balance picture that ties every inflow source (sales
 // money actually collected, loan withdrawals) against every outflow head
 // (Expense chart + Cash Maintenance chart, which includes goods/packaging
-// purchases, depot rent, loan repayment, depot commission, etc. — see
+// purchases, depot product transport, loan repayment, depot commission, etc. — see
 // CASH_MAINTENANCE_CATEGORIES) for one date range, plus the P&L impact of
 // product returns and vendor-wise/item-wise breakdowns underneath — instead
 // of the same numbers living scattered across the Loan & Cash Maintenance,

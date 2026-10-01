@@ -862,7 +862,7 @@ export type ProductReturnInput = {
 // integrated module. As of 2026-09-22 (client request) it is also fully
 // independent of cash flow: a purchase's `paid` and any VendorPaymentRecord
 // only move the vendor's due, never a CashMaintenanceRecord. Cash actually
-// spent on goods/packaging/depot rent is entered directly on the Loan & Cash
+// spent on goods/packaging/depot product transport is entered directly on the Loan & Cash
 // Maintenance page's Cash Maintenance Chart instead (it was auto-posted
 // from here between 2026-09-12 and 2026-09-22).
 export type VendorRecord = {
