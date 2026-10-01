@@ -1181,7 +1181,7 @@ export default function PurchasePage() {
                       placeholder="Search purchase no or vendor"
                     />
                   </div>
-                  <Button onClick={openCreatePurchaseDialog} className="h-10 rounded-xl" disabled={materials.length === 0}>
+                  <Button onClick={openCreatePurchaseDialog} className="h-10 rounded-xl">
                     <Plus className="mr-2 h-4 w-4" />
                     New Purchase
                   </Button>
@@ -1206,11 +1206,6 @@ export default function PurchasePage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {materials.length === 0 ? (
-                  <div className="mb-4 rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-                    Add at least one material on the Materials & Stock tab before recording a purchase.
-                  </div>
-                ) : null}
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
                   <Table>
                     <TableHeader>

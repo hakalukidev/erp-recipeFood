@@ -1,9 +1,12 @@
-﻿import type { Metadata } from 'next'
+import type { Metadata } from 'next'
+import { Inter } from 'next/font/google'
 import { Toaster } from 'react-hot-toast'
 import { ThemeProvider } from '@/components/theme-provider'
 import { ERPProvider } from '@/lib/erp/provider'
 import { QueryProvider } from '@/lib/queryClient'
 import './globals.css'
+
+const inter = Inter({ subsets: ['latin'], variable: '--font-sans', display: 'swap' })
 
 export const metadata: Metadata = {
   title: 'RecipeFood | ERP System',
@@ -21,7 +24,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
       <body suppressHydrationWarning>
         <QueryProvider>
           <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>

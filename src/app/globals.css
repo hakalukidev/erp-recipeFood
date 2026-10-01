@@ -3,7 +3,7 @@
 
 @layer base {
   :root {
-    --background: 210 40% 98%;
+    --background: 220 20% 97%;
     --foreground: 222 47% 11%;
     --muted: 210 30% 94%;
     --muted-foreground: 215 16% 47%;
@@ -22,7 +22,7 @@
     --destructive: 0 74% 52%;
     --destructive-foreground: 210 40% 98%;
     --ring: 217 91% 56%;
-    --radius: 1rem;
+    --radius: 0.625rem;
     --chart-1: 217 91% 56%;
     --chart-2: 155 70% 42%;
     --chart-3: 18 88% 58%;
@@ -83,9 +83,8 @@
 
   body {
     @apply min-h-full bg-background text-foreground antialiased;
-    background-image:
-      radial-gradient(circle at top, hsl(var(--primary) / 0.14), transparent 32%),
-      linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted) / 0.45));
+    font-feature-settings: "cv11", "ss01";
+    font-variant-numeric: tabular-nums;
   }
 }
 

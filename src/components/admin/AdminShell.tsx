@@ -38,7 +38,6 @@ import {
 
 import { ThemeToggle } from '@/components/theme-toggle'
 import { buildApprovalQueue } from '@/lib/erp/approvals'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -298,23 +297,21 @@ function SidebarContent({
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div
         className={cn(
-          'space-y-4 border-b border-sidebar-border py-6',
+          'flex h-16 items-center border-b border-sidebar-border',
           collapsed ? 'px-3' : 'px-5'
         )}
       >
-        <div className={cn('flex items-center gap-2', collapsed ? 'flex-col' : 'justify-between')}>
+        <div className={cn('flex w-full items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}>
           <Link
             href="/admin/dashboard"
             className={cn('flex min-w-0 items-center gap-3', collapsed && 'justify-center')}
             onClick={onNavigate}
           >
-            <Image src="/recipefood_icon.png" alt="ERP" width={34} height={34} className="h-8 w-8 shrink-0 rounded-md object-contain" />
+            <Image src="/recipefood_icon.png" alt="ERP" width={32} height={32} className="h-8 w-8 shrink-0 rounded-md object-contain" />
             {!collapsed ? (
-              <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-[0.28em] text-sidebar-foreground/60">
-                  ERP
-                </p>
-                <h2 className="truncate text-lg font-semibold">RecipeFood</h2>
+              <div className="min-w-0 leading-tight">
+                <h2 className="truncate text-[15px] font-semibold">RecipeFood</h2>
+                <p className="text-[11px] text-sidebar-foreground/55">ERP System</p>
               </div>
             ) : null}
           </Link>
@@ -322,7 +319,7 @@ function SidebarContent({
             <Button
               variant="ghost"
               size="icon"
-              className="hidden h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground lg:inline-flex"
+              className={cn('hidden h-8 w-8 shrink-0 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground lg:inline-flex', collapsed && 'lg:hidden')}
               onClick={onToggleCollapse}
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
@@ -332,20 +329,31 @@ function SidebarContent({
         </div>
       </div>
 
-      <div className={cn('flex-1 space-y-8 overflow-y-auto overflow-x-hidden py-6', collapsed ? 'px-2' : 'px-4')}>
-        <div className="space-y-6">
+      <div className={cn('flex-1 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}>
+        {collapsed && onToggleCollapse ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mx-auto mb-3 hidden h-8 w-8 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent lg:flex"
+            onClick={onToggleCollapse}
+            title="Expand sidebar"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        ) : null}
+        <div className="space-y-5">
           {visibleGroups.map((group) => {
             const isCollapsible = Boolean(group.collapsible) && !collapsed
             const isOpen = !isCollapsible || openGroups.has(group.title)
 
             return (
-            <div key={group.title || 'primary'} className="space-y-3">
+            <div key={group.title || 'primary'} className="space-y-1">
               {!collapsed && group.title ? (
                 isCollapsible ? (
                   <button
                     type="button"
                     onClick={() => toggleGroup(group.title)}
-                    className="flex w-full items-center justify-between rounded-lg px-2 py-1 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45 transition-colors hover:text-sidebar-foreground/80"
+                    className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/50 transition-colors hover:text-sidebar-foreground/80"
                   >
                     <span>{group.title}</span>
                     <ChevronDown
@@ -353,13 +361,13 @@ function SidebarContent({
                     />
                   </button>
                 ) : (
-                  <p className="px-2 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45">
+                  <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
                     {group.title}
                   </p>
                 )
               ) : null}
               {isOpen ? (
-              <nav className="space-y-2">
+              <nav className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon
                   const isActive = active === item.label
@@ -369,45 +377,30 @@ function SidebarContent({
                       key={item.label}
                       href={item.href}
                       onClick={onNavigate}
-                      title={collapsed ? item.label : undefined}
+                      title={collapsed ? item.label : item.description}
                       className={cn(
-                        'group flex items-center gap-3 rounded-2xl border transition-all',
-                        collapsed ? 'justify-center px-0 py-2.5' : 'items-start px-3 py-3',
+                        'group relative flex items-center gap-3 rounded-md text-sm transition-colors',
+                        collapsed ? 'h-10 justify-center' : 'h-9 px-3',
                         isActive
-                          ? 'border-sidebar-primary/25 bg-sidebar-primary text-sidebar-primary-foreground shadow-lg shadow-sidebar-primary/20'
-                          : 'border-transparent bg-transparent hover:border-sidebar-border hover:bg-sidebar-accent'
+                          ? 'bg-sidebar-primary/10 font-semibold text-sidebar-primary'
+                          : 'font-medium text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-foreground'
                       )}
                     >
-                      <span
-                        className={cn(
-                          'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                          !collapsed && 'mt-0.5',
-                          isActive
-                            ? 'bg-white/18 text-sidebar-primary-foreground'
-                            : 'bg-sidebar-accent text-sidebar-foreground'
-                        )}
-                      >
-                        <Icon className="h-5 w-5" />
-                      </span>
+                      {isActive && !collapsed ? (
+                        <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-r bg-sidebar-primary" />
+                      ) : null}
+                      <Icon className="h-[18px] w-[18px] shrink-0" />
                       {!collapsed ? (
-                        <span className="min-w-0">
-                          <span className="flex items-center gap-2 text-sm font-semibold">
-                            {item.label}
-                            {item.href === '/admin/approvals' && pendingApprovalCount > 0 ? (
-                              <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold leading-none text-white">
-                                {pendingApprovalCount}
-                              </span>
-                            ) : null}
-                          </span>
-                          <span
-                            className={cn(
-                              'mt-1 block text-xs leading-5',
-                              isActive ? 'text-sidebar-primary-foreground/80' : 'text-sidebar-foreground/60'
-                            )}
-                          >
-                            {item.description}
-                          </span>
+                        <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                          <span className="truncate">{item.label}</span>
+                          {item.href === '/admin/approvals' && pendingApprovalCount > 0 ? (
+                            <span className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                              {pendingApprovalCount}
+                            </span>
+                          ) : null}
                         </span>
+                      ) : item.href === '/admin/approvals' && pendingApprovalCount > 0 ? (
+                        <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" />
                       ) : null}
                     </Link>
                   )
@@ -418,9 +411,16 @@ function SidebarContent({
             )
           })}
         </div>
-
-       
       </div>
+
+      {!collapsed ? (
+        <div className="border-t border-sidebar-border px-5 py-3 text-[11px] text-sidebar-foreground/50">
+          Developed by{' '}
+          <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="hover:text-sidebar-foreground hover:underline">
+            hakaluki.dev
+          </a>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -473,7 +473,7 @@ function NotificationBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" className="relative rounded-full">
+        <Button variant="ghost" size="icon" className="relative text-muted-foreground">
           <Bell className="h-4 w-4" />
           {unread.length > 0 ? (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
@@ -675,7 +675,7 @@ function GlobalSearch() {
   }
 
   return (
-    <div ref={containerRef} className="relative hidden w-full max-w-xs sm:block">
+    <div ref={containerRef} className="relative mr-2 hidden w-full max-w-sm md:block">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={query}
@@ -684,8 +684,8 @@ function GlobalSearch() {
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Search invoice, dealer, product, batch, PO, GRN…"
-        className="rounded-full pl-9 pr-8"
+        placeholder="Search dealer, product, vendor…"
+        className="h-9 bg-muted/50 pl-9 pr-8"
       />
       {query ? (
         <button
@@ -698,13 +698,13 @@ function GlobalSearch() {
       ) : null}
 
       {open && query.trim().length >= 2 ? (
-        <div className="absolute left-0 top-full z-40 mt-2 max-h-96 w-full min-w-[22rem] overflow-y-auto rounded-2xl border border-border/70 bg-popover p-2 shadow-xl">
+        <div className="absolute left-0 top-full z-40 mt-2 max-h-96 w-full min-w-[22rem] overflow-y-auto rounded-lg border border-border bg-popover p-1.5 shadow-lg">
           {grouped.length === 0 ? (
             <p className="px-3 py-4 text-center text-sm text-muted-foreground">No matches for &ldquo;{query}&rdquo;.</p>
           ) : (
             grouped.map(([category, items]) => (
               <div key={category} className="mb-2 last:mb-0">
-                <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   {category}
                 </p>
                 {items.map((item) => (
@@ -712,7 +712,7 @@ function GlobalSearch() {
                     key={item.id}
                     type="button"
                     onClick={() => goTo(item)}
-                    className="flex w-full flex-col items-start gap-0.5 rounded-xl px-3 py-2 text-left text-sm hover:bg-accent"
+                    className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
                   >
                     <span className="font-medium text-foreground">{item.title}</span>
                     <span className="text-xs text-muted-foreground">{item.subtitle}</span>
@@ -769,70 +769,68 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
 
   return (
     <div className="min-h-screen">
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
+      <div className="flex min-h-screen">
         <aside
           className={cn(
-            'sticky top-0 hidden h-screen shrink-0 border-r border-sidebar-border bg-sidebar shadow-[24px_0_80px_-48px_rgba(15,23,42,0.45)] transition-[width] duration-200 lg:block',
-            collapsed ? 'w-[88px]' : 'w-[320px]'
+            'sticky top-0 hidden h-screen shrink-0 border-r border-sidebar-border bg-sidebar transition-[width] duration-200 lg:block',
+            collapsed ? 'w-[68px]' : 'w-[248px]'
           )}
         >
           <SidebarContent active={active} collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
         </aside>
 
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur-xl">
-            <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <header className="sticky top-0 z-30 border-b border-border bg-card/90 backdrop-blur">
+            <div className="flex h-16 flex-col justify-center px-4 sm:px-6 lg:px-8">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex min-w-0 items-center gap-3">
                   <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                     <SheetTrigger asChild>
-                      <Button variant="outline" size="icon" className="lg:hidden">
+                      <Button variant="ghost" size="icon" className="lg:hidden">
                         <Menu className="h-5 w-5" />
                       </Button>
                     </SheetTrigger>
-                    <SheetContent side="left" className="w-[320px] border-sidebar-border bg-sidebar p-0">
-                      <SheetHeader className="px-5 pt-6 text-left">
+                    <SheetContent side="left" className="w-[260px] border-sidebar-border bg-sidebar p-0">
+                      <SheetHeader className="sr-only">
                         <SheetTitle>Navigation</SheetTitle>
                         <SheetDescription>Browse the ERP workspace.</SheetDescription>
                       </SheetHeader>
-                      <div className="mt-4 h-[calc(100%-5rem)]">
+                      <div className="h-full">
                         <SidebarContent active={active} onNavigate={() => setMobileOpen(false)} />
                       </div>
                     </SheetContent>
                   </Sheet>
 
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]">
-                        {currentPage.label}
-                      </Badge>
-                      <Badge className="rounded-full bg-primary/10 text-primary hover:bg-primary/10">
-                        {roleName}
-                      </Badge>
-                    </div>
-                    <h1 className="mt-2 truncate text-xl font-semibold tracking-tight sm:text-2xl">
-                      {currentPage.description}
-                    </h1>
+                    <h1 className="truncate text-lg font-semibold tracking-tight">{currentPage.label}</h1>
+                    <p className="hidden truncate text-xs text-muted-foreground md:block">{currentPage.description}</p>
                   </div>
                 </div>
 
-                <div className="flex flex-1 items-center justify-end gap-3">
+                <div className="flex flex-1 items-center justify-end gap-2">
                   <GlobalSearch />
 
                   <NotificationBell />
 
                   <ThemeToggle className="hidden sm:inline-flex" />
 
-                  <div className="hidden text-right text-sm sm:block">
-                    <p className="font-medium text-foreground">{currentUser.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {currentUser.title} · {roleName}
-                    </p>
+                  <div className="ml-2 hidden items-center gap-2.5 border-l border-border pl-4 sm:flex">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {currentUser.name
+                        .split(' ')
+                        .map((part) => part[0])
+                        .slice(0, 2)
+                        .join('')
+                        .toUpperCase()}
+                    </span>
+                    <div className="leading-tight">
+                      <p className="max-w-[10rem] truncate text-sm font-medium text-foreground">{currentUser.name}</p>
+                      <p className="text-[11px] text-muted-foreground">{roleName}</p>
+                    </div>
                   </div>
 
-                  <Button variant="outline" size="sm" className="rounded-full" onClick={logout}>
-                    <LogOut className="mr-2 h-4 w-4" />
-                    Logout
+                  <Button variant="ghost" size="icon" className="text-muted-foreground" onClick={logout} title="Logout">
+                    <LogOut className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
@@ -844,7 +842,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
               {hasPermission(currentPage.permission) ? (
                 children
               ) : (
-                <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-border/70 bg-card/50 p-10 text-center">
+                <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-10 text-center">
                   <Lock className="h-8 w-8 text-muted-foreground" />
                   <p className="text-lg font-semibold">Access restricted</p>
                   <p className="max-w-md text-sm text-muted-foreground">
@@ -856,16 +854,8 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
             </div>
           </main>
 
-          <footer className="border-t border-border/60 px-4 py-5 text-sm text-muted-foreground sm:px-6 lg:px-8">
-            <div className="mx-auto flex max-w-7xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <p>{data?.settings.companyName ?? 'ERP'} · {data?.settings.timezone ?? 'Asia/Dhaka'}</p>
-             <div className="px-2 pt-4 text-xs leading-5 text-sidebar-foreground/70">
-            Developed by{' '}
-            <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="hover:text-sidebar-foreground hover:underline">
-              hakaluki.dev
-            </a>
-          </div>
-            </div>
+          <footer className="border-t border-border px-4 py-3 text-xs text-muted-foreground sm:px-6 lg:px-8">
+            <p>{data?.settings.companyName ?? 'ERP'} · {data?.settings.timezone ?? 'Asia/Dhaka'}</p>
           </footer>
         </div>
       </div>
