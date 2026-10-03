@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ERP Cache Backup</title>
+<style>
+  :root { --bg: #f8fafc; --card: #fff; --text: #0f172a; --muted: #64748b; --line: #e2e8f0; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #94a3b8; --line: #334155; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, 'Noto Sans Bengali', sans-serif; }
+  main { max-width: 640px; margin: 32px auto; padding: 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  td { border-bottom: 1px solid var(--line); padding: 6px 4px; }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 12px 18px; font-size: 15px; cursor: pointer; width: 100%; }
+  button:disabled { opacity: .5; cursor: default; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>পুরনো ERP ডাটার ব্যাকআপ</h1>
+    <p>এই পেজ শুধু ব্রাউজারে জমা থাকা পুরনো কপি (offline cache) পড়ে ফাইল বানায়। ইন্টারনেট বা Firebase-এ যায় না, কিছু বদলায় না।</p>
+    <div id="status"><p>পড়া হচ্ছে…</p></div>
+    <button id="dl" disabled>Download backup (.json)</button>
+  </div>
+</main>
+<script>
+  // Read-only: opens the app's IndexedDB cache WITHOUT creating or upgrading it,
+  // reads the single 'erp-data' snapshot, and offers it as a file.
+  var KEYS = [
+    ['rateCards', 'ইনভয়েস'], ['collections', 'কালেকশন'], ['productReturns', 'প্রোডাক্ট রিটার্ন'], ['expenses', 'খরচ'],
+    ['cashMaintenance', 'ক্যাশ মেইনটেন্যান্স'], ['loanTransactions', 'লোনের লেনদেন'], ['loanAccounts', 'লোন মেম্বার'],
+    ['vendors', 'ভেন্ডর'], ['purchases', 'পারচেজ'], ['ledgerEntries', 'লেজার এন্ট্রি'], ['orders', 'পুরনো অর্ডার'],
+    ['products', 'প্রোডাক্ট'], ['dealers', 'ডিলার'], ['notifications', 'নোটিফিকেশন']
+  ];
+  var statusEl = document.getElementById('status'), btn = document.getElementById('dl'), snapshot = null;
+  function show(html) { statusEl.innerHTML = html; }
+  var req = indexedDB.open('erp-offline-cache');
+  req.onupgradeneeded = function () { req.transaction.abort(); };
+  req.onerror = function () { show('<p class="bad">এই ব্রাউজারে পুরনো কপি পাওয়া যায়নি।</p>'); };
+  req.onsuccess = function () {
+    var db = req.result;
+    if (!db.objectStoreNames.contains('snapshots')) { show('<p class="bad">এই ব্রাউজারে পুরনো কপি পাওয়া যায়নি।</p>'); return; }
+    var get = db.transaction('snapshots', 'readonly').objectStore('snapshots').get('erp-data');
+    get.onsuccess = function () {
+      snapshot = get.result;
+      if (!snapshot) { show('<p class="bad">কপি খালি।</p>'); return; }
+      var latest = '';
+      ['rateCards', 'expenses', 'cashMaintenance', 'collections'].forEach(function (k) {
+        Object.values(snapshot[k] || {}).forEach(function (r) { if (r && r.createdAt > latest) latest = r.createdAt; });
+      });
+      var rows = KEYS.map(function (k) { return '<tr><td>' + k[1] + '</td><td>' + Object.keys(snapshot[k[0]] || {}).length + '</td></tr>'; }).join('');
+      var hasData = Object.keys(snapshot.rateCards || {}).length > 0;
+      show('<p class="' + (hasData ? 'ok' : 'bad') + '">' + (hasData ? 'পুরনো ডাটা পাওয়া গেছে ✓' : 'এই কপিতে পুরনো ইনভয়েস নেই — এটা সম্ভবত নতুন খালি ডাটা।') + '</p>' +
+        '<p>শেষ এন্ট্রির সময়: ' + (latest ? new Date(latest).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka' }) : '—') + '</p><table>' + rows + '</table>');
+      btn.disabled = false;
+    };
+    get.onerror = function () { show('<p class="bad">পড়া যায়নি।</p>'); };
+  };
+  btn.onclick = function () {
+    var blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'recipefood-old-data-backup-2026-10-02.json';
+    a.click();
+  };
+</script>
+</body>
+</html>
