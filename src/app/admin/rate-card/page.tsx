@@ -64,6 +64,7 @@ import {
   dhakaTodayIso,
   formatDate,
   isCommissionSaleType,
+  isCountedEntry,
   isTradeSalesType,
   parsePerCtnMultiplier,
   rateCardLineStockUnits,
@@ -909,9 +910,35 @@ export default function RateCardPage() {
   }, [dealers, dealerCategories])
 
   const [query, setQuery] = useState('')
-  // Invoice list defaults to the current month (all of that month's
-  // invoices); clearing the month input shows every month.
+  // Invoice list + summary cards period: Monthly (default, current month),
+  // Daily, Custom range (from–to, either end optional) or All time. An
+  // emptied input falls back to All time.
+  const [periodMode, setPeriodMode] = useState<'monthly' | 'daily' | 'range' | 'all'>('monthly')
   const [listMonth, setListMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [listDay, setListDay] = useState(() => dhakaTodayIso())
+  const [rangeFrom, setRangeFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [rangeTo, setRangeTo] = useState(() => dhakaTodayIso())
+  const period = useMemo(() => {
+    if (periodMode === 'monthly' && listMonth) {
+      return {
+        inPeriod: (date: string) => date.slice(0, 7) === listMonth,
+        label: new Date(`${listMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
+      }
+    }
+    if (periodMode === 'daily' && listDay) {
+      return { inPeriod: (date: string) => date.slice(0, 10) === listDay, label: formatDate(listDay) }
+    }
+    if (periodMode === 'range' && (rangeFrom || rangeTo)) {
+      return {
+        inPeriod: (date: string) => {
+          const day = date.slice(0, 10)
+          return (!rangeFrom || day >= rangeFrom) && (!rangeTo || day <= rangeTo)
+        },
+        label: `${rangeFrom ? formatDate(rangeFrom) : 'Beginning'} – ${rangeTo ? formatDate(rangeTo) : 'Now'}`,
+      }
+    }
+    return { inPeriod: () => true, label: 'All time' }
+  }, [periodMode, listMonth, listDay, rangeFrom, rangeTo])
   const [dateSort, setDateSort] = useState<'desc' | 'asc'>('desc')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -939,14 +966,30 @@ export default function RateCardPage() {
     const normalized = query.trim().toLowerCase()
     const matches = rateCards.filter(
       (card) =>
-        (!listMonth || card.date.slice(0, 7) === listMonth) &&
+        period.inPeriod(card.date) &&
         (!normalized || [card.invoiceNo, card.recipientName].join(' ').toLowerCase().includes(normalized)),
     )
     // Stable sort on the invoice date; same-day invoices keep the
     // newest-created-first order rateCards already has.
     const direction = dateSort === 'asc' ? 1 : -1
     return [...matches].sort((a, b) => direction * a.date.localeCompare(b.date))
-  }, [rateCards, query, listMonth, dateSort])
+  }, [rateCards, query, period, dateSort])
+
+  // Summary cards follow the list's month picker (but not the search box),
+  // so they show that month's invoice count and sales; cleared = all months.
+  const monthRateCards = useMemo(() => rateCards.filter((card) => period.inPeriod(card.date)), [rateCards, period])
+  const monthLabel = period.label
+  // Money totals skip rejected invoices (isCountedEntry), like every other
+  // total in the ERP; the count above still includes them.
+  const periodTotals = useMemo(() => {
+    const counted = monthRateCards.filter(isCountedEntry)
+    return {
+      sales: counted.reduce((sum, card) => sum + card.dealerRateTotal, 0),
+      paid: counted.reduce((sum, card) => sum + card.paid, 0),
+      returns: counted.reduce((sum, card) => sum + (card.returnAdjustment ?? 0), 0),
+      due: counted.reduce((sum, card) => sum + card.due, 0),
+    }
+  }, [monthRateCards])
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
   const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
@@ -1172,21 +1215,37 @@ export default function RateCardPage() {
   return (
     <AdminShell active="Invoice">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Rate cards</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{rateCards.length.toLocaleString('en-BD')}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Each prints as Company, Depot &amp; Dealer vouchers</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{monthRateCards.length.toLocaleString('en-BD')}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{monthLabel} · each prints as Company, Depot &amp; Dealer vouchers</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Total dealer sales value</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight">
-                {formatAmount(rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0))}
+                {formatAmount(periodTotals.sales)}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Across all saved rate cards</p>
+              <p className="mt-1 text-xs text-muted-foreground">{monthLabel} · rejected invoices not counted</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Collected</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">{formatAmount(periodTotals.paid)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">Paid so far against these invoices</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Outstanding due</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">{formatAmount(periodTotals.due)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Still owed on these invoices{periodTotals.returns ? ` · ${formatAmount(periodTotals.returns)} credited by returns` : ''}
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -1207,13 +1266,33 @@ export default function RateCardPage() {
               </CardDescription>
             </div>
             <div className="flex flex-wrap gap-3">
-              <Input
-                className="w-full sm:w-44"
-                type="month"
-                value={listMonth}
-                onChange={(event) => setListMonth(event.target.value)}
-                title="Clear to show all months"
-              />
+              <Select value={periodMode} onValueChange={(value) => setPeriodMode(value as typeof periodMode)}>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="range">Custom range</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              {periodMode === 'monthly' ? (
+                <Input className="w-full sm:w-44" type="month" value={listMonth} onChange={(event) => setListMonth(event.target.value)} aria-label="Month" />
+              ) : null}
+              {periodMode === 'daily' ? (
+                <Input className="w-full sm:w-44" type="date" value={listDay} onChange={(event) => setListDay(event.target.value)} aria-label="Day" />
+              ) : null}
+              {periodMode === 'range' ? (
+                <>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    From
+                    <Input className="w-full sm:w-40" type="date" value={rangeFrom} max={rangeTo || undefined} onChange={(event) => setRangeFrom(event.target.value)} />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    To
+                    <Input className="w-full sm:w-40" type="date" value={rangeTo} min={rangeFrom || undefined} onChange={(event) => setRangeTo(event.target.value)} />
+                  </label>
+                </>
+              ) : null}
               <Select value={dateSort} onValueChange={(value) => setDateSort(value as 'desc' | 'asc')}>
                 <SelectTrigger className="w-full sm:w-44"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -1348,7 +1427,7 @@ export default function RateCardPage() {
                         <Calculator className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         {rateCards.length === 0
                           ? 'No rate cards yet. Create one to build a Company/Depot/Dealer voucher.'
-                          : 'No invoices match this month / search.'}
+                          : `No invoices match ${monthLabel} / search.`}
                       </TableCell>
                     </TableRow>
                   ) : null}

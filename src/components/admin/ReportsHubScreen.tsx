@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { FileBarChart, HandCoins, ReceiptText, Search, ShoppingCart, Truck } from 'lucide-react'
+import { CalendarDays, FileBarChart, HandCoins, ReceiptText, Search, ShoppingCart, Truck } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
@@ -10,7 +10,8 @@ import { SalesReportsContent } from './SalesReportsScreen'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   COMPANY_ADDRESS,
   COMPANY_EMAIL,
@@ -19,7 +20,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { computeVendorDue, expenseCategoryLabel, formatCurrency, formatDate, isCashMaintenanceOut, loanTransactionTypeLabel, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { computeVendorDue, dhakaTodayIso, expenseCategoryLabel, formatCurrency, formatDate, isCashMaintenanceOut, isCountedEntry, loanTransactionTypeLabel, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SectionId = 'fund' | 'sales' | 'expense' | 'purchase' | 'vendor' | 'loan'
@@ -53,7 +54,7 @@ function openPrintWindow(html: string) {
 // own richer voucher-style prints inside SalesReportsContent) — a plain
 // column/row table under the company letterhead, same family as
 // buildExpenseReportHtml in app/admin/finance/page.tsx.
-function buildGenericReportHtml(title: string, headers: string[], rows: (string | number)[][]) {
+function buildGenericReportHtml(title: string, headers: string[], rows: (string | number)[][], totalsRow?: (string | number)[]) {
   const headerRow = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')
   const bodyRows = rows
     .map(
@@ -93,6 +94,13 @@ function buildGenericReportHtml(title: string, headers: string[], rows: (string 
         <table class="doc">
           <thead><tr>${headerRow}</tr></thead>
           <tbody>${bodyRows}</tbody>
+          ${
+            totalsRow
+              ? `<tfoot><tr>${totalsRow
+                  .map((cell, index) => `<th class="${typeof cell === 'number' && index > 0 ? 'numeric' : ''}">${escapeHtml(String(cell))}</th>`)
+                  .join('')}</tr></tfoot>`
+              : ''
+          }
         </table>
         <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
@@ -120,39 +128,34 @@ function SectionHeader({
   )
 }
 
-// A date range filter shared by the Expense/Purchase/Loan tabs — empty
-// from/to means "no filter" (show everything on file).
-function DateRangeFilter({
-  from,
-  to,
-  onFromChange,
-  onToChange,
-}: {
-  from: string
-  to: string
-  onFromChange: (value: string) => void
-  onToChange: (value: string) => void
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Input type="date" className="w-40" value={from} onChange={(event) => onFromChange(event.target.value)} />
-      <span className="text-sm text-muted-foreground">to</span>
-      <Input type="date" className="w-40" value={to} onChange={(event) => onToChange(event.target.value)} />
-      {from || to ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            onFromChange('')
-            onToChange('')
-          }}
-        >
-          Clear
-        </Button>
-      ) : null}
-    </div>
-  )
+// ---- Shared report period (2026-10-04 client request) --------------------
+// One Monthly / Daily / Custom range / All time selector at the top of the
+// hub, applied to every date-scoped tab (Fund, Sales, Expense, Purchase,
+// Loan) so picking a month shows that month's detail + totals everywhere.
+type PeriodMode = 'monthly' | 'daily' | 'range' | 'all'
+
+function monthEnd(month: string) {
+  const [year, monthIndex] = month.split('-').map(Number)
+  const lastDay = new Date(year, monthIndex, 0).getDate()
+  return `${month}-${String(lastDay).padStart(2, '0')}`
+}
+
+function monthLabelOf(month: string) {
+  return new Date(`${month}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+}
+
+// Resolves the selector to an inclusive from/to ('' = open-ended) + label.
+function resolvePeriod(mode: PeriodMode, month: string, day: string, rangeFrom: string, rangeTo: string) {
+  if (mode === 'monthly' && month) return { from: `${month}-01`, to: monthEnd(month), label: monthLabelOf(month) }
+  if (mode === 'daily' && day) return { from: day, to: day, label: formatDate(day) }
+  if (mode === 'range' && (rangeFrom || rangeTo)) {
+    return {
+      from: rangeFrom,
+      to: rangeTo,
+      label: `${rangeFrom ? formatDate(rangeFrom) : 'Beginning'} – ${rangeTo ? formatDate(rangeTo) : 'Now'}`,
+    }
+  }
+  return { from: '', to: '', label: 'All time' }
 }
 
 function inRange(date: string, from: string, to: string) {
@@ -173,6 +176,19 @@ export function ReportsHubScreen() {
   const currency = data?.settings.currency
   const [section, setSection] = useState<SectionId>('fund')
 
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('monthly')
+  const [periodMonth, setPeriodMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [periodDay, setPeriodDay] = useState(() => dhakaTodayIso())
+  const [rangeFrom, setRangeFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [rangeTo, setRangeTo] = useState(() => dhakaTodayIso())
+  const period = useMemo(
+    () => resolvePeriod(periodMode, periodMonth, periodDay, rangeFrom, rangeTo),
+    [periodMode, periodMonth, periodDay, rangeFrom, rangeTo]
+  )
+  const periodFrom = period.from
+  const periodTo = period.to
+  const periodLabel = period.label
+
   // ---- Expense report (client request, 2026-09-13) -----------------------
   // Sector-wise summary + a single combined detail list, always visible —
   // no date filter needs to be applied first. Merges in Cash Maintenance's
@@ -183,8 +199,6 @@ export function ReportsHubScreen() {
   // the client's own daily cash tally — which treats every taka that left
   // the till the same way — never matched what this report showed. Direct-
   // expense rows are included (isCashMaintenanceOut, since 2026-09-29).
-  const [expenseFrom, setExpenseFrom] = useState('')
-  const [expenseTo, setExpenseTo] = useState('')
 
   type CombinedExpenseRow = {
     date: string
@@ -219,9 +233,9 @@ export function ReportsHubScreen() {
   const filteredExpenses = useMemo(
     () =>
       combinedExpenseRows
-        .filter((row) => inRange(row.date, expenseFrom, expenseTo))
+        .filter((row) => inRange(row.date, periodFrom, periodTo))
         .sort((a, b) => b.date.localeCompare(a.date)),
-    [combinedExpenseRows, expenseFrom, expenseTo]
+    [combinedExpenseRows, periodFrom, periodTo]
   )
   const expenseTotal = useMemo(() => filteredExpenses.reduce((sum, row) => sum + row.amount, 0), [filteredExpenses])
 
@@ -238,6 +252,28 @@ export function ReportsHubScreen() {
     return Array.from(map.values()).sort((a, b) => b.total - a.total)
   }, [filteredExpenses])
 
+  const expenseSourceTotals = useMemo(
+    () => ({
+      expense: filteredExpenses.filter((row) => row.source === 'Expense').reduce((sum, row) => sum + row.amount, 0),
+      cash: filteredExpenses.filter((row) => row.source === 'Cash Maintenance').reduce((sum, row) => sum + row.amount, 0),
+    }),
+    [filteredExpenses]
+  )
+
+  // Day-by-day totals for the period — the "details" view when a whole
+  // month (or a range) is picked.
+  const expenseDailyTotals = useMemo(() => {
+    const map = new Map<string, { date: string; count: number; total: number }>()
+    for (const row of filteredExpenses) {
+      const date = row.date.slice(0, 10)
+      const existing = map.get(date) ?? { date, count: 0, total: 0 }
+      existing.count += 1
+      existing.total += row.amount
+      map.set(date, existing)
+    }
+    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date))
+  }, [filteredExpenses])
+
   const expenseHeaders = ['Date', 'Category', 'Source', 'Amount', 'Note']
   const expenseRows = useMemo(
     () => filteredExpenses.map((row) => [formatDate(row.date), row.category, row.source, row.amount, row.note ?? '']),
@@ -245,12 +281,28 @@ export function ReportsHubScreen() {
   )
 
   // ---- Purchase report ---------------------------------------------------
-  const [purchaseFrom, setPurchaseFrom] = useState('')
-  const [purchaseTo, setPurchaseTo] = useState('')
   const filteredPurchases = useMemo(() => {
-    return sortByCreatedAtDesc(toArray(data?.purchases)).filter((purchase) => inRange(purchase.date, purchaseFrom, purchaseTo))
-  }, [data?.purchases, purchaseFrom, purchaseTo])
-  const purchaseTotal = useMemo(() => filteredPurchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0), [filteredPurchases])
+    return sortByCreatedAtDesc(toArray(data?.purchases)).filter((purchase) => inRange(purchase.date, periodFrom, periodTo))
+  }, [data?.purchases, periodFrom, periodTo])
+  // Totals skip rejected purchases (isCountedEntry); the rows still list them.
+  const purchaseTotals = useMemo(() => {
+    const counted = filteredPurchases.filter(isCountedEntry)
+    return {
+      count: counted.length,
+      items: counted.reduce((sum, purchase) => sum + purchase.items.length, 0),
+      total: counted.reduce((sum, purchase) => sum + purchase.totalAmount, 0),
+      paid: counted.reduce((sum, purchase) => sum + purchase.paid, 0),
+      due: counted.reduce((sum, purchase) => sum + purchase.due, 0),
+    }
+  }, [filteredPurchases])
+  // Vendor payments (per-purchase or vendor-level) dated inside the period.
+  const vendorPaymentsInPeriod = useMemo(
+    () =>
+      toArray(data?.vendorPayments)
+        .filter((payment) => isCountedEntry(payment) && inRange(payment.date, periodFrom, periodTo))
+        .reduce((sum, payment) => sum + payment.amount, 0),
+    [data?.vendorPayments, periodFrom, periodTo]
+  )
   const purchaseHeaders = ['Purchase No', 'Vendor', 'Date', 'Items', 'Total', 'Paid', 'Due']
   const purchaseRows = useMemo(
     () =>
@@ -265,6 +317,15 @@ export function ReportsHubScreen() {
       ]),
     [filteredPurchases]
   )
+  const purchaseTotalsRow = [
+    `Total — ${periodLabel}`,
+    '',
+    '',
+    purchaseTotals.items,
+    purchaseTotals.total.toFixed(2),
+    purchaseTotals.paid.toFixed(2),
+    purchaseTotals.due.toFixed(2),
+  ]
 
   // ---- Vendor report ------------------------------------------------------
   // No date range — "current due" is always a point-in-time figure, not
@@ -282,11 +343,38 @@ export function ReportsHubScreen() {
     if (!normalized) return vendors
     return vendors.filter((vendor) => [vendor.name, vendor.proprietorName ?? '', vendor.phone].join(' ').toLowerCase().includes(normalized))
   }, [vendors, vendorQuery])
+  const vendorPeriodById = useMemo(() => {
+    const map = new Map<string, { purchased: number; paid: number }>()
+    for (const purchase of toArray(data?.purchases)) {
+      if (!isCountedEntry(purchase) || !inRange(purchase.date, periodFrom, periodTo)) continue
+      const row = map.get(purchase.vendorId) ?? { purchased: 0, paid: 0 }
+      row.purchased += purchase.totalAmount
+      map.set(purchase.vendorId, row)
+    }
+    for (const payment of toArray(data?.vendorPayments)) {
+      if (!payment.vendorId || !isCountedEntry(payment) || !inRange(payment.date, periodFrom, periodTo)) continue
+      const row = map.get(payment.vendorId) ?? { purchased: 0, paid: 0 }
+      row.paid += payment.amount
+      map.set(payment.vendorId, row)
+    }
+    return map
+  }, [data?.purchases, data?.vendorPayments, periodFrom, periodTo])
+  const vendorPeriodTotals = useMemo(
+    () =>
+      filteredVendors.reduce(
+        (totals, vendor) => ({
+          purchased: totals.purchased + (vendorPeriodById.get(vendor.id)?.purchased ?? 0),
+          paid: totals.paid + (vendorPeriodById.get(vendor.id)?.paid ?? 0),
+        }),
+        { purchased: 0, paid: 0 }
+      ),
+    [filteredVendors, vendorPeriodById]
+  )
   const vendorTotalDue = useMemo(
     () => filteredVendors.reduce((sum, vendor) => sum + (vendorDueById.get(vendor.id) ?? 0), 0),
     [filteredVendors, vendorDueById]
   )
-  const vendorHeaders = ['Vendor Name', 'Proprietor', 'Phone', 'Address', 'Current Due']
+  const vendorHeaders = ['Vendor Name', 'Proprietor', 'Phone', 'Address', 'Purchased (period)', 'Payments (period)', 'Current Due']
   const vendorRows = useMemo(
     () =>
       filteredVendors.map((vendor) => [
@@ -294,25 +382,62 @@ export function ReportsHubScreen() {
         vendor.proprietorName ?? '',
         vendor.phone,
         vendor.address,
+        (vendorPeriodById.get(vendor.id)?.purchased ?? 0).toFixed(2),
+        (vendorPeriodById.get(vendor.id)?.paid ?? 0).toFixed(2),
         (vendorDueById.get(vendor.id) ?? 0).toFixed(2),
       ]),
-    [filteredVendors, vendorDueById]
+    [filteredVendors, vendorDueById, vendorPeriodById]
   )
+  const vendorTotalsRow = [
+    `Total — ${periodLabel}`,
+    '',
+    '',
+    '',
+    vendorPeriodTotals.purchased.toFixed(2),
+    vendorPeriodTotals.paid.toFixed(2),
+    vendorTotalDue.toFixed(2),
+  ]
 
   // ---- Loan report --------------------------------------------------------
-  const [loanFrom, setLoanFrom] = useState('')
-  const [loanTo, setLoanTo] = useState('')
   const filteredLoanTransactions = useMemo(() => {
-    return sortByCreatedAtDesc(toArray(data?.loanTransactions)).filter((entry) => inRange(entry.date, loanFrom, loanTo))
-  }, [data?.loanTransactions, loanFrom, loanTo])
+    return sortByCreatedAtDesc(toArray(data?.loanTransactions)).filter((entry) => inRange(entry.date, periodFrom, periodTo))
+  }, [data?.loanTransactions, periodFrom, periodTo])
+  // Totals skip rejected transactions (isCountedEntry), same as the Loan Chart.
   const loanWithdrawals = useMemo(
-    () => filteredLoanTransactions.filter((entry) => entry.type === 'withdrawal').reduce((sum, entry) => sum + entry.amount, 0),
+    () =>
+      filteredLoanTransactions
+        .filter((entry) => entry.type === 'withdrawal' && isCountedEntry(entry))
+        .reduce((sum, entry) => sum + entry.amount, 0),
     [filteredLoanTransactions]
   )
   const loanRepayments = useMemo(
-    () => filteredLoanTransactions.filter((entry) => entry.type === 'repayment').reduce((sum, entry) => sum + entry.amount, 0),
+    () =>
+      filteredLoanTransactions
+        .filter((entry) => entry.type === 'repayment' && isCountedEntry(entry))
+        .reduce((sum, entry) => sum + entry.amount, 0),
     [filteredLoanTransactions]
   )
+  // Loan balance owed at the end of the period (every counted transaction
+  // up to periodTo) — the closing figure for the selected month/day.
+  const loanClosingBalance = useMemo(
+    () =>
+      toArray(data?.loanTransactions)
+        .filter((entry) => isCountedEntry(entry) && (!periodTo || entry.date.slice(0, 10) <= periodTo))
+        .reduce((sum, entry) => sum + (entry.type === 'withdrawal' ? entry.amount : -entry.amount), 0),
+    [data?.loanTransactions, periodTo]
+  )
+  // Member-wise breakdown for the period.
+  const loanMemberSummary = useMemo(() => {
+    const map = new Map<string, { member: string; withdrawn: number; repaid: number }>()
+    for (const entry of filteredLoanTransactions) {
+      if (!isCountedEntry(entry)) continue
+      const row = map.get(entry.loanAccountId) ?? { member: entry.memberName, withdrawn: 0, repaid: 0 }
+      if (entry.type === 'withdrawal') row.withdrawn += entry.amount
+      else row.repaid += entry.amount
+      map.set(entry.loanAccountId, row)
+    }
+    return Array.from(map.values()).sort((a, b) => a.member.localeCompare(b.member))
+  }, [filteredLoanTransactions])
   const loanHeaders = ['Date', 'Member', 'Type', 'Amount', 'Note']
   const loanRows = useMemo(
     () =>
@@ -345,9 +470,51 @@ export function ReportsHubScreen() {
           ))}
         </div>
 
-        {section === 'fund' ? <FundCashFlowReport /> : null}
+        <Card className="border-border/70 shadow-sm">
+          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Report period:</span>
+              <span className="text-muted-foreground">{periodLabel}</span>
+              {section === 'vendor' ? (
+                <span className="text-xs text-muted-foreground">(Current Due is always as of today)</span>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={periodMode} onValueChange={(value) => setPeriodMode(value as PeriodMode)}>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="range">Custom range</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              {periodMode === 'monthly' ? (
+                <Input className="w-full sm:w-44" type="month" value={periodMonth} onChange={(event) => setPeriodMonth(event.target.value)} aria-label="Month" />
+              ) : null}
+              {periodMode === 'daily' ? (
+                <Input className="w-full sm:w-44" type="date" value={periodDay} onChange={(event) => setPeriodDay(event.target.value)} aria-label="Day" />
+              ) : null}
+              {periodMode === 'range' ? (
+                <>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    From
+                    <Input className="w-full sm:w-40" type="date" value={rangeFrom} max={rangeTo || undefined} onChange={(event) => setRangeFrom(event.target.value)} />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    To
+                    <Input className="w-full sm:w-40" type="date" value={rangeTo} min={rangeFrom || undefined} onChange={(event) => setRangeTo(event.target.value)} />
+                  </label>
+                </>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
 
-        {section === 'sales' ? <SalesReportsContent /> : null}
+        {section === 'fund' ? <FundCashFlowReport from={periodFrom} to={periodTo} periodLabel={periodLabel} /> : null}
+
+        {section === 'sales' ? <SalesReportsContent from={periodFrom} to={periodTo} periodLabel={periodLabel} /> : null}
 
         {section === 'expense' ? (
           <div className="space-y-6">
@@ -359,23 +526,46 @@ export function ReportsHubScreen() {
                   description="Every recorded expense plus Cash Maintenance's own cash-out categories (Product Purchase, Packaging, etc.) — sector-wise summary and full detail together, no filter needed."
                 />
                 <div className="flex flex-wrap items-center gap-3">
-                  <DateRangeFilter from={expenseFrom} to={expenseTo} onFromChange={setExpenseFrom} onToChange={setExpenseTo} />
-                  <ExportMenu filenameBase="expense-report" title="Expense Report" headers={expenseHeaders} rows={expenseRows} />
+                  <ExportMenu filenameBase={`expense-report-${periodFrom || 'all'}`} title={`Expense Report — ${periodLabel}`} headers={expenseHeaders} rows={expenseRows} />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     disabled={expenseRows.length === 0}
-                    onClick={() => openPrintWindow(buildGenericReportHtml('Expense Report', expenseHeaders, expenseRows))}
+                    onClick={() =>
+                      openPrintWindow(
+                        buildGenericReportHtml(`Expense Report — ${periodLabel}`, expenseHeaders, expenseRows, [
+                          `Total (${filteredExpenses.length} entries)`,
+                          '',
+                          '',
+                          expenseTotal.toFixed(2),
+                          '',
+                        ])
+                      )
+                    }
                   >
                     Print
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                  <span className="text-muted-foreground">Total for this range</span>
-                  <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseTotal, currency)}</p>
+                <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">Total — {periodLabel}</span>
+                    <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseTotal, currency)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">From Expenses</span>
+                    <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseSourceTotals.expense, currency)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">From Cash Maintenance</span>
+                    <p className="mt-1 text-lg font-semibold">{formatCurrency(expenseSourceTotals.cash, currency)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">Entries</span>
+                    <p className="mt-1 text-lg font-semibold">{filteredExpenses.length.toLocaleString('en-BD')}</p>
+                  </div>
                 </div>
 
                 <p className="mb-2 text-sm font-medium text-foreground">Sector-wise summary</p>
@@ -405,13 +595,49 @@ export function ReportsHubScreen() {
                       {expenseCategorySummary.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
-                            No expenses for this range.
+                            No expenses for this period.
                           </TableCell>
                         </TableRow>
                       ) : null}
                     </TableBody>
+                    {expenseCategorySummary.length > 0 ? (
+                      <TableFooter>
+                        <TableRow>
+                          <TableCell className="font-semibold">Total</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(expenseSourceTotals.expense, currency)}</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(expenseSourceTotals.cash, currency)}</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(expenseTotal, currency)}</TableCell>
+                        </TableRow>
+                      </TableFooter>
+                    ) : null}
                   </Table>
                 </div>
+
+                {expenseDailyTotals.length > 1 ? (
+                  <>
+                    <p className="mb-2 text-sm font-medium text-foreground">Day-wise total</p>
+                    <div className="mb-6 overflow-x-auto rounded-2xl border border-border/70">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            <TableHead>Date</TableHead>
+                            <TableHead className="text-right">Entries</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {expenseDailyTotals.map((row) => (
+                            <TableRow key={row.date}>
+                              <TableCell>{formatDate(row.date)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{row.count}</TableCell>
+                              <TableCell className="text-right tabular-nums font-semibold">{formatCurrency(row.total, currency)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                ) : null}
 
                 <p className="mb-2 text-sm font-medium text-foreground">Date-wise detail</p>
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
@@ -438,11 +664,20 @@ export function ReportsHubScreen() {
                       {filteredExpenses.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                            No expenses for this range.
+                            No expenses for this period.
                           </TableCell>
                         </TableRow>
                       ) : null}
                     </TableBody>
+                    {filteredExpenses.length > 0 ? (
+                      <TableFooter>
+                        <TableRow>
+                          <TableCell colSpan={3} className="font-semibold">Total — {periodLabel}</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(expenseTotal, currency)}</TableCell>
+                          <TableCell />
+                        </TableRow>
+                      </TableFooter>
+                    ) : null}
                   </Table>
                 </div>
               </CardContent>
@@ -453,25 +688,40 @@ export function ReportsHubScreen() {
         {section === 'purchase' ? (
           <Card className="border-border/70 shadow-sm">
             <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader icon={ShoppingCart} title="Purchase Report" description="Every procurement transaction, optionally scoped to a date range." />
+              <SectionHeader icon={ShoppingCart} title="Purchase Report" description="Every procurement transaction in the selected period — rejected purchases are listed but not counted in totals." />
               <div className="flex flex-wrap items-center gap-3">
-                <DateRangeFilter from={purchaseFrom} to={purchaseTo} onFromChange={setPurchaseFrom} onToChange={setPurchaseTo} />
-                <ExportMenu filenameBase="purchase-report" title="Purchase Report" headers={purchaseHeaders} rows={purchaseRows} />
+                <ExportMenu filenameBase={`purchase-report-${periodFrom || 'all'}`} title={`Purchase Report — ${periodLabel}`} headers={purchaseHeaders} rows={purchaseRows} />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={purchaseRows.length === 0}
-                  onClick={() => openPrintWindow(buildGenericReportHtml('Purchase Report', purchaseHeaders, purchaseRows))}
+                  onClick={() => openPrintWindow(buildGenericReportHtml(`Purchase Report — ${periodLabel}`, purchaseHeaders, purchaseRows, purchaseTotalsRow))}
                 >
                   Print
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Total for this range</span>
-                <p className="mt-1 text-lg font-semibold">{formatCurrency(purchaseTotal, currency)}</p>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Total purchased — {periodLabel}</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(purchaseTotals.total, currency)}</p>
+                  <p className="text-xs text-muted-foreground">{purchaseTotals.count} purchase(s)</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Paid on these purchases</span>
+                  <p className="mt-1 text-lg font-semibold text-emerald-600">{formatCurrency(purchaseTotals.paid, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Still due on these purchases</span>
+                  <p className="mt-1 text-lg font-semibold text-destructive">{formatCurrency(purchaseTotals.due, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Vendor payments made in period</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(vendorPaymentsInPeriod, currency)}</p>
+                  <p className="text-xs text-muted-foreground">Later payments, by payment date</p>
+                </div>
               </div>
               <div className="overflow-x-auto rounded-2xl border border-border/70">
                 <Table>
@@ -501,11 +751,22 @@ export function ReportsHubScreen() {
                     {filteredPurchases.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                          No purchases for this range.
+                          No purchases for this period.
                         </TableCell>
                       </TableRow>
                     ) : null}
                   </TableBody>
+                  {filteredPurchases.length > 0 ? (
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={3} className="font-semibold">Total — {periodLabel}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{purchaseTotals.items}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(purchaseTotals.total, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(purchaseTotals.paid, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(purchaseTotals.due, currency)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  ) : null}
                 </Table>
               </div>
             </CardContent>
@@ -515,7 +776,7 @@ export function ReportsHubScreen() {
         {section === 'vendor' ? (
           <Card className="border-border/70 shadow-sm">
             <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader icon={Truck} title="Vendor Report" description="Vendor directory with current due — a point-in-time figure, not date-scoped." />
+              <SectionHeader icon={Truck} title="Vendor Report" description="Vendor directory — purchases and payments in the selected period, plus each vendor's current due (always as of today)." />
               <div className="flex flex-wrap items-center gap-3">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -527,16 +788,26 @@ export function ReportsHubScreen() {
                   variant="outline"
                   size="sm"
                   disabled={vendorRows.length === 0}
-                  onClick={() => openPrintWindow(buildGenericReportHtml('Vendor Report', vendorHeaders, vendorRows))}
+                  onClick={() => openPrintWindow(buildGenericReportHtml(`Vendor Report — ${periodLabel}`, vendorHeaders, vendorRows, vendorTotalsRow))}
                 >
                   Print
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                <span className="text-muted-foreground">Total due (filtered vendors)</span>
-                <p className="mt-1 text-lg font-semibold">{formatCurrency(vendorTotalDue, currency)}</p>
+              <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Purchased — {periodLabel}</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(vendorPeriodTotals.purchased, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Vendor payments — {periodLabel}</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(vendorPeriodTotals.paid, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Total current due (filtered vendors)</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(vendorTotalDue, currency)}</p>
+                </div>
               </div>
               <div className="overflow-x-auto rounded-2xl border border-border/70">
                 <Table>
@@ -546,6 +817,8 @@ export function ReportsHubScreen() {
                       <TableHead>Proprietor</TableHead>
                       <TableHead>Phone</TableHead>
                       <TableHead>Address</TableHead>
+                      <TableHead className="text-right">Purchased</TableHead>
+                      <TableHead className="text-right">Payments</TableHead>
                       <TableHead className="text-right">Current Due</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -556,17 +829,29 @@ export function ReportsHubScreen() {
                         <TableCell className="text-muted-foreground">{vendor.proprietorName || '—'}</TableCell>
                         <TableCell>{vendor.phone || '—'}</TableCell>
                         <TableCell className="text-muted-foreground">{vendor.address || '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(vendorPeriodById.get(vendor.id)?.purchased ?? 0, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(vendorPeriodById.get(vendor.id)?.paid ?? 0, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(vendorDueById.get(vendor.id) ?? 0, currency)}</TableCell>
                       </TableRow>
                     ))}
                     {filteredVendors.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                        <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                           No vendors found.
                         </TableCell>
                       </TableRow>
                     ) : null}
                   </TableBody>
+                  {filteredVendors.length > 0 ? (
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={4} className="font-semibold">Total — {periodLabel}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(vendorPeriodTotals.purchased, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(vendorPeriodTotals.paid, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(vendorTotalDue, currency)}</TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  ) : null}
                 </Table>
               </div>
             </CardContent>
@@ -576,32 +861,83 @@ export function ReportsHubScreen() {
         {section === 'loan' ? (
           <Card className="border-border/70 shadow-sm">
             <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader icon={HandCoins} title="Loan Report" description="Every withdrawal and repayment, optionally scoped to a date range." />
+              <SectionHeader icon={HandCoins} title="Loan Report" description="Every withdrawal and repayment in the selected period — rejected entries are listed but not counted in totals." />
               <div className="flex flex-wrap items-center gap-3">
-                <DateRangeFilter from={loanFrom} to={loanTo} onFromChange={setLoanFrom} onToChange={setLoanTo} />
-                <ExportMenu filenameBase="loan-report" title="Loan Report" headers={loanHeaders} rows={loanRows} />
+                <ExportMenu filenameBase={`loan-report-${periodFrom || 'all'}`} title={`Loan Report — ${periodLabel}`} headers={loanHeaders} rows={loanRows} />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={loanRows.length === 0}
-                  onClick={() => openPrintWindow(buildGenericReportHtml('Loan Report', loanHeaders, loanRows))}
+                  onClick={() =>
+                    openPrintWindow(
+                      buildGenericReportHtml(`Loan Report — ${periodLabel}`, loanHeaders, loanRows, [
+                        'Total',
+                        '',
+                        `Withdrawn ${loanWithdrawals.toFixed(2)} / Repaid ${loanRepayments.toFixed(2)}`,
+                        (loanWithdrawals - loanRepayments).toFixed(2),
+                        `Balance at period end: ${loanClosingBalance.toFixed(2)}`,
+                      ])
+                    )
+                  }
                 >
                   Print
                 </Button>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                  <span className="text-muted-foreground">Total withdrawn</span>
+                  <span className="text-muted-foreground">Withdrawn — {periodLabel}</span>
                   <p className="mt-1 text-lg font-semibold">{formatCurrency(loanWithdrawals, currency)}</p>
                 </div>
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                  <span className="text-muted-foreground">Total repaid</span>
+                  <span className="text-muted-foreground">Repaid — {periodLabel}</span>
                   <p className="mt-1 text-lg font-semibold">{formatCurrency(loanRepayments, currency)}</p>
                 </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Net change</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(loanWithdrawals - loanRepayments, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Loan balance at period end</span>
+                  <p className="mt-1 text-lg font-semibold text-destructive">{formatCurrency(loanClosingBalance, currency)}</p>
+                </div>
               </div>
+
+              {loanMemberSummary.length > 0 ? (
+                <>
+                  <p className="mb-2 text-sm font-medium text-foreground">Member-wise summary</p>
+                  <div className="mb-6 overflow-x-auto rounded-2xl border border-border/70">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableHead>Member</TableHead>
+                          <TableHead className="text-right">Withdrawn</TableHead>
+                          <TableHead className="text-right">Repaid</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {loanMemberSummary.map((row) => (
+                          <TableRow key={row.member}>
+                            <TableCell className="font-medium">{row.member}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(row.withdrawn, currency)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatCurrency(row.repaid, currency)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                      <TableFooter>
+                        <TableRow>
+                          <TableCell className="font-semibold">Total</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(loanWithdrawals, currency)}</TableCell>
+                          <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(loanRepayments, currency)}</TableCell>
+                        </TableRow>
+                      </TableFooter>
+                    </Table>
+                  </div>
+                  <p className="mb-2 text-sm font-medium text-foreground">Transaction detail</p>
+                </>
+              ) : null}
               <div className="overflow-x-auto rounded-2xl border border-border/70">
                 <Table>
                   <TableHeader>
@@ -618,7 +954,10 @@ export function ReportsHubScreen() {
                       <TableRow key={entry.id}>
                         <TableCell>{formatDate(entry.date)}</TableCell>
                         <TableCell className="font-medium">{entry.memberName}</TableCell>
-                        <TableCell className="capitalize">{entry.type}</TableCell>
+                        <TableCell>
+                          {loanTransactionTypeLabel(entry)}
+                          {entry.approvalStatus === 'rejected' ? <span className="ml-1.5 text-xs text-destructive">(rejected)</span> : null}
+                        </TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(entry.amount, currency)}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{entry.note || '-'}</TableCell>
                       </TableRow>
@@ -626,7 +965,7 @@ export function ReportsHubScreen() {
                     {filteredLoanTransactions.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
-                          No loan transactions for this range.
+                          No loan transactions for this period.
                         </TableCell>
                       </TableRow>
                     ) : null}

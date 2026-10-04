@@ -1,14 +1,16 @@
 "use client"
 
-import { Fragment, useMemo, type ReactNode } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
-import { Percent, PiggyBank, ReceiptText, TrendingUp, Undo2 } from 'lucide-react'
+import { CalendarDays, Percent, PiggyBank, ReceiptText, TrendingUp, Undo2 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import { buildCompanyEarningsSummary, formatCurrency } from '@/lib/erp/utils'
+import { buildCompanyEarningsForPeriod, buildCompanyEarningsSummary, dhakaTodayIso, formatCurrency, formatDate } from '@/lib/erp/utils'
 
 // Lazy-loaded so recharts never ships in this page's initial bundle — same
 // component (and the same reasoning) as the chart embedded on the Dashboard.
@@ -71,47 +73,151 @@ export function CompanyEarningsScreen() {
   const summary = useMemo(() => buildCompanyEarningsSummary(data), [data])
   const currency = data?.settings.currency
 
+  // Period selector (2026-10-04 client request): the stat cards and the
+  // day-wise table follow it; the charts/monthly/yearly tables below stay
+  // full history. Empty month/day input falls back to All time.
+  const [mode, setMode] = useState<'monthly' | 'daily' | 'all'>('monthly')
+  const [month, setMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [day, setDay] = useState(() => dhakaTodayIso())
+  const period = useMemo(() => {
+    if (mode === 'monthly' && month) {
+      const [year, monthIndex] = month.split('-').map(Number)
+      const lastDay = new Date(year, monthIndex, 0).getDate()
+      return {
+        from: `${month}-01`,
+        to: `${month}-${String(lastDay).padStart(2, '0')}`,
+        label: new Date(`${month}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
+      }
+    }
+    if (mode === 'daily' && day) return { from: day, to: day, label: formatDate(day) }
+    return { from: '', to: '', label: 'All time' }
+  }, [mode, month, day])
+  const periodSummary = useMemo(() => buildCompanyEarningsForPeriod(data, period.from, period.to), [data, period])
+
   return (
     <AdminShell active="Company Earnings">
       <div className="space-y-6">
+        <Card className="border-border/70 shadow-sm">
+          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Period:</span>
+              <span className="text-muted-foreground">{period.label}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={mode} onValueChange={(value) => setMode(value as typeof mode)}>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              {mode === 'monthly' ? (
+                <Input className="w-full sm:w-44" type="month" value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Month" />
+              ) : null}
+              {mode === 'daily' ? (
+                <Input className="w-full sm:w-44" type="date" value={day} onChange={(event) => setDay(event.target.value)} aria-label="Day" />
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <StatCard
             icon={<TrendingUp className="h-4 w-4" />}
             iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
             label="Total earning"
-            value={formatCurrency(summary.totalEarning, currency)}
-            hint="Company margin from Depot-sale rate cards, net of returns"
+            value={formatCurrency(periodSummary.totalEarning, currency)}
+            hint={`${period.label} · ${periodSummary.invoiceCount} invoice(s), ${formatCurrency(periodSummary.grossEarning, currency)} margin before returns`}
           />
           <StatCard
             icon={<Undo2 className="h-4 w-4" />}
             iconClassName="bg-amber-500/10 text-amber-600 dark:text-amber-400"
             label="Product returns"
-            value={formatCurrency(summary.totalReturns, currency)}
-            hint="Company profit given back on returned goods"
+            value={formatCurrency(periodSummary.totalReturns, currency)}
+            hint={`${period.label} · ${periodSummary.returnCount} return(s) — company profit given back`}
           />
           <StatCard
             icon={<ReceiptText className="h-4 w-4" />}
             iconClassName="bg-destructive/10 text-destructive"
             label="Total expenses"
-            value={formatCurrency(summary.totalExpense, currency)}
-            hint="All recorded expenses (excluding rejected)"
+            value={formatCurrency(periodSummary.totalExpense, currency)}
+            hint={`${period.label} · ${periodSummary.expenseCount} entries (excluding rejected)`}
           />
           <StatCard
             icon={<PiggyBank className="h-4 w-4" />}
             iconClassName="bg-primary/10 text-primary"
             label="Net profit"
-            value={formatCurrency(summary.netProfit, currency)}
-            valueClassName={netToneClass(summary.netProfit)}
-            hint="Earning minus expenses"
+            value={formatCurrency(periodSummary.netProfit, currency)}
+            valueClassName={netToneClass(periodSummary.netProfit)}
+            hint={`${period.label} · earning minus expenses`}
           />
           <StatCard
             icon={<Percent className="h-4 w-4" />}
             iconClassName="bg-sky-500/10 text-sky-600 dark:text-sky-400"
             label="Avg profit ratio"
-            value={`${summary.avgProfitRatioPercent.toFixed(2)}%`}
-            hint={`Total profit ÷ total dealer value sales (${formatCurrency(summary.totalDealerValueSales, currency)})`}
+            value={`${periodSummary.avgProfitRatioPercent.toFixed(2)}%`}
+            hint={`Profit ÷ dealer value sales (${formatCurrency(periodSummary.totalDealerValueSales, currency)}) · ${period.label}`}
           />
         </div>
+
+        {mode !== 'daily' ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Day-wise breakdown — {period.label}</CardTitle>
+              <CardDescription>Every day with an invoice, product return or expense in the selected period, newest first.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="max-h-[480px] overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Earning</TableHead>
+                      <TableHead className="text-right">Returns</TableHead>
+                      <TableHead className="text-right">Expense</TableHead>
+                      <TableHead className="text-right">Net</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {periodSummary.daily.map((row) => (
+                      <TableRow key={row.date}>
+                        <TableCell className="font-medium">{formatDate(row.date)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.earning, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.returns, currency)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(row.expense, currency)}</TableCell>
+                        <TableCell className={`text-right font-semibold tabular-nums ${netToneClass(row.net)}`}>
+                          {formatCurrency(row.net, currency)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {periodSummary.daily.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                          No invoices, returns or expenses in {period.label}.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                  {periodSummary.daily.length > 0 ? (
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell className="font-semibold">Total</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(periodSummary.grossEarning, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(periodSummary.totalReturns, currency)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(periodSummary.totalExpense, currency)}</TableCell>
+                        <TableCell className={`text-right font-semibold tabular-nums ${netToneClass(periodSummary.netProfit)}`}>
+                          {formatCurrency(periodSummary.netProfit, currency)}
+                        </TableCell>
+                      </TableRow>
+                    </TableFooter>
+                  ) : null}
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <CompanyEarningsChart
           title="Monthly earning vs expense"

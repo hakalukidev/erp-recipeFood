@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { CheckCircle2, ExternalLink, Search, ShieldCheck, XCircle } from 'lucide-react'
+import { CalendarDays, CheckCircle2, ExternalLink, History, PencilLine, Search, ShieldCheck, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ApprovalStatusBadge } from '@/components/admin/ApprovalStatusBadge'
@@ -10,6 +10,14 @@ import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -23,7 +31,7 @@ import {
 } from '@/lib/erp/approvals'
 import { useERP } from '@/lib/erp/provider'
 import type { RecordApprovalStatus } from '@/lib/erp/types'
-import { expenseCategoryLabel, formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
+import { dhakaTodayIso, expenseCategoryLabel, formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 // Input & Authorization (client spec, 2026-09-25): one place where every
@@ -58,9 +66,23 @@ export default function ApprovalsPage() {
   const [query, setQuery] = useState('')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [rejecting, setRejecting] = useState<QueueRow | null>(null)
-  const [rejectNote, setRejectNote] = useState('')
+  // Status change that needs a confirm dialog: any rejection (reason
+  // required) and any change to an already-reviewed entry.
+  const [changing, setChanging] = useState<{ row: QueueRow; status: RecordApprovalStatus } | null>(null)
+  const [changeNote, setChangeNote] = useState('')
   const currency = data?.settings.currency
+
+  // Period filter (2026-10-04 client request) on the entry's own date.
+  // Defaults to All time so an old pending entry is never hidden.
+  const [periodMode, setPeriodMode] = useState<'all' | 'monthly' | 'daily'>('all')
+  const [periodMonth, setPeriodMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [periodDay, setPeriodDay] = useState(() => dhakaTodayIso())
+  const periodLabel =
+    periodMode === 'monthly' && periodMonth
+      ? new Date(`${periodMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+      : periodMode === 'daily' && periodDay
+        ? formatDate(periodDay)
+        : 'All time'
 
   const allRows = useMemo<QueueRow[]>(() => {
     const rows: QueueRow[] = buildApprovalQueue(data)
@@ -100,14 +122,28 @@ export default function ApprovalsPage() {
   // What this user may see: anything their approve permissions cover, plus
   // their own submissions.
   const visibleRows = useMemo(
-    () => allRows.filter((row) => hasPermission(row.permission) || row.submittedBy === currentUser?.id),
-    [allRows, currentUser?.id, hasPermission]
+    () =>
+      allRows.filter((row) => {
+        if (!hasPermission(row.permission) && row.submittedBy !== currentUser?.id) return false
+        const day = (row.date || row.submittedAt).slice(0, 10)
+        if (periodMode === 'monthly' && periodMonth) return day.slice(0, 7) === periodMonth
+        if (periodMode === 'daily' && periodDay) return day === periodDay
+        return true
+      }),
+    [allRows, currentUser?.id, hasPermission, periodMode, periodMonth, periodDay]
   )
 
   const counts = useMemo(() => {
     const result: Record<RecordApprovalStatus, number> = { pending: 0, approved: 0, rejected: 0 }
     visibleRows.forEach((row) => {
       result[row.status] += 1
+    })
+    return result
+  }, [visibleRows])
+  const amounts = useMemo(() => {
+    const result: Record<RecordApprovalStatus, number> = { pending: 0, approved: 0, rejected: 0 }
+    visibleRows.forEach((row) => {
+      result[row.status] += row.amount || 0
     })
     return result
   }, [visibleRows])
@@ -127,14 +163,16 @@ export default function ApprovalsPage() {
 
   const isApprover = useMemo(() => allRows.some((row) => hasPermission(row.permission)), [allRows, hasPermission])
 
+  // Any status can be changed by an approver — a mistaken approval or
+  // rejection is fixed from here (see reviewRecordApproval).
   function canReview(row: QueueRow) {
-    if (row.status !== 'pending' || !hasPermission(row.permission)) return false
+    if (!hasPermission(row.permission)) return false
     // Maker-checker: nobody but Super Admin authorizes their own entry
     // (enforced again in reviewRecordApproval).
     return row.submittedBy !== currentUser?.id || currentUser?.roleId === 'super_admin'
   }
 
-  async function review(row: QueueRow, status: 'approved' | 'rejected', note?: string) {
+  async function review(row: QueueRow, status: RecordApprovalStatus, note?: string) {
     setBusyKey(row.key)
     setFeedback(null)
     try {
@@ -143,7 +181,11 @@ export default function ApprovalsPage() {
       } else {
         await reviewRecordApproval(row.collection, row.recordId, status, note)
       }
-      setFeedback(`${row.label} ${row.reference} ${status}.`)
+      setFeedback(
+        row.status === 'pending'
+          ? `${row.label} ${row.reference} ${status}.`
+          : `${row.label} ${row.reference} changed from ${row.status} to ${status}.`
+      )
       return true
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to update this entry.')
@@ -153,18 +195,25 @@ export default function ApprovalsPage() {
     }
   }
 
-  async function confirmReject() {
-    if (!rejecting) return
-    if (rejecting.collection !== 'expenses' && !rejectNote.trim()) {
+  function openChange(row: QueueRow, status: RecordApprovalStatus) {
+    setChangeNote('')
+    setChanging({ row, status })
+  }
+
+  async function confirmChange() {
+    if (!changing) return
+    if (changing.status === 'rejected' && changing.row.collection !== 'expenses' && !changeNote.trim()) {
       setFeedback('Give a reason for rejecting this entry.')
       return
     }
-    const done = await review(rejecting, 'rejected', rejectNote)
+    const done = await review(changing.row, changing.status, changeNote)
     if (done) {
-      setRejecting(null)
-      setRejectNote('')
+      setChanging(null)
+      setChangeNote('')
     }
   }
+
+  const STATUS_LABEL: Record<RecordApprovalStatus, string> = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }
 
   const exportHeaders = ['Submitted', 'Department', 'Type', 'Reference', 'Party', 'Amount', 'Entered by', 'Status', 'Authorized by', 'Note']
   const exportRows = filteredRows.map((row) => [
@@ -183,6 +232,32 @@ export default function ApprovalsPage() {
   return (
     <AdminShell active="Approvals">
       <div className="space-y-6">
+        <Card className="border-border/70 shadow-sm">
+          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">Period:</span>
+              <span className="text-muted-foreground">{periodLabel}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={periodMode} onValueChange={(value) => setPeriodMode(value as typeof periodMode)}>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                </SelectContent>
+              </Select>
+              {periodMode === 'monthly' ? (
+                <Input className="w-full sm:w-44" type="month" value={periodMonth} onChange={(event) => setPeriodMonth(event.target.value)} aria-label="Month" />
+              ) : null}
+              {periodMode === 'daily' ? (
+                <Input className="w-full sm:w-44" type="date" value={periodDay} onChange={(event) => setPeriodDay(event.target.value)} aria-label="Day" />
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
         <div className="grid gap-4 sm:grid-cols-3">
           {(['pending', 'approved', 'rejected'] as const).map((status) => (
             <Card key={status} className="border-border/70 shadow-sm">
@@ -191,8 +266,9 @@ export default function ApprovalsPage() {
                   {status === 'pending' ? 'Waiting for authorization' : status === 'approved' ? 'Approved' : 'Rejected'}
                 </p>
                 <p className="mt-2 text-2xl font-semibold tracking-tight">{counts[status].toLocaleString('en-BD')}</p>
+                <p className="mt-1 text-sm font-medium tabular-nums">{formatCurrency(amounts[status], currency)}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {isApprover ? 'Entries you can see across departments' : 'Entries you submitted'}
+                  {periodLabel} · {isApprover ? 'entries you can see across departments' : 'entries you submitted'}
                 </p>
               </CardContent>
             </Card>
@@ -215,10 +291,11 @@ export default function ApprovalsPage() {
                 </CardTitle>
                 <CardDescription>
                   Every department entry is saved as pending and becomes final once an approver authorizes it.
-                  Approved entries are locked — only an approver can change them, which sends them back for review.
+                  Approved entries are locked — only an approver can change them. An approver can also change the status of an
+                  already approved or rejected entry (e.g. one approved by mistake) from its row&apos;s Change status menu.
                 </CardDescription>
               </div>
-              <ExportMenu filenameBase="approvals" title="Input & Authorization" headers={exportHeaders} rows={exportRows} />
+              <ExportMenu filenameBase="approvals" title={`Input & Authorization — ${periodLabel}`} headers={exportHeaders} rows={exportRows} />
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -313,7 +390,7 @@ export default function ApprovalsPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
-                          {canReview(row) ? (
+                          {canReview(row) && row.status === 'pending' ? (
                             <>
                               <Button
                                 variant="outline"
@@ -330,15 +407,38 @@ export default function ApprovalsPage() {
                                 size="icon"
                                 className="h-9 w-9 text-destructive hover:text-destructive"
                                 disabled={busyKey === row.key}
-                                onClick={() => {
-                                  setRejectNote('')
-                                  setRejecting(row)
-                                }}
+                                onClick={() => openChange(row, 'rejected')}
                                 aria-label={`Reject ${row.label} ${row.reference}`}
                               >
                                 <XCircle className="h-4 w-4" />
                               </Button>
                             </>
+                          ) : null}
+                          {canReview(row) && row.status !== 'pending' ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" disabled={busyKey === row.key}>
+                                  <PencilLine className="mr-2 h-4 w-4" /> Change status
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Currently {STATUS_LABEL[row.status].toLowerCase()}</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                {row.status !== 'approved' ? (
+                                  <DropdownMenuItem onClick={() => openChange(row, 'approved')}>
+                                    <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" /> Change to Approved
+                                  </DropdownMenuItem>
+                                ) : null}
+                                {row.status !== 'rejected' ? (
+                                  <DropdownMenuItem onClick={() => openChange(row, 'rejected')}>
+                                    <XCircle className="mr-2 h-4 w-4 text-destructive" /> Change to Rejected
+                                  </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuItem onClick={() => openChange(row, 'pending')}>
+                                  <History className="mr-2 h-4 w-4" /> Send back to Pending
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           ) : null}
                           <Button variant="outline" size="icon" className="h-9 w-9" asChild>
                             <Link href={row.href} aria-label={`Open ${row.label} page`}>
@@ -352,7 +452,7 @@ export default function ApprovalsPage() {
                   {filteredRows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
-                        {statusFilter === 'pending' ? 'Nothing is waiting for authorization.' : 'No entries found.'}
+                        {statusFilter === 'pending' ? `Nothing is waiting for authorization (${periodLabel}).` : `No entries found (${periodLabel}).`}
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -363,36 +463,44 @@ export default function ApprovalsPage() {
         </Card>
       </div>
 
-      <Dialog open={rejecting !== null} onOpenChange={(open) => (open ? null : setRejecting(null))}>
+      <Dialog open={changing !== null} onOpenChange={(open) => (open ? null : setChanging(null))}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Reject {rejecting?.label} {rejecting?.reference}
+              {changing?.row.status === 'pending' ? 'Reject' : `Change to ${changing ? STATUS_LABEL[changing.status] : ''}`} —{' '}
+              {changing?.row.label} {changing?.row.reference}
             </DialogTitle>
             <DialogDescription>
-              {rejecting?.collection === 'expenses'
-                ? 'The expense is kept for the record and its ledger posting is reversed.'
-                : 'The entry is kept and flagged as rejected so the department can correct it (editing re-submits it) or delete it.'}
+              {changing?.row.status !== 'pending' ? `Currently ${changing ? STATUS_LABEL[changing.row.status].toLowerCase() : ''}. ` : ''}
+              {changing?.status === 'rejected'
+                ? changing.row.collection === 'expenses'
+                  ? 'The expense is kept for the record and its ledger posting is reversed.'
+                  : 'The entry is kept and flagged as rejected so it stops counting in totals; any payment or return credit is given back to its invoice/purchase.'
+                : changing?.row.status === 'rejected'
+                  ? 'It will count in totals again — any payment or return credit is applied to its invoice/purchase again (expense ledger re-posted).'
+                  : changing?.status === 'pending'
+                    ? 'It goes back into the waiting list for a fresh review.'
+                    : 'It will be marked authorized.'}
             </DialogDescription>
           </DialogHeader>
-          {rejecting?.collection !== 'expenses' ? (
+          {changing && changing.row.collection !== 'expenses' ? (
             <Textarea
-              value={rejectNote}
-              onChange={(event) => setRejectNote(event.target.value)}
-              placeholder="Reason for rejection (required)"
+              value={changeNote}
+              onChange={(event) => setChangeNote(event.target.value)}
+              placeholder={changing.status === 'rejected' ? 'Reason for rejection (required)' : 'Reason for the change (optional)'}
               rows={3}
             />
           ) : null}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRejecting(null)}>
+            <Button variant="outline" onClick={() => setChanging(null)}>
               Cancel
             </Button>
             <Button
-              variant="destructive"
-              disabled={rejecting !== null && busyKey === rejecting.key}
-              onClick={() => void confirmReject()}
+              variant={changing?.status === 'rejected' ? 'destructive' : 'default'}
+              disabled={changing !== null && busyKey === changing.row.key}
+              onClick={() => void confirmChange()}
             >
-              Reject
+              {changing?.status === 'rejected' ? 'Reject' : changing?.status === 'approved' ? 'Approve' : 'Send back to pending'}
             </Button>
           </DialogFooter>
         </DialogContent>

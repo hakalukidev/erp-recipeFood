@@ -543,6 +543,9 @@ export default function ProductReturnsPage() {
   const resolveDealerForEntry = (entry: ProductReturnRecord) => (entry.dealerId ? dealerById.get(entry.dealerId) : undefined)
 
   const [query, setQuery] = useState('')
+  // List + summary cards default to the current month; clearing the month
+  // input shows every month (all-time totals).
+  const [listMonth, setListMonth] = useState(() => dhakaTodayIso().slice(0, 7))
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [distributorType, setDistributorType] = useState<DistributorType>('sr')
@@ -615,13 +618,21 @@ export default function ProductReturnsPage() {
       : Math.min(previewTotals.returnValue, adjustInvoiceDue)
     : 0
 
+  // Summary cards follow the month picker (but not the search box).
+  const monthReturns = useMemo(
+    () => (listMonth ? productReturns.filter((entry) => entry.date.slice(0, 7) === listMonth) : productReturns),
+    [productReturns, listMonth]
+  )
+  const monthLabel = listMonth
+    ? new Date(`${listMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+    : 'All months'
+
   const filteredReturns = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return productReturns
-    return productReturns.filter((entry) =>
-      [entry.returnNumber, entry.recipientName].join(' ').toLowerCase().includes(normalized)
+    return monthReturns.filter(
+      (entry) => !normalized || [entry.returnNumber, entry.recipientName].join(' ').toLowerCase().includes(normalized)
     )
-  }, [productReturns, query])
+  }, [monthReturns, query])
 
   function openCreateDialog() {
     setEditingId(null)
@@ -868,15 +879,15 @@ export default function ProductReturnsPage() {
     printWindow.document.close()
   }
 
-  const totalCompanyImpact = productReturns.reduce((sum, entry) => sum + entry.companyProfit, 0)
-  const totalReturnValue = productReturns.reduce((sum, entry) => sum + entry.depotRateTotal, 0)
-  const totalWriteOffImpact = productReturns.reduce(
+  const totalCompanyImpact = monthReturns.reduce((sum, entry) => sum + entry.companyProfit, 0)
+  const totalReturnValue = monthReturns.reduce((sum, entry) => sum + entry.depotRateTotal, 0)
+  const totalWriteOffImpact = monthReturns.reduce(
     (sum, entry) => sum + entry.manufacturingExpenseAmount + entry.rawMaterialExpenseAmount,
     0
   )
-  const totalDepotProfit = productReturns.reduce((sum, entry) => sum + (entry.dealerRateTotal - entry.depotRateTotal), 0)
-  const totalNetReturnValue = productReturns.reduce((sum, entry) => sum + netReturnValue(entry), 0)
-  const totalResoldAmount = productReturns.reduce((sum, entry) => sum + (entry.resoldAmount ?? 0), 0)
+  const totalDepotProfit = monthReturns.reduce((sum, entry) => sum + (entry.dealerRateTotal - entry.depotRateTotal), 0)
+  const totalNetReturnValue = monthReturns.reduce((sum, entry) => sum + netReturnValue(entry), 0)
+  const totalResoldAmount = monthReturns.reduce((sum, entry) => sum + (entry.resoldAmount ?? 0), 0)
   const totalOutstandingReturnValue = totalNetReturnValue - totalResoldAmount
 
   return (
@@ -886,8 +897,8 @@ export default function ProductReturnsPage() {
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Product returns</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{productReturns.length.toLocaleString('en-BD')}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Picked from the Product List, no invoice needed</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{monthReturns.length.toLocaleString('en-BD')}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{monthLabel} · all cards show this month's totals</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
@@ -946,7 +957,14 @@ export default function ProductReturnsPage() {
                 gets its adjustment automatically, so there's no need to also record a separate Depot-only return.
               </CardDescription>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
+              <Input
+                className="w-full sm:w-44"
+                type="month"
+                value={listMonth}
+                onChange={(event) => setListMonth(event.target.value)}
+                title="Clear to show all months"
+              />
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -1059,7 +1077,7 @@ export default function ProductReturnsPage() {
                     <TableRow>
                       <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                         <Undo2 className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                        No product returns yet.
+                        {productReturns.length === 0 ? 'No product returns yet.' : 'No product returns match this month / search.'}
                       </TableCell>
                     </TableRow>
                   ) : null}

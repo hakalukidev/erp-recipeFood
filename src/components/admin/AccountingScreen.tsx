@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import {
   BookOpen,
   Building2,
+  CalendarDays,
   FileSignature,
   Landmark,
   NotebookText,
@@ -33,7 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import {
   COMPANY_ADDRESS,
@@ -236,6 +237,33 @@ export function AccountingScreen() {
   const [section, setSection] = useState<SectionId>('chart')
   const [feedback, setFeedback] = useState<string | null>(null)
 
+  // ---- Period selector (2026-10-04 client request) ------------------------
+  // Monthly (default) / Daily / All time, shared by every dated tab. Journal
+  // and Bank list only that period's entries; the General Ledger opens with
+  // the balance carried in from before it; Trial Balance and Balance Sheet
+  // are as of the period's last day, plus that period's movement / P&L.
+  // An emptied month/day input falls back to All time.
+  const [periodMode, setPeriodMode] = useState<'monthly' | 'daily' | 'all'>('monthly')
+  const [periodMonth, setPeriodMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [periodDay, setPeriodDay] = useState(() => dhakaTodayIso())
+  const period = useMemo(() => {
+    if (periodMode === 'monthly' && periodMonth) {
+      const [year, monthIndex] = periodMonth.split('-').map(Number)
+      const lastDay = new Date(year, monthIndex, 0).getDate()
+      return {
+        from: `${periodMonth}-01`,
+        to: `${periodMonth}-${String(lastDay).padStart(2, '0')}`,
+        label: new Date(`${periodMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
+      }
+    }
+    if (periodMode === 'daily' && periodDay) return { from: periodDay, to: periodDay, label: formatDate(periodDay) }
+    return { from: '', to: '', label: 'All time' }
+  }, [periodMode, periodMonth, periodDay])
+  const inPeriod = (date: string) => {
+    const day = date.slice(0, 10)
+    return (!period.from || day >= period.from) && (!period.to || day <= period.to)
+  }
+
   const chartOfAccounts = useMemo(
     () => Object.values(data?.chartOfAccounts ?? {}).sort((left, right) => left.code.localeCompare(right.code)),
     [data?.chartOfAccounts]
@@ -389,10 +417,24 @@ export function AccountingScreen() {
     setReversalReason('')
   }
 
+  const periodJournalEntries = useMemo(
+    () => journalEntries.filter((entry) => inPeriod(entry.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [journalEntries, period]
+  )
+  // Reversed entries are listed but not counted in the period total.
+  const periodJournalTotal = useMemo(
+    () =>
+      periodJournalEntries
+        .filter((entry) => entry.status === 'posted' && entry.approvalStatus !== 'rejected')
+        .reduce((sum, entry) => sum + entry.lines.reduce((lineSum, line) => lineSum + line.debit, 0), 0),
+    [periodJournalEntries]
+  )
+
   const journalExportHeaders = ['Journal No', 'Date', 'Narration', 'Status', 'Total', 'Posted by']
   const journalExportRows = useMemo(
     () =>
-      journalEntries.map((entry) => [
+      periodJournalEntries.map((entry) => [
         entry.journalNumber,
         formatDate(entry.date),
         entry.narration,
@@ -400,7 +442,7 @@ export function AccountingScreen() {
         entry.lines.reduce((sum, line) => sum + line.debit, 0).toFixed(2),
         entry.createdByName,
       ]),
-    [journalEntries]
+    [periodJournalEntries]
   )
 
   // ---- Bank -------------------------------------------------------------
@@ -507,10 +549,27 @@ export function AccountingScreen() {
     }
   }
 
+  const periodBankTransactions = useMemo(
+    () => bankTransactions.filter((entry) => inPeriod(entry.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bankTransactions, period]
+  )
+  // Money into a bank account vs out of it in the period; transfers move
+  // money between the company's own accounts, so they're shown separately.
+  const periodBankTotals = useMemo(() => {
+    const sumOf = (types: BankTransactionType[]) =>
+      periodBankTransactions.filter((entry) => types.includes(entry.type)).reduce((sum, entry) => sum + entry.amount, 0)
+    return {
+      moneyIn: sumOf(['deposit', 'cheque_deposited']),
+      moneyOut: sumOf(['withdrawal', 'cheque_issued', 'bank_charge']),
+      transfers: sumOf(['transfer']),
+    }
+  }, [periodBankTransactions])
+
   const bankExportHeaders = ['Date', 'Bank', 'Type', 'Amount', 'Counter/To', 'Cheque No', 'Note']
   const bankExportRows = useMemo(
     () =>
-      bankTransactions.map((entry) => [
+      periodBankTransactions.map((entry) => [
         formatDate(entry.date),
         entry.bankLabel,
         BANK_TRANSACTION_LABEL[entry.type],
@@ -519,11 +578,11 @@ export function AccountingScreen() {
         entry.chequeNumber || '',
         entry.note || '',
       ]),
-    [bankTransactions]
+    [periodBankTransactions]
   )
 
   // ---- General Ledger -------------------------------------------------------
-  const generalLedger = useMemo(() => buildGeneralLedger(data ?? null), [data])
+  const generalLedger = useMemo(() => buildGeneralLedger(data ?? null, { from: period.from, to: period.to }), [data, period])
   const ledgerAccountOptions: ComboboxOption[] = useMemo(
     () => generalLedger.map((account) => ({ value: account.accountId, label: `${account.accountCode} — ${account.accountName}` })),
     [generalLedger]
@@ -549,23 +608,35 @@ export function AccountingScreen() {
   )
 
   // ---- Trial Balance ----------------------------------------------------
-  const trialBalance = useMemo(() => buildTrialBalance(data ?? null), [data])
+  const trialBalance = useMemo(() => buildTrialBalance(data ?? null, { from: period.from, to: period.to }), [data, period])
   const unmappedLedgerEntries = useMemo(() => findUnmappedLedgerEntries(data ?? null), [data])
-  const trialExportHeaders = ['Code', 'Name', 'Type', 'Debit', 'Credit']
+  const trialExportHeaders = ['Code', 'Name', 'Type', 'Period Debit', 'Period Credit', 'Closing Debit', 'Closing Credit']
   const trialExportRows = useMemo(
-    () =>
-      trialBalance.rows.map((row) => [
+    () => [
+      ...trialBalance.rows.map((row) => [
         row.accountCode,
         row.accountName,
         ACCOUNT_TYPE_LABEL[row.accountType],
+        row.periodDebit.toFixed(2),
+        row.periodCredit.toFixed(2),
         row.debit.toFixed(2),
         row.credit.toFixed(2),
       ]),
+      [
+        '',
+        'Total',
+        '',
+        trialBalance.totalPeriodDebit.toFixed(2),
+        trialBalance.totalPeriodCredit.toFixed(2),
+        trialBalance.totalDebit.toFixed(2),
+        trialBalance.totalCredit.toFixed(2),
+      ],
+    ],
     [trialBalance]
   )
 
   // ---- Balance Sheet ------------------------------------------------------
-  const balanceSheet = useMemo(() => buildBalanceSheet(data ?? null), [data])
+  const balanceSheet = useMemo(() => buildBalanceSheet(data ?? null, { from: period.from, to: period.to }), [data, period])
   const balanceExportHeaders = ['Section', 'Code', 'Account', 'Amount']
   const balanceExportRows = useMemo(() => {
     const rows: (string | number)[][] = []
@@ -573,8 +644,11 @@ export function AccountingScreen() {
     balanceSheet.liabilities.forEach((line) => rows.push(['Liability', line.code, line.name, line.amount.toFixed(2)]))
     balanceSheet.equity.forEach((line) => rows.push(['Equity', line.code, line.name, line.amount.toFixed(2)]))
     rows.push(['Equity', '', 'Retained Earnings (current period)', balanceSheet.currentPeriodNetProfit.toFixed(2)])
+    rows.push(['P&L', '', `Revenue — ${period.label}`, balanceSheet.periodRevenue.toFixed(2)])
+    rows.push(['P&L', '', `Expense — ${period.label}`, balanceSheet.periodExpense.toFixed(2)])
+    rows.push(['P&L', '', `Net profit — ${period.label}`, balanceSheet.periodNetProfit.toFixed(2)])
     return rows
-  }, [balanceSheet])
+  }, [balanceSheet, period.label])
 
   return (
     <AdminShell active="Accounting">
@@ -594,6 +668,37 @@ export function AccountingScreen() {
             </button>
           ))}
         </div>
+
+        {section !== 'chart' ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                <span className="font-medium">Period:</span>
+                <span className="text-muted-foreground">
+                  {period.label}
+                  {(section === 'trial' || section === 'balance') && period.to ? ` (balances as of ${formatDate(period.to)})` : ''}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={periodMode} onValueChange={(value) => setPeriodMode(value as typeof periodMode)}>
+                  <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="all">All time</SelectItem>
+                  </SelectContent>
+                </Select>
+                {periodMode === 'monthly' ? (
+                  <Input className="w-full sm:w-44" type="month" value={periodMonth} onChange={(event) => setPeriodMonth(event.target.value)} aria-label="Month" />
+                ) : null}
+                {periodMode === 'daily' ? (
+                  <Input className="w-full sm:w-44" type="date" value={periodDay} onChange={(event) => setPeriodDay(event.target.value)} aria-label="Day" />
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {feedback ? (
           <Card className="border-border/70 bg-primary/5 shadow-sm">
@@ -700,13 +805,20 @@ export function AccountingScreen() {
             <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader icon={FileSignature} title="Journal" description={SECTIONS[1].description} />
               <div className="flex flex-wrap items-center gap-3">
-                <ExportMenu filenameBase="journal-entries" title="Journal Entries" headers={journalExportHeaders} rows={journalExportRows} />
+                <ExportMenu filenameBase={`journal-entries-${period.from || 'all'}`} title={`Journal Entries — ${period.label}`} headers={journalExportHeaders} rows={journalExportRows} />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={journalExportRows.length === 0}
-                  onClick={() => openPrintWindow(buildAccountingReportHtml('Journal Entries', journalExportHeaders, journalExportRows))}
+                  onClick={() =>
+                    openPrintWindow(
+                      buildAccountingReportHtml(`Journal Entries — ${period.label}`, journalExportHeaders, [
+                        ...journalExportRows,
+                        ['', '', 'Total (posted)', '', periodJournalTotal.toFixed(2), ''],
+                      ])
+                    )
+                  }
                 >
                   <Printer className="mr-2 h-4 w-4" /> Print
                 </Button>
@@ -729,7 +841,7 @@ export function AccountingScreen() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {journalEntries.map((entry) => (
+                    {periodJournalEntries.map((entry) => (
                       <TableRow key={entry.id}>
                         <TableCell className="font-mono text-xs">{entry.journalNumber}<RecordApprovalTag record={entry} /></TableCell>
                         <TableCell>{formatDate(entry.date)}</TableCell>
@@ -753,14 +865,25 @@ export function AccountingScreen() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {journalEntries.length === 0 ? (
+                    {periodJournalEntries.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                          No journal entries posted yet.
+                          {journalEntries.length === 0 ? 'No journal entries posted yet.' : `No journal entries in ${period.label}.`}
                         </TableCell>
                       </TableRow>
                     ) : null}
                   </TableBody>
+                  {periodJournalEntries.length > 0 ? (
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={3} className="font-semibold">
+                          Total — {period.label} ({periodJournalEntries.length} entries, reversed not counted)
+                        </TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(periodJournalTotal, currency)}</TableCell>
+                        <TableCell colSpan={2} />
+                      </TableRow>
+                    </TableFooter>
+                  ) : null}
                 </Table>
               </div>
             </CardContent>
@@ -837,15 +960,24 @@ export function AccountingScreen() {
 
             <Card className="border-border/70 shadow-sm">
               <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <SectionHeader icon={Landmark} title="Bank Transactions" description="Deposit, withdrawal, transfer, and cheque history." />
+                <SectionHeader icon={Landmark} title={`Bank Transactions — ${period.label}`} description="Deposit, withdrawal, transfer, and cheque history." />
                 <div className="flex flex-wrap items-center gap-3">
-                  <ExportMenu filenameBase="bank-transactions" title="Bank Transactions" headers={bankExportHeaders} rows={bankExportRows} />
+                  <ExportMenu filenameBase={`bank-transactions-${period.from || 'all'}`} title={`Bank Transactions — ${period.label}`} headers={bankExportHeaders} rows={bankExportRows} />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     disabled={bankExportRows.length === 0}
-                    onClick={() => openPrintWindow(buildAccountingReportHtml('Bank Transactions', bankExportHeaders, bankExportRows))}
+                    onClick={() =>
+                      openPrintWindow(
+                        buildAccountingReportHtml(`Bank Transactions — ${period.label}`, bankExportHeaders, [
+                          ...bankExportRows,
+                          ['', 'Money in', '', periodBankTotals.moneyIn.toFixed(2), '', '', ''],
+                          ['', 'Money out', '', periodBankTotals.moneyOut.toFixed(2), '', '', ''],
+                          ['', 'Transfers', '', periodBankTotals.transfers.toFixed(2), '', '', ''],
+                        ])
+                      )
+                    }
                   >
                     <Printer className="mr-2 h-4 w-4" /> Print
                   </Button>
@@ -855,6 +987,20 @@ export function AccountingScreen() {
                 </div>
               </CardHeader>
               <CardContent>
+                <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">Money in (deposits, cheques deposited)</span>
+                    <p className="mt-1 text-lg font-semibold text-emerald-600">{formatCurrency(periodBankTotals.moneyIn, currency)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">Money out (withdrawals, cheques issued, charges)</span>
+                    <p className="mt-1 text-lg font-semibold text-destructive">{formatCurrency(periodBankTotals.moneyOut, currency)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                    <span className="text-muted-foreground">Transfers between own accounts</span>
+                    <p className="mt-1 text-lg font-semibold">{formatCurrency(periodBankTotals.transfers, currency)}</p>
+                  </div>
+                </div>
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
                   <Table>
                     <TableHeader>
@@ -868,7 +1014,7 @@ export function AccountingScreen() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {bankTransactions.map((entry) => (
+                      {periodBankTransactions.map((entry) => (
                         <TableRow key={entry.id}>
                           <TableCell>{formatDate(entry.date)}</TableCell>
                           <TableCell className="font-medium">{entry.bankLabel}</TableCell>
@@ -878,10 +1024,10 @@ export function AccountingScreen() {
                           <TableCell className="text-sm text-muted-foreground">{entry.note || '-'}</TableCell>
                         </TableRow>
                       ))}
-                      {bankTransactions.length === 0 ? (
+                      {periodBankTransactions.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                            No bank transactions recorded yet.
+                            {bankTransactions.length === 0 ? 'No bank transactions recorded yet.' : `No bank transactions in ${period.label}.`}
                           </TableCell>
                         </TableRow>
                       ) : null}
@@ -907,7 +1053,7 @@ export function AccountingScreen() {
                     searchPlaceholder="Search account"
                   />
                 </div>
-                <ExportMenu filenameBase="general-ledger" title="General Ledger" headers={ledgerExportHeaders} rows={ledgerExportRows} />
+                <ExportMenu filenameBase={`general-ledger-${period.from || 'all'}`} title={`General Ledger — ${period.label}`} headers={ledgerExportHeaders} rows={ledgerExportRows} />
                 <Button
                   type="button"
                   variant="outline"
@@ -916,9 +1062,20 @@ export function AccountingScreen() {
                   onClick={() =>
                     openPrintWindow(
                       buildAccountingReportHtml(
-                        `General Ledger — ${selectedLedgerAccount?.accountName ?? ''}`,
+                        `General Ledger — ${selectedLedgerAccount?.accountName ?? ''} — ${period.label}`,
                         ledgerExportHeaders,
-                        ledgerExportRows
+                        [
+                          ['', '', 'Opening balance', '', '', (selectedLedgerAccount?.openingBalance ?? 0).toFixed(2)],
+                          ...ledgerExportRows,
+                          [
+                            '',
+                            '',
+                            'Total / Closing balance',
+                            (selectedLedgerAccount?.totalDebit ?? 0).toFixed(2),
+                            (selectedLedgerAccount?.totalCredit ?? 0).toFixed(2),
+                            (selectedLedgerAccount?.closingBalance ?? 0).toFixed(2),
+                          ],
+                        ]
                       )
                     )
                   }
@@ -932,17 +1089,17 @@ export function AccountingScreen() {
                 <>
                   <div className="mb-4 grid gap-3 sm:grid-cols-3">
                     <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                      <span className="text-muted-foreground">Opening balance</span>
+                      <span className="text-muted-foreground">Opening balance{period.from ? ` (${formatDate(period.from)})` : ''}</span>
                       <p className="mt-1 text-lg font-semibold">{formatCurrency(selectedLedgerAccount.openingBalance, currency)}</p>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                      <span className="text-muted-foreground">Total debit / credit</span>
+                      <span className="text-muted-foreground">Debit / credit — {period.label}</span>
                       <p className="mt-1 text-lg font-semibold">
                         {formatCurrency(selectedLedgerAccount.totalDebit, currency)} / {formatCurrency(selectedLedgerAccount.totalCredit, currency)}
                       </p>
                     </div>
                     <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
-                      <span className="text-muted-foreground">Closing balance</span>
+                      <span className="text-muted-foreground">Closing balance{period.to ? ` (${formatDate(period.to)})` : ''}</span>
                       <p className="mt-1 text-lg font-semibold">{formatCurrency(selectedLedgerAccount.closingBalance, currency)}</p>
                     </div>
                   </div>
@@ -972,11 +1129,21 @@ export function AccountingScreen() {
                         {selectedLedgerAccount.entries.length === 0 ? (
                           <TableRow>
                             <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                              No postings against this account yet.
+                              No postings against this account in {period.label}.
                             </TableCell>
                           </TableRow>
                         ) : null}
                       </TableBody>
+                      {selectedLedgerAccount.entries.length > 0 ? (
+                        <TableFooter>
+                          <TableRow>
+                            <TableCell colSpan={3} className="font-semibold">Total — {period.label}</TableCell>
+                            <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(selectedLedgerAccount.totalDebit, currency)}</TableCell>
+                            <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(selectedLedgerAccount.totalCredit, currency)}</TableCell>
+                            <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(selectedLedgerAccount.closingBalance, currency)}</TableCell>
+                          </TableRow>
+                        </TableFooter>
+                      ) : null}
                     </Table>
                   </div>
                 </>
@@ -995,13 +1162,13 @@ export function AccountingScreen() {
                 <Badge variant={Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 0.01 ? 'outline' : 'destructive'}>
                   {Math.abs(trialBalance.totalDebit - trialBalance.totalCredit) < 0.01 ? 'Balanced' : 'Out of balance'}
                 </Badge>
-                <ExportMenu filenameBase="trial-balance" title="Trial Balance" headers={trialExportHeaders} rows={trialExportRows} />
+                <ExportMenu filenameBase={`trial-balance-${period.to || 'all'}`} title={`Trial Balance — ${period.label}`} headers={trialExportHeaders} rows={trialExportRows} />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={trialExportRows.length === 0}
-                  onClick={() => openPrintWindow(buildAccountingReportHtml('Trial Balance', trialExportHeaders, trialExportRows))}
+                  onClick={() => openPrintWindow(buildAccountingReportHtml(`Trial Balance — ${period.label}`, trialExportHeaders, trialExportRows))}
                 >
                   <Printer className="mr-2 h-4 w-4" /> Print
                 </Button>
@@ -1022,8 +1189,10 @@ export function AccountingScreen() {
                       <TableHead>Code</TableHead>
                       <TableHead>Account</TableHead>
                       <TableHead>Type</TableHead>
-                      <TableHead className="text-right">Debit</TableHead>
-                      <TableHead className="text-right">Credit</TableHead>
+                      {period.from ? <TableHead className="text-right">Period Debit</TableHead> : null}
+                      {period.from ? <TableHead className="text-right">Period Credit</TableHead> : null}
+                      <TableHead className="text-right">{period.from ? 'Closing Debit' : 'Debit'}</TableHead>
+                      <TableHead className="text-right">{period.from ? 'Closing Credit' : 'Credit'}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1032,19 +1201,31 @@ export function AccountingScreen() {
                         <TableCell className="font-mono text-xs">{row.accountCode}</TableCell>
                         <TableCell className="font-medium">{row.accountName}</TableCell>
                         <TableCell>{ACCOUNT_TYPE_LABEL[row.accountType]}</TableCell>
+                        {period.from ? (
+                          <TableCell className="text-right tabular-nums">{row.periodDebit > 0 ? formatCurrency(row.periodDebit, currency) : '—'}</TableCell>
+                        ) : null}
+                        {period.from ? (
+                          <TableCell className="text-right tabular-nums">{row.periodCredit > 0 ? formatCurrency(row.periodCredit, currency) : '—'}</TableCell>
+                        ) : null}
                         <TableCell className="text-right tabular-nums">{row.debit > 0 ? formatCurrency(row.debit, currency) : '—'}</TableCell>
                         <TableCell className="text-right tabular-nums">{row.credit > 0 ? formatCurrency(row.credit, currency) : '—'}</TableCell>
                       </TableRow>
                     ))}
                     {trialBalance.rows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                        <TableCell colSpan={period.from ? 7 : 5} className="py-10 text-center text-sm text-muted-foreground">
                           No ledger activity yet.
                         </TableCell>
                       </TableRow>
                     ) : (
                       <TableRow className="bg-muted/40 font-semibold hover:bg-muted/40">
                         <TableCell colSpan={3}>Total</TableCell>
+                        {period.from ? (
+                          <TableCell className="text-right tabular-nums">{formatCurrency(trialBalance.totalPeriodDebit, currency)}</TableCell>
+                        ) : null}
+                        {period.from ? (
+                          <TableCell className="text-right tabular-nums">{formatCurrency(trialBalance.totalPeriodCredit, currency)}</TableCell>
+                        ) : null}
                         <TableCell className="text-right tabular-nums">{formatCurrency(trialBalance.totalDebit, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(trialBalance.totalCredit, currency)}</TableCell>
                       </TableRow>
@@ -1064,21 +1245,37 @@ export function AccountingScreen() {
                 <Badge variant={balanceSheet.isBalanced ? 'outline' : 'destructive'}>
                   {balanceSheet.isBalanced ? 'Balanced' : 'Out of balance'}
                 </Badge>
-                <ExportMenu filenameBase="balance-sheet" title="Balance Sheet" headers={balanceExportHeaders} rows={balanceExportRows} />
+                <ExportMenu filenameBase={`balance-sheet-${period.to || 'all'}`} title={`Balance Sheet — ${period.label}`} headers={balanceExportHeaders} rows={balanceExportRows} />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={balanceExportRows.length === 0}
-                  onClick={() => openPrintWindow(buildAccountingReportHtml('Balance Sheet', balanceExportHeaders, balanceExportRows))}
+                  onClick={() => openPrintWindow(buildAccountingReportHtml(`Balance Sheet — ${period.label}`, balanceExportHeaders, balanceExportRows))}
                 >
                   <Printer className="mr-2 h-4 w-4" /> Print
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="grid gap-6 lg:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3 lg:col-span-2">
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Revenue — {period.label}</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(balanceSheet.periodRevenue, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Expense — {period.label}</span>
+                  <p className="mt-1 text-lg font-semibold">{formatCurrency(balanceSheet.periodExpense, currency)}</p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+                  <span className="text-muted-foreground">Net profit — {period.label}</span>
+                  <p className={cn('mt-1 text-lg font-semibold', balanceSheet.periodNetProfit < 0 ? 'text-destructive' : 'text-emerald-600')}>
+                    {formatCurrency(balanceSheet.periodNetProfit, currency)}
+                  </p>
+                </div>
+              </div>
               <div className="space-y-3">
-                <p className="text-sm font-semibold text-foreground">Assets</p>
+                <p className="text-sm font-semibold text-foreground">Assets{period.to ? ` — as of ${formatDate(period.to)}` : ''}</p>
                 <div className="rounded-xl border border-border/60">
                   {balanceSheet.assets.map((line) => (
                     <div key={line.accountId} className="flex justify-between border-b border-border/40 px-3 py-2 text-sm last:border-b-0">

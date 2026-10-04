@@ -66,6 +66,7 @@ import type {
   VendorRecord,
 } from '@/lib/erp/types'
 import {
+  isCountedEntry,
   computeMaterialAvailablePieces,
   computePackWeightKg,
   computeVendorAccountPayments,
@@ -426,6 +427,9 @@ export default function PurchasePage() {
 
   const [section, setSection] = useState<SectionId>('purchases')
   const [query, setQuery] = useState('')
+  // Purchase list + summary cards default to the current month; clearing
+  // the month input shows every month (all-time totals).
+  const [listMonth, setListMonth] = useState(() => dhakaTodayIso().slice(0, 7))
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const vendorOptions: ComboboxOption[] = useMemo(
@@ -800,11 +804,40 @@ export default function PurchasePage() {
 
   const filteredPurchases = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    if (!normalized) return purchases
-    return purchases.filter((purchase) =>
-      [purchase.purchaseNumber, purchase.vendorName].join(' ').toLowerCase().includes(normalized)
+    return purchases.filter(
+      (purchase) =>
+        (!listMonth || purchase.date.slice(0, 7) === listMonth) &&
+        (!normalized || [purchase.purchaseNumber, purchase.vendorName].join(' ').toLowerCase().includes(normalized))
     )
-  }, [purchases, query])
+  }, [purchases, query, listMonth])
+
+  const monthLabel = listMonth
+    ? new Date(`${listMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+    : 'All months'
+
+  // Selected month's figures (rejected entries excluded). "Deposited" is cash
+  // that actually went out that month: paid-at-purchase on that month's
+  // purchases plus every vendor payment (per-purchase or vendor-level) dated
+  // in the month — so a March purchase paid off in April counts in April.
+  const monthPurchaseStats = useMemo(() => {
+    if (!listMonth) return null
+    const inMonth = (date: string) => date.slice(0, 7) === listMonth
+    const monthPurchases = purchases.filter((purchase) => inMonth(purchase.date) && isCountedEntry(purchase))
+    const paidAtPurchase = monthPurchases.reduce((sum, purchase) => {
+      const laterPayments = (vendorPaymentsByPurchaseId.get(purchase.id) ?? []).reduce((total, payment) => total + payment.amount, 0)
+      return sum + purchase.paid - laterPayments
+    }, 0)
+    const paymentsInMonth = vendorPayments
+      .filter((payment) => inMonth(payment.date) && isCountedEntry(payment))
+      .reduce((sum, payment) => sum + payment.amount, 0)
+    const totalAmount = monthPurchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0)
+    return {
+      count: monthPurchases.length,
+      totalAmount,
+      totalPaid: paidAtPurchase + paymentsInMonth,
+      newDue: totalAmount - paidAtPurchase,
+    }
+  }, [purchases, vendorPayments, vendorPaymentsByPurchaseId, listMonth])
 
   const purchaseStats = useMemo(() => {
     const openingDueTotal = vendors.reduce((sum, vendor) => sum + (vendor.openingDue ?? 0), 0)
@@ -1136,29 +1169,44 @@ export default function PurchasePage() {
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Purchases</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">{purchases.length.toLocaleString('en-BD')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Total procurement transactions</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-tight">
+                    {(monthPurchaseStats?.count ?? purchases.length).toLocaleString('en-BD')}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {monthPurchaseStats ? `Procurement transactions in ${monthLabel}` : 'Total procurement transactions'}
+                  </p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Total purchased</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">{formatAmount(purchaseStats.totalAmount)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Sum of every purchase's total amount</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-tight">
+                    {formatAmount(monthPurchaseStats?.totalAmount ?? purchaseStats.totalAmount)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {monthPurchaseStats ? `Purchases dated ${monthLabel}` : "Sum of every purchase's total amount"}
+                  </p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Total deposited</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">{formatAmount(purchaseStats.totalPaid)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Paid at purchase time + vendor payments</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">
+                    {formatAmount(monthPurchaseStats?.totalPaid ?? purchaseStats.totalPaid)}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {monthPurchaseStats ? `Paid to vendors in ${monthLabel}` : 'Paid at purchase time + vendor payments'}
+                  </p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Total due to vendors</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">{formatAmount(purchaseStats.totalDue)}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Currently owed across every vendor</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Currently owed across every vendor
+                    {monthPurchaseStats ? ` · ${monthLabel}'s purchases left ${formatAmount(monthPurchaseStats.newDue)} unpaid` : ''}
+                  </p>
                 </CardContent>
               </Card>
             </div>
@@ -1172,7 +1220,14 @@ export default function PurchasePage() {
                     owed — stock on the Materials & Stock list updates automatically.
                   </CardDescription>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[minmax(200px,1fr)_auto_auto]">
+                <div className="grid gap-3 sm:grid-cols-[auto_minmax(200px,1fr)_auto_auto]">
+                  <Input
+                    className="w-full sm:w-44"
+                    type="month"
+                    value={listMonth}
+                    onChange={(event) => setListMonth(event.target.value)}
+                    title="Clear to show all months"
+                  />
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -1295,7 +1350,7 @@ export default function PurchasePage() {
                         <TableRow>
                           <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                             <Truck className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                            No purchases recorded yet.
+                            {purchases.length === 0 ? 'No purchases recorded yet.' : 'No purchases match this month / search.'}
                           </TableCell>
                         </TableRow>
                       ) : null}

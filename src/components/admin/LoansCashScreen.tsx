@@ -41,7 +41,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { BOOKS_START_DATE } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
@@ -294,6 +294,95 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     () => loanAccounts.reduce((sum, account) => sum + computeLoanBalance(data ?? null, account.id).balance, 0),
     [loanAccounts, data]
   )
+
+  // ---- Loan period filter (2026-10-04 client request) ---------------------
+  // Monthly (default) / Daily / All time. Scopes the Loan Chart table, the
+  // summary cards and both transaction lists. Per member: Opening = balance
+  // carried in from before the period, Withdrawn/Repaid = movement inside
+  // it, Closing = balance at the period's end (later entries ignored).
+  // Rejected entries never count (isCountedEntry), same as computeLoanBalance.
+  const [loanMode, setLoanMode] = useState<'monthly' | 'daily' | 'all'>('monthly')
+  const [loanDate, setLoanDate] = useState(dateInputValue())
+  const [loanMonth, setLoanMonth] = useState(monthInputValue())
+  const effectiveLoanMode =
+    (loanMode === 'monthly' && !loanMonth) || (loanMode === 'daily' && !loanDate) ? 'all' : loanMode
+  const loanPeriodStart = effectiveLoanMode === 'daily' ? loanDate : effectiveLoanMode === 'monthly' ? `${loanMonth}-01` : ''
+  const loanPeriodLabel =
+    effectiveLoanMode === 'daily'
+      ? formatDate(loanDate)
+      : effectiveLoanMode === 'monthly'
+        ? new Date(`${loanMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+        : 'All time'
+  const isInLoanPeriod = (date: string) =>
+    effectiveLoanMode === 'daily'
+      ? isSameDate(date, loanDate)
+      : effectiveLoanMode === 'monthly'
+        ? isSameMonth(date, loanMonth)
+        : true
+
+  const loanPeriodRows = useMemo(() => {
+    const byAccount = new Map<string, { opening: number; withdrawn: number; repaid: number }>()
+    for (const entry of loanTransactions) {
+      if (!isCountedEntry(entry)) continue
+      const row = byAccount.get(entry.loanAccountId) ?? { opening: 0, withdrawn: 0, repaid: 0 }
+      const signed = entry.type === 'withdrawal' ? entry.amount : -entry.amount
+      if (isInLoanPeriod(entry.date)) {
+        if (entry.type === 'withdrawal') row.withdrawn += entry.amount
+        else row.repaid += entry.amount
+      } else if (loanPeriodStart && isBeforeDate(entry.date, loanPeriodStart)) {
+        row.opening += signed
+      }
+      byAccount.set(entry.loanAccountId, row)
+    }
+    return new Map(
+      loanAccounts.map((account) => {
+        const row = byAccount.get(account.id) ?? { opening: 0, withdrawn: 0, repaid: 0 }
+        return [account.id, { ...row, closing: row.opening + row.withdrawn - row.repaid }]
+      })
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loanTransactions, loanAccounts, effectiveLoanMode, loanDate, loanMonth])
+
+  const loanPeriodTotals = useMemo(() => {
+    const totals = { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
+    for (const row of loanPeriodRows.values()) {
+      totals.opening += row.opening
+      totals.withdrawn += row.withdrawn
+      totals.repaid += row.repaid
+      totals.closing += row.closing
+    }
+    return totals
+  }, [loanPeriodRows])
+
+  const periodLoanTransactions = useMemo(
+    () => loanTransactions.filter((transaction) => isInLoanPeriod(transaction.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loanTransactions, effectiveLoanMode, loanDate, loanMonth]
+  )
+  const periodLoanTransactionTotals = useMemo(() => {
+    const counted = periodLoanTransactions.filter(isCountedEntry)
+    const sumOf = (list: typeof counted) => list.reduce((sum, entry) => sum + entry.amount, 0)
+    const withdrawals = counted.filter((entry) => entry.type === 'withdrawal')
+    const repayments = counted.filter((entry) => entry.type === 'repayment')
+    return {
+      withdrawn: sumOf(withdrawals),
+      newLoans: sumOf(withdrawals.filter((entry) => !entry.isOpeningBalance && !entry.isAdjustment)),
+      existingLoans: sumOf(withdrawals.filter((entry) => entry.isOpeningBalance)),
+      repaid: sumOf(repayments),
+      repaidAsExpense: sumOf(repayments.filter((entry) => entry.expenseId)),
+      repaidAsCash: sumOf(repayments.filter((entry) => !entry.expenseId && !entry.isOpeningBalance && !entry.isAdjustment)),
+      corrections: sumOf(counted.filter((entry) => entry.isAdjustment).map((entry) => ({ ...entry, amount: entry.type === 'withdrawal' ? entry.amount : -entry.amount }))),
+      count: periodLoanTransactions.length,
+    }
+  }, [periodLoanTransactions])
+  const periodExpenseRepayments = useMemo(
+    () => expenseRepayments.filter(({ transaction }) => isInLoanPeriod(transaction.date)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expenseRepayments, effectiveLoanMode, loanDate, loanMonth]
+  )
+  const periodExpenseRepaymentTotal = periodExpenseRepayments
+    .filter(({ transaction, approvalStatus }) => approvalStatus !== 'rejected' && isCountedEntry(transaction))
+    .reduce((sum, { transaction }) => sum + transaction.amount, 0)
 
   function openCreateAccount() {
     setEditingAccountId(null)
@@ -818,24 +907,85 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   return (
     <AdminShell active={showCash ? 'Cash Maintenance' : 'Loan Chart'}>
       <div className="space-y-8">
+        {showLoans ? (
+          <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-foreground">Reporting period — {loanPeriodLabel}</p>
+              <p className="text-xs text-muted-foreground">
+                Pick a month or a day — the cards, the Loan Chart and both transaction lists below show that period's totals.
+              </p>
+            </div>
+            <div className="flex flex-col flex-wrap gap-3 sm:flex-row sm:items-center">
+              <Select value={loanMode} onValueChange={(value) => setLoanMode(value as typeof loanMode)}>
+                <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              {loanMode === 'daily' ? (
+                <Input className="w-full sm:w-48" type="date" value={loanDate} onChange={(event) => setLoanDate(event.target.value)} />
+              ) : loanMode === 'monthly' ? (
+                <Input className="w-full sm:w-48" type="month" value={loanMonth} onChange={(event) => setLoanMonth(event.target.value)} />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {showLoans ? (
+          <>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">Loan members</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{loanAccounts.length.toLocaleString('en-BD')}</p>
+              <p className="text-sm text-muted-foreground">Loan withdrawn — {loanPeriodLabel}</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-amber-700 dark:text-amber-300">
+                {formatCurrency(periodLoanTransactionTotals.withdrawn, currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                New loans {formatCurrency(periodLoanTransactionTotals.newLoans, currency)} · Existing loans{' '}
+                {formatCurrency(periodLoanTransactionTotals.existingLoans, currency)}
+              </p>
             </CardContent>
           </Card>
-          ) : null}
-          {showLoans ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Loan repaid — {loanPeriodLabel}</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-emerald-600">
+                {formatCurrency(periodLoanTransactionTotals.repaid, currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                As Cash Maintenance {formatCurrency(periodLoanTransactionTotals.repaidAsCash, currency)} · As Expense{' '}
+                {formatCurrency(periodLoanTransactionTotals.repaidAsExpense, currency)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">
+                {effectiveLoanMode === 'all' ? 'Loan balance' : `Closing balance — ${loanPeriodLabel}`}
+              </p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">
+                {formatCurrency(loanPeriodTotals.closing, currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Opening {formatCurrency(loanPeriodTotals.opening, currency)} + Withdrawn{' '}
+                {formatCurrency(loanPeriodTotals.withdrawn, currency)} − Repaid {formatCurrency(loanPeriodTotals.repaid, currency)}
+              </p>
+            </CardContent>
+          </Card>
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-5">
               <p className="text-sm text-muted-foreground">Total loan balance outstanding</p>
               <p className="mt-2 text-2xl font-semibold tracking-tight text-destructive">
                 {formatCurrency(totalLoanBalance, currency)}
               </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                As of today · {loanAccounts.length.toLocaleString('en-BD')} loan members ·{' '}
+                {periodLoanTransactionTotals.count.toLocaleString('en-BD')} transactions in {loanPeriodLabel}
+              </p>
             </CardContent>
           </Card>
+          </>
           ) : null}
           {showCash ? (
           <Card className="border-border/70 shadow-sm">
@@ -908,19 +1058,24 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   <TableRow>
                     <TableHead>Member</TableHead>
                     <TableHead>Phone</TableHead>
-                    <TableHead className="text-right">Total Withdrawn</TableHead>
-                    <TableHead className="text-right">Total Repaid</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
+                    {effectiveLoanMode === 'all' ? null : <TableHead className="text-right">Opening</TableHead>}
+                    <TableHead className="text-right">{effectiveLoanMode === 'all' ? 'Total Withdrawn' : 'Withdrawn'}</TableHead>
+                    <TableHead className="text-right">{effectiveLoanMode === 'all' ? 'Total Repaid' : 'Repaid'}</TableHead>
+                    <TableHead className="text-right">{effectiveLoanMode === 'all' ? 'Balance' : 'Closing'}</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredAccounts.map((account) => {
-                    const totals = computeLoanBalance(data ?? null, account.id)
+                    const period = loanPeriodRows.get(account.id) ?? { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
+                    const totals = { totalWithdrawn: period.withdrawn, totalRepaid: period.repaid, balance: period.closing }
                     return (
                       <TableRow key={account.id}>
                         <TableCell className="font-medium">{account.memberName}</TableCell>
                         <TableCell>{account.phone || '—'}</TableCell>
+                        {effectiveLoanMode === 'all' ? null : (
+                          <TableCell className="text-right tabular-nums">{formatCurrency(period.opening, currency)}</TableCell>
+                        )}
                         <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalWithdrawn, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatCurrency(totals.totalRepaid, currency)}</TableCell>
                         <TableCell className="text-right tabular-nums">
@@ -971,13 +1126,35 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   })}
                   {filteredAccounts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={effectiveLoanMode === 'all' ? 6 : 7} className="py-10 text-center text-sm text-muted-foreground">
                         <Users className="mx-auto mb-2 h-8 w-8 opacity-50" />
                         No loan members yet.
                       </TableCell>
                     </TableRow>
                   ) : null}
                 </TableBody>
+                {filteredAccounts.length > 0 ? (
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell colSpan={2} className="font-semibold">Total — {loanPeriodLabel}</TableCell>
+                      {effectiveLoanMode === 'all' ? null : (
+                        <TableCell className="text-right font-semibold tabular-nums">
+                          {formatCurrency(filteredAccounts.reduce((sum, account) => sum + (loanPeriodRows.get(account.id)?.opening ?? 0), 0), currency)}
+                        </TableCell>
+                      )}
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatCurrency(filteredAccounts.reduce((sum, account) => sum + (loanPeriodRows.get(account.id)?.withdrawn ?? 0), 0), currency)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatCurrency(filteredAccounts.reduce((sum, account) => sum + (loanPeriodRows.get(account.id)?.repaid ?? 0), 0), currency)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatCurrency(filteredAccounts.reduce((sum, account) => sum + (loanPeriodRows.get(account.id)?.closing ?? 0), 0), currency)}
+                      </TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </TableFooter>
+                ) : null}
               </Table>
             </div>
           </CardContent>
@@ -1050,8 +1227,8 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           <CardHeader>
             <SectionHeader
               icon={HandCoins}
-              title="Loan Transactions"
-              description="Every withdrawal and repayment, newest first — each repayment automatically brings the member's balance above down."
+              title={`Loan Transactions — ${loanPeriodLabel}`}
+              description={`Withdrawn ${formatCurrency(periodLoanTransactionTotals.withdrawn, currency)} · Repaid ${formatCurrency(periodLoanTransactionTotals.repaid, currency)}${periodLoanTransactionTotals.corrections ? ` · Balance corrections ${formatCurrency(periodLoanTransactionTotals.corrections, currency)}` : ''} — newest first, rejected entries not counted.`}
             />
           </CardHeader>
           <CardContent>
@@ -1069,7 +1246,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {loanTransactions.map((transaction) => (
+                  {periodLoanTransactions.map((transaction) => (
                     <TableRow key={transaction.id}>
                       <TableCell className="font-medium">{transaction.memberName}<RecordApprovalTag record={transaction} /></TableCell>
                       <TableCell>
@@ -1115,10 +1292,10 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {loanTransactions.length === 0 ? (
+                  {periodLoanTransactions.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                        No loan transactions recorded yet.
+                        {loanTransactions.length === 0 ? 'No loan transactions recorded yet.' : `No loan transactions in ${loanPeriodLabel}.`}
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -1133,8 +1310,8 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           <CardHeader>
             <SectionHeader
               icon={HandCoins}
-              title="Loan Repayments — Posted as Expense"
-              description="Repayments posted as Direct Expense (Operating Cost) instead of Cash Maintenance — these also show on the Finance › Expenses page, but can be edited from here."
+              title={`Loan Repayments — Posted as Expense — ${loanPeriodLabel}`}
+              description={`Total ${formatCurrency(periodExpenseRepaymentTotal, currency)} (rejected not counted). Repayments posted as Direct Expense (Operating Cost) instead of Cash Maintenance — these also show on the Finance › Expenses page, but can be edited from here.`}
             />
           </CardHeader>
           <CardContent>
@@ -1151,7 +1328,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {expenseRepayments.map(({ transaction, approvalStatus }) => (
+                  {periodExpenseRepayments.map(({ transaction, approvalStatus }) => (
                     <TableRow key={transaction.id}>
                       <TableCell className="font-medium">{transaction.memberName}</TableCell>
                       <TableCell>{formatDate(transaction.date)}</TableCell>
@@ -1190,10 +1367,10 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {expenseRepayments.length === 0 ? (
+                  {periodExpenseRepayments.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                        No repayments posted as Expense yet.
+                        {expenseRepayments.length === 0 ? 'No repayments posted as Expense yet.' : `No repayments posted as Expense in ${loanPeriodLabel}.`}
                       </TableCell>
                     </TableRow>
                   ) : null}

@@ -1,12 +1,11 @@
 "use client"
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { ArrowDownCircle, ArrowUpCircle, Landmark, PiggyBank, Printer, Undo2 } from 'lucide-react'
 
 import { ExportMenu } from './ExportMenu'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   COMPANY_ADDRESS,
@@ -16,7 +15,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { dhakaTodayIso, buildFundCashFlowReport, expenseCategoryLabel, formatCurrency, formatDate } from '@/lib/erp/utils'
+import { buildFundCashFlowReport, expenseCategoryLabel, formatCurrency } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -32,14 +31,6 @@ function openPrintWindow(html: string) {
   if (!printWindow) return
   printWindow.document.write(html)
   printWindow.document.close()
-}
-
-function monthStartValue(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`
-}
-
-function todayValue(date = new Date()) {
-  return dhakaTodayIso(date)
 }
 
 function netToneClass(value: number) {
@@ -221,14 +212,13 @@ function buildFundReportHtml(
 // Loan & Cash Maintenance, Company Earnings, and Reports Hub pages already
 // track individually, but never showed together on one printable page. See
 // buildFundCashFlowReport in utils.ts for the underlying numbers.
-export function FundCashFlowReport() {
+// Period (from/to, '' = open-ended) comes from the Reports Hub's shared
+// Monthly/Daily/Range period selector, so every report tab stays in sync.
+export function FundCashFlowReport({ from, to, periodLabel }: { from: string; to: string; periodLabel: string }) {
   const { data } = useERP()
   const currency = data?.settings.currency
-  const [from, setFrom] = useState(monthStartValue())
-  const [to, setTo] = useState(todayValue())
 
   const report = useMemo(() => buildFundCashFlowReport(data, from, to), [data, from, to])
-  const periodLabel = from || to ? `${from ? formatDate(from) : 'Beginning'} to ${to ? formatDate(to) : 'Now'}` : 'All time'
 
   const categoryHeaders = ['Category', 'Expense', 'Cash Maintenance', 'Total']
   const categoryRows = report.outflow.byCategory.map((row) => [expenseCategoryLabel(data, row.category), row.expenseAmount, row.cashAmount, row.total])
@@ -256,22 +246,6 @@ export function FundCashFlowReport() {
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Input type="date" className="w-40" value={from} onChange={(event) => setFrom(event.target.value)} />
-            <span className="text-sm text-muted-foreground">to</span>
-            <Input type="date" className="w-40" value={to} onChange={(event) => setTo(event.target.value)} />
-            {from || to ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setFrom('')
-                  setTo('')
-                }}
-              >
-                All time
-              </Button>
-            ) : null}
             <Button
               type="button"
               variant="outline"

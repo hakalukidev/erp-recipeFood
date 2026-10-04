@@ -32,7 +32,7 @@ import {
   computeEmployeeAdvances,
   computeEmployeeSalaryTotals,
   employeeAdvanceOutstanding,
-  expenseCategoryLabel, formatCurrency, formatDate, toArray,
+  expenseCategoryLabel, formatCurrency, formatDate, isCountedEntry, toArray,
   dhakaTodayIso,
 } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -214,7 +214,7 @@ export default function ExpensesPage() {
   const [renameDraft, setRenameDraft] = useState<Record<string, string>>({})
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameSaving, setRenameSaving] = useState(false)
-  const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
+  const [mode, setMode] = useState<'daily' | 'monthly'>('monthly')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
   const [selectedCategory, setSelectedCategory] = useState(ALL_CATEGORIES)
@@ -308,7 +308,7 @@ export default function ExpensesPage() {
   }, [periodExpenses, selectedCategory])
 
   const expenseTotal = useMemo(
-    () => filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0),
+    () => filteredExpenses.filter(isCountedEntry).reduce((sum, expense) => sum + expense.amount, 0),
     [filteredExpenses]
   )
 
@@ -318,7 +318,7 @@ export default function ExpensesPage() {
   // category.
   const categoryTotals = useMemo(() => {
     const rows = new Map<string, { category: string; count: number; total: number }>()
-    periodExpenses.forEach((expense) => {
+    periodExpenses.filter(isCountedEntry).forEach((expense) => {
       const existing = rows.get(expense.category)
       if (existing) {
         existing.count += 1
@@ -330,7 +330,7 @@ export default function ExpensesPage() {
     return Array.from(rows.values()).sort((left, right) => right.total - left.total)
   }, [periodExpenses])
 
-  const periodLabel = mode === 'daily' ? formatDate(selectedDate) : selectedMonth
+  const periodLabel = mode === 'daily' ? formatDate(selectedDate) : formatMonthLabel(selectedMonth)
 
   // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
   // Month-wise (client request): defaults to the current month; clearing the
@@ -557,6 +557,28 @@ export default function ExpensesPage() {
               Print
             </Button>
           </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Total expenses</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(expenseTotal, currency)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {periodLabel}
+                {selectedCategory === ALL_CATEGORIES ? '' : ` · ${labelOf(selectedCategory)}`} · rejected entries excluded
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="border-border/70 shadow-sm">
+            <CardContent className="p-5">
+              <p className="text-sm text-muted-foreground">Expense entries</p>
+              <p className="mt-2 text-2xl font-semibold tracking-tight">
+                {filteredExpenses.filter(isCountedEntry).length.toLocaleString('en-BD')}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Recorded in {periodLabel}</p>
+            </CardContent>
+          </Card>
         </div>
 
         {feedback ? (

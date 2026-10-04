@@ -361,6 +361,55 @@ export function buildCompanyEarningsSummary(data: ERPData | null, months = 6) {
   }
 }
 
+// Company Earnings for one period (2026-10-04 client request — Monthly /
+// Daily / All time selector on the Company Earnings page). Same figures and
+// same inclusion rules as buildCompanyEarningsSummary's totals, just scoped
+// to an inclusive from/to ('' = open-ended), plus a day-by-day breakdown.
+export function buildCompanyEarningsForPeriod(data: ERPData | null, from: string, to: string) {
+  const rateCards = toArray(data?.rateCards).filter((card) => isCountedEntry(card) && dateInRange(card.date, from, to))
+  const productReturns = toArray(data?.productReturns).filter((item) => isCountedEntry(item) && dateInRange(item.date, from, to))
+  const expenses: Array<{ date: string; amount: number }> = [
+    ...toArray(data?.expenses).filter((expense) => expense.approvalStatus !== 'rejected'),
+    ...directExpenseCashEntries(data),
+  ].filter((expense) => dateInRange(expense.date, from, to))
+
+  const grossEarning = rateCards.reduce((sum, card) => sum + card.usableMoney, 0)
+  const totalReturns = productReturns.reduce((sum, item) => sum + item.companyProfit, 0)
+  const totalEarning = grossEarning - totalReturns
+  const totalExpense = expenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const totalDealerValueSales =
+    rateCards.reduce((sum, card) => sum + card.dealerRateTotal, 0) -
+    productReturns.reduce((sum, item) => sum + item.dealerRateTotal, 0)
+
+  const byDay = new Map<string, { date: string; earning: number; returns: number; expense: number }>()
+  const dayRow = (date: string) => {
+    const key = date.slice(0, 10)
+    const row = byDay.get(key) ?? { date: key, earning: 0, returns: 0, expense: 0 }
+    byDay.set(key, row)
+    return row
+  }
+  rateCards.forEach((card) => (dayRow(card.date).earning += card.usableMoney))
+  productReturns.forEach((item) => (dayRow(item.date).returns += item.companyProfit))
+  expenses.forEach((expense) => (dayRow(expense.date).expense += expense.amount))
+  const daily = Array.from(byDay.values())
+    .map((row) => ({ ...row, net: row.earning - row.returns - row.expense }))
+    .sort((left, right) => right.date.localeCompare(left.date))
+
+  return {
+    invoiceCount: rateCards.length,
+    returnCount: productReturns.length,
+    expenseCount: expenses.length,
+    grossEarning,
+    totalReturns,
+    totalEarning,
+    totalExpense,
+    netProfit: totalEarning - totalExpense,
+    totalDealerValueSales,
+    avgProfitRatioPercent: totalDealerValueSales > 0 ? (totalEarning / totalDealerValueSales) * 100 : 0,
+    daily,
+  }
+}
+
 function dateInRange(date: string, from: string, to: string) {
   const value = date.slice(0, 10)
   if (from && value < from) return false
@@ -1777,7 +1826,14 @@ export type GeneralLedgerAccountSummary = {
 // order) — the same "derive, don't store" shape as computeLoanBalance/
 // computeLoanMonthlySchedule above: never persisted, always recomputed live
 // off ledgerEntries + journalEntries' manual lines.
-export function buildGeneralLedger(data: ERPData | null): GeneralLedgerAccountSummary[] {
+//
+// Optional `range` (inclusive YYYY-MM-DD, '' / undefined = open-ended) scopes
+// it to a period, the standard way: postings before `from` fold into
+// openingBalance, postings after `to` are ignored, so entries/totalDebit/
+// totalCredit are the period's movement and closingBalance is as of `to`.
+export type LedgerDateRange = { from?: string; to?: string }
+
+export function buildGeneralLedger(data: ERPData | null, range: LedgerDateRange = {}): GeneralLedgerAccountSummary[] {
   if (!data) {
     return []
   }
@@ -1811,6 +1867,12 @@ export function buildGeneralLedger(data: ERPData | null): GeneralLedgerAccountSu
     }
     const summary = summaries.get(account.id)
     if (!summary) return
+    const day = entry.date.slice(0, 10)
+    if (range.to && day > range.to) return
+    if (range.from && day < range.from) {
+      summary.openingBalance += entry.debit - entry.credit
+      return
+    }
     summary.entries.push({
       id: entry.id,
       date: entry.date,
@@ -1843,6 +1905,8 @@ export type TrialBalanceRow = {
   accountType: AccountType
   debit: number
   credit: number
+  periodDebit: number
+  periodCredit: number
 }
 
 // Every account with any activity (or a non-zero opening balance), split
@@ -1858,8 +1922,13 @@ export function findUnmappedLedgerEntries(data: ERPData | null) {
   return Object.values(data.ledgerEntries ?? {}).filter((entry) => !resolveLedgerAccountRecord(data.chartOfAccounts, entry))
 }
 
-export function buildTrialBalance(data: ERPData | null): { rows: TrialBalanceRow[]; totalDebit: number; totalCredit: number } {
-  const ledger = buildGeneralLedger(data)
+// With a range, debit/credit are the closing balance as of range.to and
+// periodDebit/periodCredit are the movement inside the range.
+export function buildTrialBalance(
+  data: ERPData | null,
+  range: LedgerDateRange = {}
+): { rows: TrialBalanceRow[]; totalDebit: number; totalCredit: number; totalPeriodDebit: number; totalPeriodCredit: number } {
+  const ledger = buildGeneralLedger(data, range)
   const rows: TrialBalanceRow[] = ledger
     .filter((account) => account.closingBalance !== 0 || account.entries.length > 0)
     .map((account) => ({
@@ -1869,10 +1938,14 @@ export function buildTrialBalance(data: ERPData | null): { rows: TrialBalanceRow
       accountType: account.accountType,
       debit: account.closingBalance > 0 ? account.closingBalance : 0,
       credit: account.closingBalance < 0 ? -account.closingBalance : 0,
+      periodDebit: account.totalDebit,
+      periodCredit: account.totalCredit,
     }))
   const totalDebit = rows.reduce((sum, row) => sum + row.debit, 0)
   const totalCredit = rows.reduce((sum, row) => sum + row.credit, 0)
-  return { rows, totalDebit, totalCredit }
+  const totalPeriodDebit = rows.reduce((sum, row) => sum + row.periodDebit, 0)
+  const totalPeriodCredit = rows.reduce((sum, row) => sum + row.periodCredit, 0)
+  return { rows, totalDebit, totalCredit, totalPeriodDebit, totalPeriodCredit }
 }
 
 export type BalanceSheetLine = { accountId: string; code: string; name: string; amount: number }
@@ -1895,10 +1968,24 @@ export type BalanceSheetSummary = {
   totalEquity: number
   totalLiabilitiesAndEquity: number
   isBalanced: boolean
+  // Revenue − Expense posted inside the range only (equals
+  // currentPeriodNetProfit when no `from` is given).
+  periodNetProfit: number
+  periodRevenue: number
+  periodExpense: number
 }
 
-export function buildBalanceSheet(data: ERPData | null): BalanceSheetSummary {
-  const ledger = buildGeneralLedger(data)
+// A balance sheet is point-in-time: balances are as of range.to; range.from
+// only feeds the period P&L figures (periodNetProfit etc.).
+export function buildBalanceSheet(data: ERPData | null, range: LedgerDateRange = {}): BalanceSheetSummary {
+  const ledger = buildGeneralLedger(data, { to: range.to })
+  const periodLedger = range.from ? buildGeneralLedger(data, range) : ledger
+  const periodRevenue = periodLedger
+    .filter((account) => account.accountType === 'revenue')
+    .reduce((sum, account) => sum + (range.from ? account.totalCredit - account.totalDebit : -account.closingBalance), 0)
+  const periodExpense = periodLedger
+    .filter((account) => account.accountType === 'expense')
+    .reduce((sum, account) => sum + (range.from ? account.totalDebit - account.totalCredit : account.closingBalance), 0)
   const toLine = (account: GeneralLedgerAccountSummary, amount: number): BalanceSheetLine => ({
     accountId: account.accountId,
     code: account.accountCode,
@@ -1943,6 +2030,9 @@ export function buildBalanceSheet(data: ERPData | null): BalanceSheetSummary {
     totalEquity,
     totalLiabilitiesAndEquity,
     isBalanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.01,
+    periodNetProfit: periodRevenue - periodExpense,
+    periodRevenue,
+    periodExpense,
   }
 }
 

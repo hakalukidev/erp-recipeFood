@@ -21,7 +21,6 @@ import { useERP } from '@/lib/erp/provider'
 import {
   buildCategorySalesReportSummary,
   buildSalesReportSummary,
-  dhakaTodayIso,
   formatCurrency,
   formatDate,
   type CategorySalesReportRow,
@@ -152,39 +151,17 @@ function buildCategoryInvoiceHtml(categories: CategorySalesReportRow[], periodLa
 // Renders just the Sales tab's content — no AdminShell of its own, since
 // this now lives inside the Reports Hub's own AdminShell/tab switcher (see
 // ReportsHubScreen.tsx) alongside Expense/Purchase/Vendor/Loan report tabs.
-export function SalesReportsContent() {
+// Period comes from the Reports Hub's shared Monthly/Daily/Range selector
+// ('' = open-ended), so Sales stays in sync with every other report tab.
+export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }: { from: string; to: string; periodLabel: string }) {
   const { data, classifyRateCardSaleType } = useERP()
   const currency = data?.settings.currency
   // Date-wise reporting — every figure on this tab (stat cards, dealer,
   // product, category and date-wise tables) is scoped to this range. Both
   // ends empty = all time.
-  const [fromDate, setFromDate] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
-  const [toDate, setToDate] = useState(() => dhakaTodayIso())
   const range = useMemo<SalesReportDateRange>(() => ({ from: fromDate || undefined, to: toDate || undefined }), [fromDate, toDate])
-  const periodLabel =
-    fromDate && toDate
-      ? `${formatDate(fromDate)} – ${formatDate(toDate)}`
-      : fromDate
-        ? `From ${formatDate(fromDate)}`
-        : toDate
-          ? `Up to ${formatDate(toDate)}`
-          : 'All time'
   const summary = useMemo(() => buildSalesReportSummary(data, range), [data, range])
   const categorySummary = useMemo(() => buildCategorySalesReportSummary(data, range), [data, range])
-
-  function applyPreset(preset: 'today' | 'month' | 'all') {
-    const today = dhakaTodayIso()
-    if (preset === 'today') {
-      setFromDate(today)
-      setToDate(today)
-    } else if (preset === 'month') {
-      setFromDate(`${today.slice(0, 7)}-01`)
-      setToDate(today)
-    } else {
-      setFromDate('')
-      setToDate('')
-    }
-  }
 
   const [dealerQuery, setDealerQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
@@ -266,24 +243,6 @@ export function SalesReportsContent() {
 
   return (
       <div className="space-y-6">
-        <Card className="border-border/70 shadow-sm">
-          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <CalendarDays className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">Report period:</span>
-              <span className="text-muted-foreground">{periodLabel}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input className="w-full sm:w-40" type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} aria-label="From date" />
-              <span className="text-sm text-muted-foreground">to</span>
-              <Input className="w-full sm:w-40" type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} aria-label="To date" />
-              <Button variant="outline" size="sm" onClick={() => applyPreset('today')}>Today</Button>
-              <Button variant="outline" size="sm" onClick={() => applyPreset('month')}>This month</Button>
-              <Button variant="outline" size="sm" onClick={() => applyPreset('all')}>All time</Button>
-            </div>
-          </CardContent>
-        </Card>
-
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">

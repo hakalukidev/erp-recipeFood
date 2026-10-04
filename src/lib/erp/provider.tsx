@@ -210,7 +210,7 @@ type ERPContextValue = {
   reviewRecordApproval: (
     collection: ApprovalCollection,
     recordId: string,
-    approvalStatus: Exclude<RecordApprovalStatus, 'pending'>,
+    approvalStatus: RecordApprovalStatus,
     note?: string
   ) => Promise<void>
   saveInvestor: (input: InvestorInput, investorId?: string) => Promise<void>
@@ -4908,10 +4908,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // invoice or purchase below); stock it moved stays moved. The department
   // then corrects it (edit re-submits it) or deletes it. Nobody but Super
   // Admin may authorize their own entry (maker-checker).
+  //
+  // A reviewed entry can be re-reviewed (2026-10-04 client request — "an
+  // entry approved by mistake must be changeable"): any status can move to
+  // any other. Leaving "rejected" re-applies what rejecting gave back
+  // (payment / return credit), so the parent invoice or purchase stays
+  // consistent; moving back to "pending" clears the reviewer fields.
   async function reviewRecordApproval(
     collection: ApprovalCollection,
     recordId: string,
-    approvalStatus: Exclude<RecordApprovalStatus, 'pending'>,
+    approvalStatus: RecordApprovalStatus,
     note?: string
   ) {
     if (!data || !currentUser) {
@@ -4927,8 +4933,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!record) {
       throw new Error(`${source.label} not found.`)
     }
-    if (getApprovalStatus(record) !== 'pending') {
-      throw new Error(`This ${source.label.toLowerCase()} has already been reviewed.`)
+    const previousStatus = getApprovalStatus(record)
+    if (previousStatus === approvalStatus) {
+      throw new Error(`This ${source.label.toLowerCase()} is already ${approvalStatus}.`)
     }
 
     const submittedBy = record.submittedBy || record.createdBy || ''
@@ -4944,11 +4951,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
     const path = `${collection}/${recordId}`
+    const isReset = approvalStatus === 'pending'
     const updates: Record<string, unknown> = {
       [`${path}/approvalStatus`]: approvalStatus,
-      [`${path}/approvedBy`]: currentUser.id,
-      [`${path}/approvedByName`]: currentUser.name,
-      [`${path}/approvedAt`]: now,
+      [`${path}/approvedBy`]: isReset ? '' : currentUser.id,
+      [`${path}/approvedByName`]: isReset ? '' : currentUser.name,
+      [`${path}/approvedAt`]: isReset ? '' : now,
       [`${path}/approvalNote`]: trimmedNote,
     }
     // A rejected entry stops counting in every money total (isCountedEntry
@@ -4974,11 +4982,48 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         const entry = data.productReturns[recordId]
         if (entry) applyReturnDueAdjustment(updates, entry, { returnParty: entry.returnParty })
       }
+    } else if (previousStatus === 'rejected') {
+      // Un-rejecting: take the payment / return credit back off the parent
+      // again — refused if the parent's due no longer has room for it
+      // (e.g. the invoice was paid some other way meanwhile).
+      const reapply = (parentPath: string, parentLabel: string, due: number, amount: number) => {
+        if (amount > due + 0.005) {
+          throw new Error(
+            `${parentLabel}'s outstanding due is only ${due.toFixed(2)} now, so this ${amount.toFixed(2)} can't be counted again. Edit or delete the entry instead.`
+          )
+        }
+        updates[`${parentPath}/due`] = Math.round((due - amount) * 100) / 100
+        updates[`${parentPath}/updatedAt`] = now
+      }
+      if (collection === 'collections') {
+        const entry = data.collections[recordId]
+        const card = entry ? data.rateCards[entry.rateCardId] : undefined
+        if (entry && card) {
+          reapply(`rateCards/${card.id}`, `Invoice ${card.invoiceNo}`, card.due, entry.amount)
+          updates[`rateCards/${card.id}/paid`] = card.paid + entry.amount
+        }
+      } else if (collection === 'vendorPayments') {
+        const entry = data.vendorPayments[recordId]
+        const purchase = entry?.purchaseId ? data.purchases[entry.purchaseId] : undefined
+        if (entry && purchase) {
+          reapply(`purchases/${purchase.id}`, `Purchase ${purchase.purchaseNumber}`, purchase.due, entry.amount)
+          updates[`purchases/${purchase.id}/paid`] = purchase.paid + entry.amount
+        }
+      } else if (collection === 'productReturns') {
+        const entry = data.productReturns[recordId]
+        const card = entry?.rateCardId ? data.rateCards[entry.rateCardId] : undefined
+        if (entry && card && entry.dueAdjustment) {
+          reapply(`rateCards/${card.id}`, `Invoice ${card.invoiceNo}`, card.due, entry.dueAdjustment)
+          updates[`rateCards/${card.id}/returnAdjustment`] =
+            Math.round(((card.returnAdjustment ?? 0) + entry.dueAdjustment) * 100) / 100
+        }
+      }
     }
     await update(ref(db, 'erp'), updates)
 
     const row = source.describe(record as never, data)
-    const message = `${source.label} ${row.reference} was ${approvalStatus} by ${currentUser.name}${trimmedNote ? ` — ${trimmedNote}` : ''}.`
+    const verb = isReset ? 'sent back to pending' : previousStatus === 'pending' ? approvalStatus : `changed from ${previousStatus} to ${approvalStatus}`
+    const message = `${source.label} ${row.reference} was ${verb} by ${currentUser.name}${trimmedNote ? ` — ${trimmedNote}` : ''}.`
     await writeActivity(`${collection}_${approvalStatus}`, source.department, message, { reason: trimmedNote || undefined })
 
     const submitterRoleId = submittedBy ? data.users[submittedBy]?.roleId : undefined
@@ -4995,6 +5040,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // spend is disallowed) but keeps the record itself for audit, unlike
   // deleteExpense which removes it outright. Only a "pending" expense can
   // be reviewed, to avoid double-reversing or re-posting on a flip-flop.
+  // Since 2026-10-04 a reviewed expense can be re-reviewed (fixing a
+  // mistaken approval/rejection): only the move INTO "rejected" reverses
+  // the ledger and only the move OUT of it re-posts, so a flip-flop never
+  // double-reverses or double-posts.
   async function updateExpenseApproval(expenseId: string, approvalStatus: ExpenseApprovalStatus) {
     if (!data || !currentUser) {
       return
@@ -5015,17 +5064,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Expense not found.')
     }
 
-    if (expense.approvalStatus !== 'pending') {
-      throw new Error('This expense has already been reviewed.')
+    const previousStatus = expense.approvalStatus
+    if (previousStatus === approvalStatus) {
+      throw new Error(`This expense is already ${approvalStatus}.`)
     }
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
+    const isReset = approvalStatus === 'pending'
     const updates: Record<string, unknown> = {
       [`expenses/${expenseId}/approvalStatus`]: approvalStatus,
-      [`expenses/${expenseId}/approvedBy`]: currentUser.id,
-      [`expenses/${expenseId}/approvedByName`]: currentUser.name,
-      [`expenses/${expenseId}/approvedAt`]: now,
+      [`expenses/${expenseId}/approvedBy`]: isReset ? '' : currentUser.id,
+      [`expenses/${expenseId}/approvedByName`]: isReset ? '' : currentUser.name,
+      [`expenses/${expenseId}/approvedAt`]: isReset ? '' : now,
     }
 
     if (approvalStatus === 'rejected') {
@@ -5033,17 +5084,32 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
         updates[`ledgerEntries/${entry.id}`] = entry
       })
+    } else if (previousStatus === 'rejected' && getActiveLedgerEntries(data.ledgerEntries, expenseId).length === 0) {
+      // Un-rejecting: re-post the spend (skipped if live postings already
+      // exist, e.g. the expense was edited while rejected).
+      Object.values(
+        buildExpenseLedgerEntries({
+          expenseId,
+          date: expense.date,
+          category: expense.category,
+          amount: expense.amount,
+          paymentMethod: expense.paymentMethod ?? 'cash',
+        })
+      ).forEach((entry) => {
+        updates[`ledgerEntries/${entry.id}`] = entry
+      })
     }
 
     await update(ref(db, 'erp'), updates)
+    const verb = isReset ? 'sent back to pending' : previousStatus === 'pending' ? approvalStatus : `changed from ${previousStatus} to ${approvalStatus}`
     await writeActivity(
       'expense_approval_changed',
       'finance',
-      `${expense.category} expense of ${expense.amount} was ${approvalStatus} by ${currentUser.name}.`
+      `${expense.category} expense of ${expense.amount} was ${verb} by ${currentUser.name}.`
     )
     await writeNotification(
       'Expense approval updated',
-      `${expense.category} expense of ${expense.amount} was ${approvalStatus} by ${currentUser.name}.`,
+      `${expense.category} expense of ${expense.amount} was ${verb} by ${currentUser.name}.`,
       approvalStatus === 'approved' ? 'info' : 'warning',
       ['super_admin', 'manager', 'accounts']
     )
