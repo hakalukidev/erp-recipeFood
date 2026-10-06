@@ -65,6 +65,25 @@ function buildGenericReportHtml(title: string, headers: string[], rows: (string 
     )
     .join('')
 
+  return buildReportShellHtml(
+    title,
+    `<table class="doc">
+          <thead><tr>${headerRow}</tr></thead>
+          <tbody>${bodyRows}</tbody>
+          ${
+            totalsRow
+              ? `<tfoot><tr>${totalsRow
+                  .map((cell, index) => `<th class="${typeof cell === 'number' && index > 0 ? 'numeric' : ''}">${escapeHtml(String(cell))}</th>`)
+                  .join('')}</tr></tfoot>`
+              : ''
+          }
+        </table>`
+  )
+}
+
+// Letterhead + print styles shared by every print in this hub; `bodyHtml`
+// is the report content placed under the title.
+function buildReportShellHtml(title: string, bodyHtml: string) {
   return `
     <!doctype html>
     <html>
@@ -82,6 +101,9 @@ function buildGenericReportHtml(title: string, headers: string[], rows: (string 
           table.doc th, table.doc td { border: 1px solid #d1d5db; padding: 5px 7px; font-size: 12.5px; }
           table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 11px; }
           .numeric { text-align: right; white-space: nowrap; }
+          .section-title { font-size: 13px; font-weight: 700; margin: 18px 0 6px; }
+          tr.group td { background: #ecfdf5; font-weight: 700; color: #0f766e; }
+          tr.subtotal td { background: #f9fafb; font-weight: 700; }
           .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
           @media print { button { display: none; } }
         </style>
@@ -91,22 +113,63 @@ function buildGenericReportHtml(title: string, headers: string[], rows: (string 
         <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
         <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
         <p class="subtitle">${escapeHtml(title)}</p>
-        <table class="doc">
-          <thead><tr>${headerRow}</tr></thead>
-          <tbody>${bodyRows}</tbody>
-          ${
-            totalsRow
-              ? `<tfoot><tr>${totalsRow
-                  .map((cell, index) => `<th class="${typeof cell === 'number' && index > 0 ? 'numeric' : ''}">${escapeHtml(String(cell))}</th>`)
-                  .join('')}</tr></tfoot>`
-              : ''
-          }
-        </table>
+        ${bodyHtml}
         <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
         <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
       </body>
     </html>
   `
+}
+
+type ExpensePrintRow = { date: string; category: string; source: string; amount: number; note?: string }
+
+// Expense print grouped by category (client request, 2026-10-06): a
+// category summary first, then each category's own entries with a
+// subtotal, then the grand total.
+function buildExpenseByCategoryHtml(title: string, rows: ExpensePrintRow[]) {
+  const money = (value: number) => value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const groups = new Map<string, ExpensePrintRow[]>()
+  for (const row of rows) groups.set(row.category, [...(groups.get(row.category) ?? []), row])
+  const ordered = Array.from(groups.entries())
+    .map(([category, items]) => ({
+      category,
+      items: [...items].sort((a, b) => a.date.localeCompare(b.date)),
+      total: items.reduce((sum, item) => sum + item.amount, 0),
+    }))
+    .sort((a, b) => b.total - a.total)
+  const grandTotal = rows.reduce((sum, row) => sum + row.amount, 0)
+
+  const summary = `
+    <p class="section-title">Category-wise summary</p>
+    <table class="doc">
+      <thead><tr><th>Category</th><th>Entries</th><th>Total</th></tr></thead>
+      <tbody>${ordered
+        .map((group) => `<tr><td>${escapeHtml(group.category)}</td><td class="numeric">${group.items.length}</td><td class="numeric">${money(group.total)}</td></tr>`)
+        .join('')}</tbody>
+      <tfoot><tr><th>Total</th><th class="numeric">${rows.length}</th><th class="numeric">${money(grandTotal)}</th></tr></tfoot>
+    </table>`
+
+  const detail = `
+    <p class="section-title">Category-wise detail</p>
+    <table class="doc">
+      <thead><tr><th>Date</th><th>Source</th><th>Amount</th><th>Note</th></tr></thead>
+      <tbody>${ordered
+        .map(
+          (group) =>
+            `<tr class="group"><td colspan="4">${escapeHtml(group.category)}</td></tr>` +
+            group.items
+              .map(
+                (item) =>
+                  `<tr><td>${escapeHtml(formatDate(item.date))}</td><td>${escapeHtml(item.source)}</td><td class="numeric">${money(item.amount)}</td><td>${escapeHtml(item.note ?? '')}</td></tr>`
+              )
+              .join('') +
+            `<tr class="subtotal"><td colspan="2">Subtotal — ${escapeHtml(group.category)} (${group.items.length})</td><td class="numeric">${money(group.total)}</td><td></td></tr>`
+        )
+        .join('')}</tbody>
+      <tfoot><tr><th colspan="2">Grand total (${rows.length} entries)</th><th class="numeric">${money(grandTotal)}</th><th></th></tr></tfoot>
+    </table>`
+
+  return buildReportShellHtml(title, summary + detail)
 }
 
 function SectionHeader({
@@ -230,13 +293,27 @@ export function ReportsHubScreen() {
     return [...fromExpenses, ...fromCashMaintenance]
   }, [data?.expenses, data?.cashMaintenance])
 
-  const filteredExpenses = useMemo(
+  const periodExpenses = useMemo(
     () =>
       combinedExpenseRows
         .filter((row) => inRange(row.date, periodFrom, periodTo))
         .sort((a, b) => b.date.localeCompare(a.date)),
     [combinedExpenseRows, periodFrom, periodTo]
   )
+  // Category picker (client request, 2026-10-06) — narrows the whole
+  // report (cards, tables, export, print) to one category; 'all' prints
+  // every category grouped with its own subtotal.
+  const [expenseCategory, setExpenseCategory] = useState('all')
+  const expenseCategoryOptions = useMemo(() => {
+    const categories = new Set(periodExpenses.map((row) => row.category))
+    if (expenseCategory !== 'all') categories.add(expenseCategory)
+    return Array.from(categories).sort((a, b) => a.localeCompare(b))
+  }, [periodExpenses, expenseCategory])
+  const filteredExpenses = useMemo(
+    () => (expenseCategory === 'all' ? periodExpenses : periodExpenses.filter((row) => row.category === expenseCategory)),
+    [periodExpenses, expenseCategory]
+  )
+  const expenseReportTitle = `Expense Report — ${expenseCategory === 'all' ? '' : `${expenseCategory} — `}${periodLabel}`
   const expenseTotal = useMemo(() => filteredExpenses.reduce((sum, row) => sum + row.amount, 0), [filteredExpenses])
 
   type ExpenseCategorySummaryRow = { category: string; expenseAmount: number; cashAmount: number; total: number }
@@ -276,7 +353,10 @@ export function ReportsHubScreen() {
 
   const expenseHeaders = ['Date', 'Category', 'Source', 'Amount', 'Note']
   const expenseRows = useMemo(
-    () => filteredExpenses.map((row) => [formatDate(row.date), row.category, row.source, row.amount, row.note ?? '']),
+    () =>
+      [...filteredExpenses]
+        .sort((a, b) => a.category.localeCompare(b.category) || a.date.localeCompare(b.date))
+        .map((row) => [formatDate(row.date), row.category, row.source, row.amount, row.note ?? '']),
     [filteredExpenses]
   )
 
@@ -526,23 +606,31 @@ export function ReportsHubScreen() {
                   description="Every recorded expense plus Cash Maintenance's own cash-out categories (Product Purchase, Packaging, etc.) — sector-wise summary and full detail together, no filter needed."
                 />
                 <div className="flex flex-wrap items-center gap-3">
-                  <ExportMenu filenameBase={`expense-report-${periodFrom || 'all'}`} title={`Expense Report — ${periodLabel}`} headers={expenseHeaders} rows={expenseRows} />
+                  <Select value={expenseCategory} onValueChange={setExpenseCategory}>
+                    <SelectTrigger className="h-9 w-full sm:w-48" aria-label="Category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All categories</SelectItem>
+                      {expenseCategoryOptions.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {category}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <ExportMenu
+                    filenameBase={`expense-report-${expenseCategory === 'all' ? '' : `${expenseCategory}-`}${periodFrom || 'all'}`}
+                    title={expenseReportTitle}
+                    headers={expenseHeaders}
+                    rows={expenseRows}
+                  />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     disabled={expenseRows.length === 0}
-                    onClick={() =>
-                      openPrintWindow(
-                        buildGenericReportHtml(`Expense Report — ${periodLabel}`, expenseHeaders, expenseRows, [
-                          `Total (${filteredExpenses.length} entries)`,
-                          '',
-                          '',
-                          expenseTotal.toFixed(2),
-                          '',
-                        ])
-                      )
-                    }
+                    onClick={() => openPrintWindow(buildExpenseByCategoryHtml(expenseReportTitle, filteredExpenses))}
                   >
                     Print
                   </Button>
