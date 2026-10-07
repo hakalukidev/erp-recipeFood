@@ -421,6 +421,18 @@ export type FundCashFlowCategoryRow = { category: string; expenseAmount: number;
 export type FundCashFlowVendorRow = { vendorId: string; vendorName: string; purchaseCount: number; totalAmount: number; paid: number; due: number }
 export type FundCashFlowItemRow = { materialId: string; materialName: string; category: string; unit: string; qty: number; totalAmount: number }
 export type FundCashFlowProductRow = { productId: string; productName: string; qty: number; totalAmount: number }
+// One day (YYYY-MM-DD) or month (YYYY-MM) of the period — `balance` is the
+// running fund balance at the end of it (opening + every row up to it).
+export type FundCashFlowPeriodRow = {
+  key: string
+  sales: number
+  loans: number
+  other: number
+  inflow: number
+  outflow: number
+  net: number
+  balance: number
+}
 
 // ---- Fund / Cash Flow Report (client request, 2026-09-14) ----------------
 // "আয়ের দিক... ব্যয়ের দিক... ডান-বাম... এক জায়গায় দেখতে পাওয়া" — a single
@@ -539,6 +551,44 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
 
   const closingBalance = openingBalance + inflow.total - outflowTotal
 
+  // ---- Date-wise / month-wise cash flow (client request, 2026-10-07) -----
+  // Same rows as inflow/outflow above, bucketed by day, oldest first, with
+  // a running balance; monthly rolls the days up.
+  const dayMap = new Map<string, FundCashFlowPeriodRow>()
+  const dayRow = (date: string) => {
+    const key = date.slice(0, 10)
+    const row = dayMap.get(key) ?? { key, sales: 0, loans: 0, other: 0, inflow: 0, outflow: 0, net: 0, balance: 0 }
+    dayMap.set(key, row)
+    return row
+  }
+  salesCashRows.concat(legacyCashRows).filter((row) => dateInRange(row.date, from, to)).forEach((row) => (dayRow(row.date).sales += row.amount))
+  loanWithdrawalRows.filter((entry) => dateInRange(entry.date, from, to)).forEach((entry) => (dayRow(entry.date).loans += entry.amount))
+  cashInEntries.filter((entry) => dateInRange(entry.date, from, to)).forEach((entry) => (dayRow(entry.date).other += entry.amount))
+  expenses.filter((expense) => dateInRange(expense.date, from, to)).forEach((expense) => (dayRow(expense.date).outflow += expense.amount))
+  cashEntries.filter((entry) => dateInRange(entry.date, from, to)).forEach((entry) => (dayRow(entry.date).outflow += entry.amount))
+  function withRunningBalance(rows: FundCashFlowPeriodRow[]) {
+    let running = openingBalance
+    return rows
+      .sort((left, right) => left.key.localeCompare(right.key))
+      .map((row) => {
+        const inflowAmount = row.sales + row.loans + row.other
+        running += inflowAmount - row.outflow
+        return { ...row, inflow: inflowAmount, net: inflowAmount - row.outflow, balance: running }
+      })
+  }
+  const dailyFlow = withRunningBalance(Array.from(dayMap.values()))
+  const monthMap = new Map<string, FundCashFlowPeriodRow>()
+  dailyFlow.forEach((day) => {
+    const key = day.key.slice(0, 7)
+    const row = monthMap.get(key) ?? { key, sales: 0, loans: 0, other: 0, inflow: 0, outflow: 0, net: 0, balance: 0 }
+    row.sales += day.sales
+    row.loans += day.loans
+    row.other += day.other
+    row.outflow += day.outflow
+    monthMap.set(key, row)
+  })
+  const monthlyFlow = withRunningBalance(Array.from(monthMap.values()))
+
   // ---- Product returns (deducted from earning, Section 4 of the spec) ----
   const returnsInRange = productReturns.filter((item) => dateInRange(item.date, from, to))
   const totalReturnsDeducted = returnsInRange.reduce((sum, item) => sum + item.companyProfit, 0)
@@ -616,6 +666,8 @@ export function buildFundCashFlowReport(data: ERPData | null, from: string, to: 
     inflow,
     outflow: { byCategory: outflowByCategory, total: outflowTotal },
     closingBalance,
+    dailyFlow,
+    monthlyFlow,
     productReturns: { count: returnsInRange.length, totalReturnedValue, totalDeducted: totalReturnsDeducted },
     profitLoss: { totalEarning, totalExpense: expenseInRange, netProfit },
     vendorWise,

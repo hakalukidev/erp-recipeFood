@@ -19,7 +19,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import type { PurchaseMaterialUnit, VendorPaymentRecord } from '@/lib/erp/types'
+import type { PurchaseItem, PurchaseMaterialUnit, VendorPaymentRecord } from '@/lib/erp/types'
 import { dhakaTodayIso, computeVendorDue, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -178,8 +178,19 @@ function formatQty(value: number) {
 
 const UNIT_LABEL: Record<PurchaseMaterialUnit, string> = { kg: 'Kg', pcs: 'Pcs' }
 
+// How a ledger row moved the due — drives the Transaction summary.
+type LedgerKind = 'purchase' | 'paidAtPurchase' | 'paymentAgainstPurchase' | 'paymentAgainstDue'
+
+const LEDGER_KIND_LABEL: Record<LedgerKind, string> = {
+  purchase: 'Purchase',
+  paidAtPurchase: 'Payment — paid with purchase',
+  paymentAgainstPurchase: 'Payment — against a purchase',
+  paymentAgainstDue: 'Payment — against total due',
+}
+
 type LedgerRow = {
   key: string
+  kind: LedgerKind
   date: string
   createdAt: string
   transaction: string
@@ -187,6 +198,8 @@ type LedgerRow = {
   details: string[]
   purchase: number
   payment: number
+  // Purchase lines, for the item-wise export / print
+  items?: PurchaseItem[]
   // Only vendor-level payments are editable from the ledger — per-purchase
   // payments are edited from that purchase's Payment history.
   accountPayment?: VendorPaymentRecord
@@ -236,6 +249,7 @@ export function VendorLedgerDialog({
     vendorPurchases.forEach((purchase) => {
       list.push({
         key: purchase.id,
+        kind: 'purchase',
         date: purchase.date,
         createdAt: purchase.createdAt,
         transaction: `Purchase ${purchase.purchaseNumber}${purchase.updatedAt ? ` (edited ${formatDate(purchase.updatedAt)})` : ''}`,
@@ -244,6 +258,7 @@ export function VendorLedgerDialog({
         ),
         purchase: purchase.totalAmount,
         payment: 0,
+        items: purchase.items,
       })
       const separatePayments = toArray(data?.vendorPayments)
         .filter((payment) => payment.purchaseId === purchase.id)
@@ -252,6 +267,7 @@ export function VendorLedgerDialog({
       if (paidAtPurchase !== 0) {
         list.push({
           key: `${purchase.id}-paid`,
+          kind: 'paidAtPurchase',
           date: purchase.date,
           createdAt: purchase.createdAt,
           transaction: 'Payment',
@@ -266,6 +282,7 @@ export function VendorLedgerDialog({
       .forEach((payment) => {
         list.push({
           key: payment.id,
+          kind: payment.purchaseId ? 'paymentAgainstPurchase' : 'paymentAgainstDue',
           date: payment.date,
           createdAt: payment.createdAt,
           transaction: `Payment ${payment.receiptNumber}`,
@@ -311,27 +328,104 @@ export function VendorLedgerDialog({
       )
     const products = Array.from(productMap.values()).sort((left, right) => right.amount - left.amount)
 
-    return { previousDue, rows, totalPurchase, totalPayment, currentDue: previousDue + totalPurchase - totalPayment, products }
+    // Transaction summary (2026-10-07 client request): count + amount per
+    // kind of transaction in the period.
+    const kinds = Object.keys(LEDGER_KIND_LABEL) as LedgerKind[]
+    const byKind = kinds.map((kind) => {
+      const matching = inRange.filter((row) => row.kind === kind)
+      return {
+        kind,
+        label: LEDGER_KIND_LABEL[kind],
+        count: matching.length,
+        amount: matching.reduce((sum, row) => sum + row.purchase + row.payment, 0),
+      }
+    })
+
+    // Date-wise summary: one line per day with that day's closing due.
+    const dateMap = new Map<string, { date: string; count: number; purchase: number; payment: number; balance: number }>()
+    rows.forEach((row) => {
+      const existing = dateMap.get(row.date)
+      if (existing) {
+        existing.count += 1
+        existing.purchase += row.purchase
+        existing.payment += row.payment
+        existing.balance = row.balance
+      } else {
+        dateMap.set(row.date, { date: row.date, count: 1, purchase: row.purchase, payment: row.payment, balance: row.balance })
+      }
+    })
+    const byDate = Array.from(dateMap.values())
+
+    return {
+      previousDue,
+      rows,
+      totalPurchase,
+      totalPayment,
+      currentDue: previousDue + totalPurchase - totalPayment,
+      products,
+      byKind,
+      byDate,
+    }
   }, [allRows, vendorPurchases, vendor?.openingDue, fromDate, toDate])
 
   const previousLabel = fromDate ? `Previous due (before ${formatDate(fromDate)})` : 'Previous due (opening)'
 
-  const exportHeaders = ['Date', 'Transaction', 'Details', 'Purchase', 'Payment', 'Due']
-  const exportRows = useMemo(
-    () => [
-      ['Previous', previousLabel, '', '', '', statement.previousDue.toFixed(2)],
-      ...statement.rows.map((row) => [
+  // Export: item-wise detail under each purchase, then the Transaction,
+  // Date-wise and Product-wise summaries in the same sheet.
+  const exportHeaders = ['Date', 'Transaction', 'Item / Details', 'Qty', 'Rate', 'Item amount', 'Purchase', 'Payment', 'Due']
+  const exportRows = useMemo(() => {
+    const blank = ['', '', '', '', '', '', '', '', '']
+    const rows: string[][] = [['Previous', previousLabel, '', '', '', '', '', '', statement.previousDue.toFixed(2)]]
+    statement.rows.forEach((row) => {
+      const items = row.items ?? []
+      rows.push([
         formatDate(row.date),
         row.transaction,
-        row.details.join('; '),
+        items.length ? '' : row.details.join('; '),
+        '',
+        '',
+        '',
         row.purchase ? row.purchase.toFixed(2) : '',
         row.payment ? row.payment.toFixed(2) : '',
         row.balance.toFixed(2),
-      ]),
-      ['', 'Total', '', statement.totalPurchase.toFixed(2), statement.totalPayment.toFixed(2), statement.currentDue.toFixed(2)],
-    ],
-    [statement, previousLabel]
-  )
+      ])
+      items.forEach((item) => {
+        rows.push(['', '', item.materialName, `${formatQty(item.qty)} ${UNIT_LABEL[item.unit]}`, item.rate.toFixed(2), item.amount.toFixed(2), '', '', ''])
+      })
+    })
+    rows.push(['', 'Total', '', '', '', '', statement.totalPurchase.toFixed(2), statement.totalPayment.toFixed(2), statement.currentDue.toFixed(2)])
+
+    rows.push(blank, ['', 'TRANSACTION SUMMARY', 'Type', 'Count', '', '', 'Amount', '', ''])
+    rows.push(['', '', 'Previous due', '', '', '', statement.previousDue.toFixed(2), '', ''])
+    statement.byKind.forEach((entry) => {
+      rows.push(['', '', entry.label, String(entry.count), '', '', entry.amount.toFixed(2), '', ''])
+    })
+    rows.push(['', '', 'Total payment', '', '', '', statement.totalPayment.toFixed(2), '', ''])
+    rows.push(['', '', 'Current due', '', '', '', statement.currentDue.toFixed(2), '', ''])
+
+    rows.push(blank, ['', 'DATE-WISE SUMMARY', '', 'Transactions', '', '', 'Purchase', 'Payment', 'Due'])
+    statement.byDate.forEach((day) => {
+      rows.push([formatDate(day.date), '', '', String(day.count), '', '', day.purchase.toFixed(2), day.payment.toFixed(2), day.balance.toFixed(2)])
+    })
+
+    if (statement.products.length) {
+      rows.push(blank, ['', 'PRODUCT-WISE SUMMARY', 'Product', 'Qty', 'Avg. rate', '', 'Amount', '', ''])
+      statement.products.forEach((product) => {
+        rows.push([
+          '',
+          '',
+          product.name,
+          `${formatQty(product.qty)} ${UNIT_LABEL[product.unit]}`,
+          product.qty ? (product.amount / product.qty).toFixed(2) : '',
+          '',
+          product.amount.toFixed(2),
+          '',
+          '',
+        ])
+      })
+    }
+    return rows
+  }, [statement, previousLabel])
 
   function handlePrint() {
     if (!vendor) return
@@ -342,7 +436,16 @@ export function VendorLedgerDialog({
         (row) => `
         <tr>
           <td>${escapeHtml(formatDate(row.date))}</td>
-          <td>${escapeHtml(row.transaction)}<div class="muted">${row.details.map(escapeHtml).join('<br/>')}</div></td>
+          <td>${escapeHtml(row.transaction)}${
+            row.items?.length
+              ? `<table class="items">${row.items
+                  .map(
+                    (item) =>
+                      `<tr><td>${escapeHtml(item.materialName)}</td><td class="numeric">${formatQty(item.qty)} ${UNIT_LABEL[item.unit]}</td><td class="numeric">@ ${formatAmount(item.rate)}</td><td class="numeric">${formatAmount(item.amount)}</td></tr>`
+                  )
+                  .join('')}</table>`
+              : `<div class="muted">${row.details.map(escapeHtml).join('<br/>')}</div>`
+          }</td>
           <td class="numeric">${row.purchase ? formatAmount(row.purchase) : '—'}</td>
           <td class="numeric">${row.payment ? formatAmount(row.payment) : '—'}</td>
           <td class="numeric">${formatAmount(row.balance)}</td>
@@ -357,6 +460,24 @@ export function VendorLedgerDialog({
           <td>${escapeHtml(product.name)}</td>
           <td class="numeric">${formatQty(product.qty)} ${UNIT_LABEL[product.unit]}</td>
           <td class="numeric">${formatAmount(product.amount)}</td>
+        </tr>`
+      )
+      .join('')
+    const kindRows = statement.byKind
+      .map(
+        (entry) => `
+        <tr><td>${escapeHtml(entry.label)}</td><td class="numeric">${entry.count}</td><td class="numeric">${formatAmount(entry.amount)}</td></tr>`
+      )
+      .join('')
+    const dateRows = statement.byDate
+      .map(
+        (day) => `
+        <tr>
+          <td>${escapeHtml(formatDate(day.date))}</td>
+          <td class="numeric">${day.count}</td>
+          <td class="numeric">${day.purchase ? formatAmount(day.purchase) : '—'}</td>
+          <td class="numeric">${day.payment ? formatAmount(day.payment) : '—'}</td>
+          <td class="numeric">${formatAmount(day.balance)}</td>
         </tr>`
       )
       .join('')
@@ -382,6 +503,8 @@ export function VendorLedgerDialog({
       .muted { color: #6b7280; font-size: 11.5px; }
       tr.totals td { font-weight: 700; border-top: 2px solid #111827; }
       .section-heading { font-size: 13px; font-weight: 700; margin: 16px 0 6px; }
+      table.items { border-collapse: collapse; margin-top: 3px; width: 100%; }
+      table.items td { border: none; border-top: 1px dotted #e5e7eb; padding: 2px 4px; font-size: 11px; color: #4b5563; }
       .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
     </style>
   </head>
@@ -408,6 +531,26 @@ export function VendorLedgerDialog({
       </tbody>
       <tr class="totals"><td colspan="2">Total</td><td class="numeric">${formatAmount(statement.totalPurchase)}</td><td class="numeric">${formatAmount(statement.totalPayment)}</td><td class="numeric">${formatAmount(statement.currentDue)}</td></tr>
     </table>
+    <p class="section-heading">Transaction Summary</p>
+    <table class="doc">
+      <thead><tr><th>Type</th><th>Count</th><th>Amount</th></tr></thead>
+      <tbody>
+        <tr><td>Previous due</td><td class="numeric">—</td><td class="numeric">${formatAmount(statement.previousDue)}</td></tr>
+        ${kindRows}
+        <tr><td>Total payment</td><td class="numeric">—</td><td class="numeric">${formatAmount(statement.totalPayment)}</td></tr>
+      </tbody>
+      <tr class="totals"><td colspan="2">Current due</td><td class="numeric">${formatAmount(statement.currentDue)}</td></tr>
+    </table>
+    ${
+      statement.byDate.length
+        ? `<p class="section-heading">Date-wise Summary</p>
+    <table class="doc">
+      <thead><tr><th>Date</th><th>Transactions</th><th>Purchase</th><th>Payment</th><th>Due</th></tr></thead>
+      <tbody>${dateRows}</tbody>
+      <tr class="totals"><td colspan="2">Total</td><td class="numeric">${formatAmount(statement.totalPurchase)}</td><td class="numeric">${formatAmount(statement.totalPayment)}</td><td class="numeric">${formatAmount(statement.currentDue)}</td></tr>
+    </table>`
+        : ''
+    }
     ${
       statement.products.length
         ? `<p class="section-heading">Product-wise Purchase</p>
@@ -591,6 +734,87 @@ export function VendorLedgerDialog({
                 </TableRow>
               </TableBody>
             </Table>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Transaction summary</p>
+              <div className="overflow-x-auto rounded-2xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Count</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell>Previous due</TableCell>
+                      <TableCell className="text-right text-muted-foreground">—</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(statement.previousDue)}</TableCell>
+                    </TableRow>
+                    {statement.byKind.map((entry) => (
+                      <TableRow key={entry.kind}>
+                        <TableCell>{entry.label}</TableCell>
+                        <TableCell className="text-right tabular-nums">{entry.count}</TableCell>
+                        <TableCell className={cn('text-right tabular-nums', entry.kind !== 'purchase' && 'text-emerald-600')}>
+                          {formatAmount(entry.amount)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow>
+                      <TableCell>Total payment</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {statement.byKind.filter((entry) => entry.kind !== 'purchase').reduce((sum, entry) => sum + entry.count, 0)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-emerald-600">{formatAmount(statement.totalPayment)}</TableCell>
+                    </TableRow>
+                    <TableRow className="bg-muted/40 font-semibold hover:bg-muted/40">
+                      <TableCell colSpan={2}>Current due</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(statement.currentDue)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Date-wise summary</p>
+              <div className="max-h-80 overflow-auto rounded-2xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Txns</TableHead>
+                      <TableHead className="text-right">Purchase</TableHead>
+                      <TableHead className="text-right">Payment</TableHead>
+                      <TableHead className="text-right">Due</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {statement.byDate.map((day) => (
+                      <TableRow key={day.date}>
+                        <TableCell className="whitespace-nowrap">{formatDate(day.date)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{day.count}</TableCell>
+                        <TableCell className="text-right tabular-nums">{day.purchase ? formatAmount(day.purchase) : '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums text-emerald-600">
+                          {day.payment ? formatAmount(day.payment) : '—'}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatAmount(day.balance)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {statement.byDate.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="h-16 text-center text-muted-foreground">
+                          No transactions in this period.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-2">

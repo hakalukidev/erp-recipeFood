@@ -1,11 +1,12 @@
 "use client"
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { ArrowDownCircle, ArrowUpCircle, Landmark, PiggyBank, Printer, Undo2 } from 'lucide-react'
 
 import { ExportMenu } from './ExportMenu'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   COMPANY_ADDRESS,
@@ -15,7 +16,7 @@ import {
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
-import { buildFundCashFlowReport, expenseCategoryLabel, formatCurrency } from '@/lib/erp/utils'
+import { buildFundCashFlowReport, expenseCategoryLabel, formatCurrency, formatDate, type FundCashFlowPeriodRow } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -33,6 +34,20 @@ function openPrintWindow(html: string) {
   printWindow.document.close()
 }
 
+type FlowView = 'daily' | 'monthly'
+type FlowOrder = 'desc' | 'asc'
+
+function flowPeriodLabel(key: string, view: FlowView) {
+  return view === 'monthly'
+    ? new Date(`${key}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+    : formatDate(key)
+}
+
+function orderedFlowRows(report: ReturnType<typeof buildFundCashFlowReport>, view: FlowView, order: FlowOrder): FundCashFlowPeriodRow[] {
+  const rows = view === 'monthly' ? report.monthlyFlow : report.dailyFlow
+  return order === 'asc' ? rows : [...rows].reverse()
+}
+
 function netToneClass(value: number) {
   return value >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
 }
@@ -43,7 +58,9 @@ function netToneClass(value: number) {
 function buildFundReportHtml(
   periodLabel: string,
   report: ReturnType<typeof buildFundCashFlowReport>,
-  currency: string | undefined
+  currency: string | undefined,
+  flowView: FlowView,
+  flowOrder: FlowOrder
 ) {
   const row = (label: string, value: string, strong = false) => `
     <tr${strong ? ' class="totals"' : ''}><td>${escapeHtml(label)}</td><td class="numeric">${escapeHtml(value)}</td></tr>
@@ -57,6 +74,20 @@ function buildFundReportHtml(
         <td class="numeric">${item.expenseAmount > 0 ? formatCurrency(item.expenseAmount, currency) : '-'}</td>
         <td class="numeric">${item.cashAmount > 0 ? formatCurrency(item.cashAmount, currency) : '-'}</td>
         <td class="numeric">${formatCurrency(item.total, currency)}</td>
+      </tr>
+    `
+    )
+    .join('')
+
+  const flowRows = orderedFlowRows(report, flowView, flowOrder)
+    .map(
+      (item) => `
+      <tr>
+        <td>${escapeHtml(flowPeriodLabel(item.key, flowView))}</td>
+        <td class="numeric">${formatCurrency(item.inflow, currency)}</td>
+        <td class="numeric">${formatCurrency(item.outflow, currency)}</td>
+        <td class="numeric">${formatCurrency(item.net, currency)}</td>
+        <td class="numeric">${formatCurrency(item.balance, currency)}</td>
       </tr>
     `
     )
@@ -140,6 +171,12 @@ function buildFundReportHtml(
           </tbody>
         </table>
 
+        <h2>${flowView === 'monthly' ? 'Month-wise' : 'Date-wise'} cash flow</h2>
+        <table class="doc">
+          <thead><tr><th>${flowView === 'monthly' ? 'Month' : 'Date'}</th><th>Inflow</th><th>Outflow</th><th>Net</th><th>Balance</th></tr></thead>
+          <tbody>${flowRows || '<tr><td colspan="5" style="text-align:center;color:#6b7280;">No cash movement for this range.</td></tr>'}</tbody>
+        </table>
+
         <h2>Inflow breakdown</h2>
         <table class="doc">
           <tbody>
@@ -220,6 +257,22 @@ export function FundCashFlowReport({ from, to, periodLabel }: { from: string; to
 
   const report = useMemo(() => buildFundCashFlowReport(data, from, to), [data, from, to])
 
+  // Date-wise / month-wise cash flow (client request, 2026-10-07).
+  const [flowView, setFlowView] = useState<FlowView>('daily')
+  const [flowOrder, setFlowOrder] = useState<FlowOrder>('desc')
+  const flowRows = useMemo(() => orderedFlowRows(report, flowView, flowOrder), [report, flowView, flowOrder])
+  const flowHeaders = [flowView === 'monthly' ? 'Month' : 'Date', 'Sales collection', 'Loan withdrawal', 'Other cash in', 'Total inflow', 'Outflow', 'Net', 'Balance']
+  const flowExportRows = flowRows.map((row) => [
+    flowPeriodLabel(row.key, flowView),
+    row.sales,
+    row.loans,
+    row.other,
+    row.inflow,
+    row.outflow,
+    row.net,
+    row.balance,
+  ])
+
   const categoryHeaders = ['Category', 'Expense', 'Cash Maintenance', 'Total']
   const categoryRows = report.outflow.byCategory.map((row) => [expenseCategoryLabel(data, row.category), row.expenseAmount, row.cashAmount, row.total])
 
@@ -250,7 +303,7 @@ export function FundCashFlowReport({ from, to, periodLabel }: { from: string; to
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => openPrintWindow(buildFundReportHtml(periodLabel, report, currency))}
+              onClick={() => openPrintWindow(buildFundReportHtml(periodLabel, report, currency, flowView, flowOrder))}
             >
               <Printer className="mr-2 h-4 w-4" />
               Print full report
@@ -285,6 +338,96 @@ export function FundCashFlowReport({ from, to, periodLabel }: { from: string; to
                 {formatCurrency(report.closingBalance, currency)}
               </p>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/70 shadow-sm">
+        <CardHeader className="gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <CardTitle className="text-base">{flowView === 'monthly' ? 'Month-wise' : 'Date-wise'} cash flow</CardTitle>
+            <CardDescription>
+              Inflow and outflow for every {flowView === 'monthly' ? 'month' : 'day'} with cash movement in {periodLabel}, and the fund
+              balance at the end of it.
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={flowView} onValueChange={(value) => setFlowView(value as FlowView)}>
+              <SelectTrigger className="h-9 w-36" aria-label="Group by">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="daily">Date-wise</SelectItem>
+                <SelectItem value="monthly">Month-wise</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={flowOrder} onValueChange={(value) => setFlowOrder(value as FlowOrder)}>
+              <SelectTrigger className="h-9 w-40" aria-label="Sort order">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Newest first</SelectItem>
+                <SelectItem value="asc">Oldest first</SelectItem>
+              </SelectContent>
+            </Select>
+            <ExportMenu
+              filenameBase={`fund-${flowView === 'monthly' ? 'month' : 'date'}-wise`}
+              title={`${flowView === 'monthly' ? 'Month-wise' : 'Date-wise'} cash flow — ${periodLabel}`}
+              headers={flowHeaders}
+              rows={flowExportRows}
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="max-h-[28rem] overflow-auto rounded-2xl border border-border/70">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableHead>{flowView === 'monthly' ? 'Month' : 'Date'}</TableHead>
+                  <TableHead className="text-right">Sales collection</TableHead>
+                  <TableHead className="text-right">Loan withdrawal</TableHead>
+                  <TableHead className="text-right">Other cash in</TableHead>
+                  <TableHead className="text-right">Total inflow</TableHead>
+                  <TableHead className="text-right">Outflow</TableHead>
+                  <TableHead className="text-right">Net</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {flowRows.map((row) => (
+                  <TableRow key={row.key}>
+                    <TableCell className="whitespace-nowrap font-medium">{flowPeriodLabel(row.key, flowView)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{row.sales ? formatCurrency(row.sales, currency) : '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{row.loans ? formatCurrency(row.loans, currency) : '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{row.other ? formatCurrency(row.other, currency) : '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums text-emerald-600 dark:text-emerald-400">{formatCurrency(row.inflow, currency)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-destructive">{formatCurrency(row.outflow, currency)}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${netToneClass(row.net)}`}>{formatCurrency(row.net, currency)}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(row.balance, currency)}</TableCell>
+                  </TableRow>
+                ))}
+                {flowRows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="h-20 text-center text-muted-foreground">
+                      No cash movement for this range.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  <TableRow className="bg-muted/30 font-semibold">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.sales + report.inflow.legacy, currency)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.loans, currency)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.other, currency)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.inflow.total, currency)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.outflow.total, currency)}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${netToneClass(report.inflow.total - report.outflow.total)}`}>
+                      {formatCurrency(report.inflow.total - report.outflow.total, currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(report.closingBalance, currency)}</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </div>
         </CardContent>
       </Card>

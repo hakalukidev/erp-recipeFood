@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { CalendarDays, CheckCircle2, ExternalLink, History, PencilLine, Search, ShieldCheck, XCircle } from 'lucide-react'
+import { ArrowDown, ArrowUp, CalendarDays, CheckCircle2, ExternalLink, History, PencilLine, Search, ShieldCheck, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ApprovalStatusBadge } from '@/components/admin/ApprovalStatusBadge'
@@ -47,6 +47,28 @@ type QueueRow = Omit<ApprovalQueueItem, 'collection'> & {
 
 type StatusFilter = RecordApprovalStatus | 'all'
 
+// Date-wise sorting (2026-10-07 client request): by the entry's own date or
+// by when it was submitted, newest or oldest first.
+type SortOrder = 'date-desc' | 'date-asc' | 'submitted-desc' | 'submitted-asc'
+
+const SORT_OPTIONS: Array<{ value: SortOrder; label: string }> = [
+  { value: 'date-desc', label: 'Date: newest first' },
+  { value: 'date-asc', label: 'Date: oldest first' },
+  { value: 'submitted-desc', label: 'Submitted: newest first' },
+  { value: 'submitted-asc', label: 'Submitted: oldest first' },
+]
+
+function compareRows(left: QueueRow, right: QueueRow, order: SortOrder) {
+  const direction = order.endsWith('-asc') ? 1 : -1
+  if (order === 'date-desc' || order === 'date-asc') {
+    const leftDay = (left.date || left.submittedAt).slice(0, 10)
+    const rightDay = (right.date || right.submittedAt).slice(0, 10)
+    const result = leftDay.localeCompare(rightDay)
+    if (result !== 0) return result * direction
+  }
+  return left.submittedAt.localeCompare(right.submittedAt) * direction
+}
+
 const STATUS_TABS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
@@ -64,6 +86,7 @@ export default function ApprovalsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending')
   const [departmentFilter, setDepartmentFilter] = useState<ApprovalDepartment | 'all'>('all')
   const [query, setQuery] = useState('')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('date-desc')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   // Status change that needs a confirm dialog: any rejection (reason
@@ -74,15 +97,20 @@ export default function ApprovalsPage() {
 
   // Period filter (2026-10-04 client request) on the entry's own date.
   // Defaults to All time so an old pending entry is never hidden.
-  const [periodMode, setPeriodMode] = useState<'all' | 'monthly' | 'daily'>('all')
+  // Custom range added 2026-10-07 (client request).
+  const [periodMode, setPeriodMode] = useState<'all' | 'monthly' | 'daily' | 'range'>('all')
   const [periodMonth, setPeriodMonth] = useState(() => dhakaTodayIso().slice(0, 7))
   const [periodDay, setPeriodDay] = useState(() => dhakaTodayIso())
+  const [rangeFrom, setRangeFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [rangeTo, setRangeTo] = useState(() => dhakaTodayIso())
   const periodLabel =
     periodMode === 'monthly' && periodMonth
       ? new Date(`${periodMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
       : periodMode === 'daily' && periodDay
         ? formatDate(periodDay)
-        : 'All time'
+        : periodMode === 'range' && (rangeFrom || rangeTo)
+          ? `${rangeFrom ? formatDate(rangeFrom) : 'Start'} – ${rangeTo ? formatDate(rangeTo) : 'Today'}`
+          : 'All time'
 
   const allRows = useMemo<QueueRow[]>(() => {
     const rows: QueueRow[] = buildApprovalQueue(data)
@@ -128,9 +156,13 @@ export default function ApprovalsPage() {
         const day = (row.date || row.submittedAt).slice(0, 10)
         if (periodMode === 'monthly' && periodMonth) return day.slice(0, 7) === periodMonth
         if (periodMode === 'daily' && periodDay) return day === periodDay
+        if (periodMode === 'range') {
+          if (rangeFrom && day < rangeFrom) return false
+          if (rangeTo && day > rangeTo) return false
+        }
         return true
       }),
-    [allRows, currentUser?.id, hasPermission, periodMode, periodMonth, periodDay]
+    [allRows, currentUser?.id, hasPermission, periodMode, periodMonth, periodDay, rangeFrom, rangeTo]
   )
 
   const counts = useMemo(() => {
@@ -150,16 +182,18 @@ export default function ApprovalsPage() {
 
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return visibleRows.filter((row) => {
-      if (statusFilter !== 'all' && row.status !== statusFilter) return false
-      if (departmentFilter !== 'all' && row.department !== departmentFilter) return false
-      if (!needle) return true
-      return [row.label, row.reference, row.party, row.detail, row.submittedByName]
-        .join(' ')
-        .toLowerCase()
-        .includes(needle)
-    })
-  }, [departmentFilter, query, statusFilter, visibleRows])
+    return visibleRows
+      .filter((row) => {
+        if (statusFilter !== 'all' && row.status !== statusFilter) return false
+        if (departmentFilter !== 'all' && row.department !== departmentFilter) return false
+        if (!needle) return true
+        return [row.label, row.reference, row.party, row.detail, row.submittedByName]
+          .join(' ')
+          .toLowerCase()
+          .includes(needle)
+      })
+      .sort((left, right) => compareRows(left, right, sortOrder))
+  }, [departmentFilter, query, sortOrder, statusFilter, visibleRows])
 
   const isApprover = useMemo(() => allRows.some((row) => hasPermission(row.permission)), [allRows, hasPermission])
 
@@ -215,8 +249,9 @@ export default function ApprovalsPage() {
 
   const STATUS_LABEL: Record<RecordApprovalStatus, string> = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }
 
-  const exportHeaders = ['Submitted', 'Department', 'Type', 'Reference', 'Party', 'Amount', 'Entered by', 'Status', 'Authorized by', 'Note']
+  const exportHeaders = ['Date', 'Submitted', 'Department', 'Type', 'Reference', 'Party', 'Amount', 'Entered by', 'Status', 'Authorized by', 'Note']
   const exportRows = filteredRows.map((row) => [
+    formatDate(row.date),
     formatDateTime(row.submittedAt),
     DEPARTMENT_LABELS[row.department],
     row.label,
@@ -246,6 +281,7 @@ export default function ApprovalsPage() {
                   <SelectItem value="all">All time</SelectItem>
                   <SelectItem value="monthly">Monthly</SelectItem>
                   <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="range">Custom range</SelectItem>
                 </SelectContent>
               </Select>
               {periodMode === 'monthly' ? (
@@ -253,6 +289,27 @@ export default function ApprovalsPage() {
               ) : null}
               {periodMode === 'daily' ? (
                 <Input className="w-full sm:w-44" type="date" value={periodDay} onChange={(event) => setPeriodDay(event.target.value)} aria-label="Day" />
+              ) : null}
+              {periodMode === 'range' ? (
+                <>
+                  <Input
+                    className="w-full sm:w-44"
+                    type="date"
+                    value={rangeFrom}
+                    max={rangeTo || undefined}
+                    onChange={(event) => setRangeFrom(event.target.value)}
+                    aria-label="From date"
+                  />
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <Input
+                    className="w-full sm:w-44"
+                    type="date"
+                    value={rangeTo}
+                    min={rangeFrom || undefined}
+                    onChange={(event) => setRangeTo(event.target.value)}
+                    aria-label="To date"
+                  />
+                </>
               ) : null}
             </div>
           </CardContent>
@@ -313,7 +370,7 @@ export default function ApprovalsPage() {
               ))}
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_220px]">
+            <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_220px_220px]">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -336,6 +393,18 @@ export default function ApprovalsPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={sortOrder} onValueChange={(value) => setSortOrder(value as SortOrder)}>
+                <SelectTrigger aria-label="Sort order">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SORT_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </CardHeader>
 
@@ -344,7 +413,18 @@ export default function ApprovalsPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead>Date</TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        onClick={() => setSortOrder(sortOrder === 'date-desc' ? 'date-asc' : 'date-desc')}
+                        aria-label="Sort by date"
+                      >
+                        Date
+                        {sortOrder === 'date-asc' ? <ArrowUp className="h-3.5 w-3.5" /> : null}
+                        {sortOrder === 'date-desc' ? <ArrowDown className="h-3.5 w-3.5" /> : null}
+                      </button>
+                    </TableHead>
                     <TableHead>Department</TableHead>
                     <TableHead>Entry</TableHead>
                     <TableHead className="text-right">Amount</TableHead>

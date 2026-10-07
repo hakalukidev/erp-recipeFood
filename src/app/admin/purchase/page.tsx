@@ -427,9 +427,15 @@ export default function PurchasePage() {
 
   const [section, setSection] = useState<SectionId>('purchases')
   const [query, setQuery] = useState('')
-  // Purchase list + summary cards default to the current month; clearing
-  // the month input shows every month (all-time totals).
+  // Purchase list + summary cards default to the current month. Period
+  // modes (2026-10-07 client request): all time, a month, a day or a custom
+  // From/To range — "All time" shows all-time totals.
+  const [periodMode, setPeriodMode] = useState<'all' | 'monthly' | 'daily' | 'range'>('monthly')
   const [listMonth, setListMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [listDay, setListDay] = useState(() => dhakaTodayIso())
+  const [rangeFrom, setRangeFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [rangeTo, setRangeTo] = useState(() => dhakaTodayIso())
+  const [listSort, setListSort] = useState<'date-desc' | 'date-asc' | 'entered-desc' | 'entered-asc'>('date-desc')
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const vendorOptions: ComboboxOption[] = useMemo(
@@ -802,26 +808,53 @@ export default function PurchasePage() {
     return editingPurchase && editingPurchase.vendorId === purchaseVendorId ? total - editingPurchase.due : total
   }, [data, purchaseVendorId, editingPurchase])
 
+  // null = no period filter (All time, or an empty month/day input).
+  const inPeriod = useMemo<((date: string) => boolean) | null>(() => {
+    if (periodMode === 'monthly' && listMonth) return (date) => date.slice(0, 7) === listMonth
+    if (periodMode === 'daily' && listDay) return (date) => date.slice(0, 10) === listDay
+    if (periodMode === 'range' && (rangeFrom || rangeTo)) {
+      return (date) => {
+        const day = date.slice(0, 10)
+        return (!rangeFrom || day >= rangeFrom) && (!rangeTo || day <= rangeTo)
+      }
+    }
+    return null
+  }, [periodMode, listMonth, listDay, rangeFrom, rangeTo])
+
   const filteredPurchases = useMemo(() => {
     const normalized = query.trim().toLowerCase()
-    return purchases.filter(
-      (purchase) =>
-        (!listMonth || purchase.date.slice(0, 7) === listMonth) &&
-        (!normalized || [purchase.purchaseNumber, purchase.vendorName].join(' ').toLowerCase().includes(normalized))
-    )
-  }, [purchases, query, listMonth])
+    const direction = listSort.endsWith('-asc') ? 1 : -1
+    return purchases
+      .filter(
+        (purchase) =>
+          (!inPeriod || inPeriod(purchase.date)) &&
+          (!normalized || [purchase.purchaseNumber, purchase.vendorName].join(' ').toLowerCase().includes(normalized))
+      )
+      .sort((left, right) => {
+        if (listSort.startsWith('date')) {
+          const byDate = left.date.localeCompare(right.date)
+          if (byDate !== 0) return byDate * direction
+        }
+        return left.createdAt.localeCompare(right.createdAt) * direction
+      })
+  }, [purchases, query, inPeriod, listSort])
 
-  const monthLabel = listMonth
-    ? new Date(`${listMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
-    : 'All months'
+  const monthLabel = !inPeriod
+    ? 'All time'
+    : periodMode === 'monthly'
+      ? new Date(`${listMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+      : periodMode === 'daily'
+        ? formatDate(listDay)
+        : `${rangeFrom ? formatDate(rangeFrom) : 'Start'} – ${rangeTo ? formatDate(rangeTo) : 'Today'}`
 
-  // Selected month's figures (rejected entries excluded). "Deposited" is cash
-  // that actually went out that month: paid-at-purchase on that month's
-  // purchases plus every vendor payment (per-purchase or vendor-level) dated
-  // in the month — so a March purchase paid off in April counts in April.
+  // Selected period's figures (rejected entries excluded). "Deposited" is
+  // cash that actually went out in the period: paid-at-purchase on that
+  // period's purchases plus every vendor payment (per-purchase or
+  // vendor-level) dated in it — so a March purchase paid off in April counts
+  // in April.
   const monthPurchaseStats = useMemo(() => {
-    if (!listMonth) return null
-    const inMonth = (date: string) => date.slice(0, 7) === listMonth
+    if (!inPeriod) return null
+    const inMonth = inPeriod
     const monthPurchases = purchases.filter((purchase) => inMonth(purchase.date) && isCountedEntry(purchase))
     const paidAtPurchase = monthPurchases.reduce((sum, purchase) => {
       const laterPayments = (vendorPaymentsByPurchaseId.get(purchase.id) ?? []).reduce((total, payment) => total + payment.amount, 0)
@@ -837,7 +870,7 @@ export default function PurchasePage() {
       totalPaid: paidAtPurchase + paymentsInMonth,
       newDue: totalAmount - paidAtPurchase,
     }
-  }, [purchases, vendorPayments, vendorPaymentsByPurchaseId, listMonth])
+  }, [purchases, vendorPayments, vendorPaymentsByPurchaseId, inPeriod])
 
   const purchaseStats = useMemo(() => {
     const openingDueTotal = vendors.reduce((sum, vendor) => sum + (vendor.openingDue ?? 0), 0)
@@ -1220,15 +1253,69 @@ export default function PurchasePage() {
                     owed — stock on the Materials & Stock list updates automatically.
                   </CardDescription>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[auto_minmax(200px,1fr)_auto_auto]">
-                  <Input
-                    className="w-full sm:w-44"
-                    type="month"
-                    value={listMonth}
-                    onChange={(event) => setListMonth(event.target.value)}
-                    title="Clear to show all months"
-                  />
-                  <div className="relative">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Select value={periodMode} onValueChange={(value) => setPeriodMode(value as typeof periodMode)}>
+                    <SelectTrigger className="w-full sm:w-36" aria-label="Period">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="range">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {periodMode === 'monthly' ? (
+                    <Input
+                      className="w-full sm:w-44"
+                      type="month"
+                      value={listMonth}
+                      onChange={(event) => setListMonth(event.target.value)}
+                      aria-label="Month"
+                    />
+                  ) : null}
+                  {periodMode === 'daily' ? (
+                    <Input
+                      className="w-full sm:w-44"
+                      type="date"
+                      value={listDay}
+                      onChange={(event) => setListDay(event.target.value)}
+                      aria-label="Day"
+                    />
+                  ) : null}
+                  {periodMode === 'range' ? (
+                    <>
+                      <Input
+                        className="w-full sm:w-40"
+                        type="date"
+                        value={rangeFrom}
+                        max={rangeTo || undefined}
+                        onChange={(event) => setRangeFrom(event.target.value)}
+                        aria-label="From date"
+                      />
+                      <span className="text-sm text-muted-foreground">to</span>
+                      <Input
+                        className="w-full sm:w-40"
+                        type="date"
+                        value={rangeTo}
+                        min={rangeFrom || undefined}
+                        onChange={(event) => setRangeTo(event.target.value)}
+                        aria-label="To date"
+                      />
+                    </>
+                  ) : null}
+                  <Select value={listSort} onValueChange={(value) => setListSort(value as typeof listSort)}>
+                    <SelectTrigger className="w-full sm:w-52" aria-label="Sort order">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="date-desc">Date: newest first</SelectItem>
+                      <SelectItem value="date-asc">Date: oldest first</SelectItem>
+                      <SelectItem value="entered-desc">Entered: newest first</SelectItem>
+                      <SelectItem value="entered-asc">Entered: oldest first</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="relative min-w-[200px] flex-1">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       value={query}
@@ -1255,7 +1342,7 @@ export default function PurchasePage() {
                   </Button>
                   <ExportMenu
                     filenameBase="purchases"
-                    title="Purchases"
+                    title={`Purchases — ${monthLabel}`}
                     headers={purchaseExportHeaders}
                     rows={purchaseExportRows}
                   />
