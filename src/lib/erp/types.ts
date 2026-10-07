@@ -799,7 +799,8 @@ export type ProductReturnRecord = RecordApprovalFields & {
   // Dealer due adjustment (2026-09-29 client spec §15): a dealer return
   // linked to one of that dealer's invoices (rateCardId/invoiceNo above)
   // credits this much against the invoice's due — Original Due − Damage
-  // Return = Adjusted Due. Defaults to the return value, editable, capped at
+  // Return = Adjusted Due. Defaults to the return value at Dealer Rate (dealerRateTotal — what the
+  // dealer was billed), editable, capped at
   // the invoice's outstanding due. See RateCardRecord.returnAdjustment.
   dueAdjustment?: number
   processedBy: string

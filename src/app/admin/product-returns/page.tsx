@@ -615,7 +615,7 @@ export default function ProductReturnsPage() {
   const effectiveAdjustAmount = adjustInvoice
     ? adjustTouched
       ? Number(adjustAmount) || 0
-      : Math.min(previewTotals.returnValue, adjustInvoiceDue)
+      : Math.min(previewTotals.dealerRateTotal, adjustInvoiceDue)
     : 0
 
   // Summary cards follow the month picker (but not the search box).
@@ -672,7 +672,10 @@ export default function ProductReturnsPage() {
     setReason(entry.reason ?? '')
     setAdjustInvoiceId(entry.dueAdjustment && entry.rateCardId ? entry.rateCardId : '')
     setAdjustAmount(entry.dueAdjustment ? String(entry.dueAdjustment) : '')
-    setAdjustTouched(Boolean(entry.dueAdjustment))
+    // Returns saved before 2026-10-08 defaulted the credit to the Depot-rate
+    // value; when the stored credit is exactly that old default, recompute it
+    // at the Dealer rate instead of keeping it as a hand-typed amount.
+    setAdjustTouched(Boolean(entry.dueAdjustment) && Math.abs((entry.dueAdjustment ?? 0) - entry.depotRateTotal) > 0.005)
     setFormError(null)
     setDialogOpen(true)
   }
@@ -1360,7 +1363,7 @@ export default function ProductReturnsPage() {
                           }}
                           className="bg-background"
                         />
-                        <p className="text-[11px] text-muted-foreground">Defaults to the return value, up to the invoice&apos;s due.</p>
+                        <p className="text-[11px] text-muted-foreground">Defaults to the return value at Dealer Rate (DP) — what the dealer was billed — up to the invoice&apos;s due.</p>
                       </div>
                     ) : null}
                   </div>
