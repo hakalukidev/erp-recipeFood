@@ -14,7 +14,7 @@ import {
   signOut,
   type User as FirebaseUser,
 } from 'firebase/auth'
-import { get, onValue, ref, set, update } from 'firebase/database'
+import { get, limitToLast, onValue, orderByKey, query, ref, set, update } from 'firebase/database'
 import toast from 'react-hot-toast'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 
@@ -329,6 +329,19 @@ const ERP_TOP_LEVEL_KEYS = [
   'settings',
   'meta',
 ] as const satisfies readonly (keyof ERPData)[]
+
+// Append-only logs that grow with every action and would otherwise dominate
+// the sign-in download (activities alone was ~88% of `erp/` by Oct 2026).
+// `activities` is write-only from the UI's point of view — nothing renders
+// it — so it isn't listened to at all; it stays in ERP_TOP_LEVEL_KEYS only
+// for the types. `loginHistory` is only shown as the latest 100 rows on
+// User Management, so only those are fetched. Neither changes what's
+// stored in the database.
+const ERP_UNSUBSCRIBED_KEYS: ReadonlySet<string> = new Set(['activities'])
+const ERP_LIMITED_KEYS: Partial<Record<(typeof ERP_TOP_LEVEL_KEYS)[number], number>> = {
+  loginHistory: 100,
+}
+const ERP_SUBSCRIBED_KEYS = ERP_TOP_LEVEL_KEYS.filter((key) => !ERP_UNSUBSCRIBED_KEYS.has(key))
 
 // ---- TanStack Query cache bridge -----------------------------------------
 // Every top-level ERP collection is realtime-pushed by Firebase (the
@@ -1266,7 +1279,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       const next = normalizeERPData(raw as ERPData)
       setData(next)
       queryClient.setQueryData(erpQueryKeys.snapshot, next)
-      if (loadedKeys.size >= ERP_TOP_LEVEL_KEYS.length) {
+      if (loadedKeys.size >= ERP_SUBSCRIBED_KEYS.length) {
         setLoading(false)
         // A single write (e.g. createOrder) touches several top-level keys
         // (orders/dealers/ledgerEntries/products/...) whose listeners each
@@ -1279,9 +1292,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    const unsubscribes = ERP_TOP_LEVEL_KEYS.map((key) =>
-      onValue(
-        ref(db, `erp/${key}`),
+    const unsubscribes = ERP_SUBSCRIBED_KEYS.map((key) => {
+      const limit = ERP_LIMITED_KEYS[key]
+      // Ids are `<prefix>_<Date.now()>_<rand>` (createId), so key order is
+      // chronological and limitToLast picks the newest rows without needing
+      // a database `.indexOn` rule.
+      const source = limit
+        ? query(ref(db, `erp/${key}`), orderByKey(), limitToLast(limit))
+        : ref(db, `erp/${key}`)
+      return onValue(
+        source,
         (snapshot) => {
           raw[key] = snapshot.val()
           loadedKeys.add(key)
@@ -1306,7 +1326,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           commit()
         }
       )
-    )
+    })
 
     return () => {
       cancelled = true
@@ -1535,25 +1555,32 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const roleName = DEFAULT_ERP_DATA.roles[authenticatedUser.roleId]?.name ?? authenticatedUser.roleId
     // Section 66 (Security — IP/Device Log): best-effort only, never blocks
     // sign-in if the lookup is slow, blocked by an ad-blocker, or the
-    // device is offline.
-    const ipAddress = await lookupClientIp()
+    // device is offline — the IP lookup (up to 2.5s) and the history write
+    // run in the background after login returns. The id and createdAt are
+    // taken now so the record still carries the actual sign-in time.
     const loginHistoryId = createId('login')
-    await update(ref(db, 'erp/loginHistory'), {
-      [loginHistoryId]: {
-        id: loginHistoryId,
-        userId: authenticatedUser.id,
-        userName: authenticatedUser.name,
-        roleId: authenticatedUser.roleId,
-        roleName,
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-        ipAddress,
-        createdAt: new Date().toISOString(),
-      } satisfies LoginHistoryRecord,
-    })
+    const loginRecord = {
+      id: loginHistoryId,
+      userId: authenticatedUser.id,
+      userName: authenticatedUser.name,
+      roleId: authenticatedUser.roleId,
+      roleName,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      createdAt: new Date().toISOString(),
+    }
+    void lookupClientIp()
+      .then((ipAddress) =>
+        update(ref(db, 'erp/loginHistory'), {
+          [loginHistoryId]: { ...loginRecord, ipAddress } satisfies LoginHistoryRecord,
+        })
+      )
+      .catch((reason) => console.error('[login] failed to record login history:', reason))
 
     // Section 65 (Audit Trail): logged with an explicit actor since the
     // currentUser React state hasn't re-rendered with this login yet.
-    await writeActivity('user_login', 'security', `${authenticatedUser.name} logged in.`, { actor: authenticatedUser })
+    void writeActivity('user_login', 'security', `${authenticatedUser.name} logged in.`, {
+      actor: authenticatedUser,
+    }).catch((reason) => console.error('[login] failed to record login activity:', reason))
 
     return authenticatedUser
   }
