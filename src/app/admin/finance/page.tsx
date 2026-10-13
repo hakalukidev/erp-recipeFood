@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -26,6 +27,7 @@ import {
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
   EXPENSE_SALARY_CATEGORY,
 } from '@/lib/erp/standardChartOfAccounts'
+import { buildGroupedReportHtml, groupReportItems, type ReportGroupBy } from '@/lib/erp/groupedReportPrint'
 import type { ExpenseInput, ExpenseRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import {
@@ -214,9 +216,15 @@ export default function ExpensesPage() {
   const [renameDraft, setRenameDraft] = useState<Record<string, string>>({})
   const [renameError, setRenameError] = useState<string | null>(null)
   const [renameSaving, setRenameSaving] = useState(false)
-  const [mode, setMode] = useState<'daily' | 'monthly'>('monthly')
+  const [mode, setMode] = useState<'daily' | 'monthly' | 'range'>('monthly')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
+  // Custom range (From → To, both inclusive) — for date-wise prints over
+  // more than one day/month. Picked backwards, the two dates are swapped.
+  const [rangeFromInput, setRangeFromInput] = useState(`${monthInputValue()}-01`)
+  const [rangeToInput, setRangeToInput] = useState(dateInputValue())
+  const [rangeFrom, rangeTo] =
+    rangeFromInput && rangeToInput && rangeFromInput > rangeToInput ? [rangeToInput, rangeFromInput] : [rangeFromInput, rangeToInput]
   const [selectedCategory, setSelectedCategory] = useState(ALL_CATEGORIES)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [expenseForm, setExpenseForm] = useState(emptyExpenseForm)
@@ -264,9 +272,13 @@ export default function ExpensesPage() {
   // narrows the detail table) never changes the breakdown itself.
   const periodExpenses = useMemo(() => {
     return expenses.filter((expense) =>
-      mode === 'daily' ? isSameDate(expense.date, selectedDate) : isSameMonth(expense.date, selectedMonth)
+      mode === 'daily'
+        ? isSameDate(expense.date, selectedDate)
+        : mode === 'monthly'
+          ? isSameMonth(expense.date, selectedMonth)
+          : (!rangeFrom || expense.date.slice(0, 10) >= rangeFrom) && (!rangeTo || expense.date.slice(0, 10) <= rangeTo)
     )
-  }, [mode, expenses, selectedDate, selectedMonth])
+  }, [mode, expenses, selectedDate, selectedMonth, rangeFrom, rangeTo])
 
   // Filter options: every current category plus any retired one (e.g. the
   // old 'ড্যামেজ') that still has expenses on file, so those stay findable.
@@ -330,7 +342,49 @@ export default function ExpensesPage() {
     return Array.from(rows.values()).sort((left, right) => right.total - left.total)
   }, [periodExpenses])
 
-  const periodLabel = mode === 'daily' ? formatDate(selectedDate) : formatMonthLabel(selectedMonth)
+  const periodLabel =
+    mode === 'daily'
+      ? formatDate(selectedDate)
+      : mode === 'monthly'
+        ? formatMonthLabel(selectedMonth)
+        : `${rangeFrom ? formatDate(rangeFrom) : 'Start'} to ${rangeTo ? formatDate(rangeTo) : 'Today'}`
+
+  // Category-wise / Date-wise print (2026-10-13 client request) — whatever
+  // period + category filter is on screen; rejected entries left out.
+  function handlePrintGrouped(groupBy: ReportGroupBy) {
+    const money = (value: number) => formatCurrency(value, currency)
+    const counted = filteredExpenses.filter(isCountedEntry).slice().sort((left, right) => left.date.localeCompare(right.date))
+    const groups = groupReportItems(
+      counted,
+      (expense) => (groupBy === 'date' ? expense.date.slice(0, 10) : expense.category),
+      groupBy === 'date' ? undefined : (left, right) => labelOf(left).localeCompare(labelOf(right))
+    ).map(({ key, items }) => ({
+      label: groupBy === 'date' ? formatDate(key) : labelOf(key),
+      amounts: [money(items.reduce((sum, expense) => sum + expense.amount, 0))],
+      rows: items.map((expense, index) => [
+        String(index + 1),
+        formatDate(expense.date),
+        labelOf(expense.category),
+        expense.loanMemberName || expense.employeeName || '-',
+        money(expense.amount),
+        [expense.note, expense.approvalStatus === 'pending' ? '(Pending)' : ''].filter(Boolean).join(' ') || '-',
+      ]),
+    }))
+    const byLabel = groupBy === 'date' ? 'Date-wise' : 'Category-wise'
+    openPrintWindow(
+      buildGroupedReportHtml({
+        title: `Expense Report (${byLabel})`,
+        subtitle: `Expense Report — ${byLabel} — ${periodLabel}`,
+        meta: selectedCategory === ALL_CATEGORIES ? ['All categories'] : [`Category: ${labelOf(selectedCategory)}`],
+        groupHeading: groupBy === 'date' ? 'Date' : 'Category',
+        amountHeaders: ['Amount'],
+        detailHeaders: ['SL', 'Date', 'Category', 'Employee/Loan', 'Amount', 'Note'],
+        numericColumns: [4],
+        groups,
+        grandTotals: [money(expenseTotal)],
+      })
+    )
+  }
 
   // ---- Salary History (Loan/Cash Maintenance spec, Section 5) -------------
   // Month-wise (client request): defaults to the current month; clearing the
@@ -501,7 +555,7 @@ export default function ExpensesPage() {
         <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-medium text-foreground">Reporting period</p>
-            <p className="text-xs text-muted-foreground">Choose a day or month, and optionally one category, to scope the expenses below.</p>
+            <p className="text-xs text-muted-foreground">Choose a day, month or date range, and optionally one category, to scope the expenses below.</p>
           </div>
           <div className="flex flex-col flex-wrap gap-3 sm:flex-row sm:items-center">
             <Select value={mode} onValueChange={(value) => setMode(value as typeof mode)}>
@@ -509,12 +563,19 @@ export default function ExpensesPage() {
               <SelectContent>
                 <SelectItem value="daily">Daily</SelectItem>
                 <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="range">Date range</SelectItem>
               </SelectContent>
             </Select>
             {mode === 'daily' ? (
               <Input className="w-full sm:w-48" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-            ) : (
+            ) : mode === 'monthly' ? (
               <Input className="w-full sm:w-48" type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Input className="w-full sm:w-40" type="date" aria-label="From date" value={rangeFromInput} onChange={(event) => setRangeFromInput(event.target.value)} />
+                <span className="text-sm text-muted-foreground">to</span>
+                <Input className="w-full sm:w-40" type="date" aria-label="To date" value={rangeToInput} onChange={(event) => setRangeToInput(event.target.value)} />
+              </div>
             )}
             <Select value={selectedCategory} onValueChange={setSelectedCategory}>
               <SelectTrigger className="w-full sm:w-56"><SelectValue /></SelectTrigger>
@@ -541,21 +602,27 @@ export default function ExpensesPage() {
                 expense.note ?? '',
               ])}
             />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-xl"
-              disabled={filteredExpenses.length === 0}
-              onClick={() =>
-                openPrintWindow(
-                  buildExpenseReportHtml(periodLabel, categoryTotals, filteredExpenses, currency, expenseTotal, labelOf)
-                )
-              }
-            >
-              <Printer className="mr-2 h-4 w-4" />
-              Print
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" className="rounded-xl" disabled={filteredExpenses.length === 0}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Print
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={() => handlePrintGrouped('category')}>Category-wise</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handlePrintGrouped('date')}>Date-wise</DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    openPrintWindow(
+                      buildExpenseReportHtml(periodLabel, categoryTotals, filteredExpenses, currency, expenseTotal, labelOf)
+                    )
+                  }
+                >
+                  Summary + full list
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 

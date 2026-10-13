@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -52,6 +52,7 @@ import {
   COMPANY_INVOICE_FOOTER_NOTE,
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
+import { buildGroupedReportHtml, groupReportItems, type ReportGroupBy } from '@/lib/erp/groupedReportPrint'
 import { useERP } from '@/lib/erp/provider'
 import {
   CASH_CATEGORY_ADVANCE_SALARY,
@@ -195,6 +196,7 @@ const CASH_OUT_CATEGORY_OPTIONS: string[] = [
   DIRECT_EXPENSE_CATEGORY,
 ]
 const CASH_IN_CATEGORY_OPTIONS: string[] = [...CASH_IN_CATEGORIES]
+const ALL_CASH_CATEGORIES = '__all__'
 
 const emptyLoanAccountForm = { memberName: '', phone: '', address: '', balance: '' }
 type LoanAccountFormState = typeof emptyLoanAccountForm
@@ -813,9 +815,33 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   }
 
   // ---- Cash Maintenance Chart -----------------------------------------------
-  const [cashMode, setCashMode] = useState<'daily' | 'monthly'>('monthly')
+  const [cashMode, setCashMode] = useState<'daily' | 'monthly' | 'range'>('monthly')
   const [cashDate, setCashDate] = useState(dateInputValue())
   const [cashMonth, setCashMonth] = useState(monthInputValue())
+  // Custom range (From → To, both inclusive), same rules as the Loan Chart's.
+  const [cashRangeFromInput, setCashRangeFromInput] = useState(`${monthInputValue()}-01`)
+  const [cashRangeToInput, setCashRangeToInput] = useState(dateInputValue())
+  const [cashFrom, cashTo] =
+    cashRangeFromInput && cashRangeToInput && cashRangeFromInput > cashRangeToInput
+      ? [cashRangeToInput, cashRangeFromInput]
+      : [cashRangeFromInput, cashRangeToInput]
+  const isInCashPeriod = useCallback(
+    (date: string) =>
+      cashMode === 'daily'
+        ? isSameDate(date, cashDate)
+        : cashMode === 'monthly'
+          ? isSameMonth(date, cashMonth)
+          : (!cashFrom || date.slice(0, 10) >= cashFrom) && (!cashTo || date.slice(0, 10) <= cashTo),
+    [cashMode, cashDate, cashMonth, cashFrom, cashTo]
+  )
+  const cashPeriodLabel =
+    cashMode === 'daily'
+      ? formatDate(cashDate)
+      : cashMode === 'monthly'
+        ? new Date(`${cashMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+        : `${cashFrom ? formatDate(cashFrom) : 'Start'} to ${cashTo ? formatDate(cashTo) : 'Today'}`
+  const cashPeriodKey = cashMode === 'daily' ? cashDate : cashMode === 'monthly' ? cashMonth : `${cashFrom || 'start'}-to-${cashTo || 'today'}`
+  const [cashCategoryFilter, setCashCategoryFilter] = useState(ALL_CASH_CATEGORIES)
   const [cashDialogOpen, setCashDialogOpen] = useState(false)
   const [editingCashId, setEditingCashId] = useState<string | null>(null)
   const [cashForm, setCashForm] = useState<CashFormState>(newCashForm)
@@ -823,10 +849,24 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const [cashError, setCashError] = useState<string | null>(null)
 
   const filteredCashEntries = useMemo(() => {
-    return cashEntries.filter((entry) =>
-      cashMode === 'daily' ? isSameDate(entry.date, cashDate) : isSameMonth(entry.date, cashMonth)
-    )
-  }, [cashEntries, cashMode, cashDate, cashMonth])
+    return cashEntries.filter((entry) => isInCashPeriod(entry.date))
+  }, [cashEntries, isInCashPeriod])
+  // The entry list + print narrowed to one category; the cards and the
+  // "By category" breakdown stay period-wide, same as the Expense page.
+  const visibleCashEntries = useMemo(
+    () =>
+      cashCategoryFilter === ALL_CASH_CATEGORIES
+        ? filteredCashEntries
+        : filteredCashEntries.filter((entry) => entry.category === cashCategoryFilter),
+    [filteredCashEntries, cashCategoryFilter]
+  )
+  const cashFilterCategories = useMemo(() => {
+    const list: string[] = [...CASH_OUT_CATEGORY_OPTIONS, ...CASH_IN_CATEGORY_OPTIONS]
+    cashEntries.forEach((entry) => {
+      if (!list.includes(entry.category)) list.push(entry.category)
+    })
+    return list
+  }, [cashEntries])
 
   const cashOutTotal = useMemo(
     () => filteredCashEntries.filter(isCashMaintenanceOut).reduce((sum, entry) => sum + entry.amount, 0),
@@ -857,10 +897,10 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     }
     filteredCashEntries.filter(isCashMaintenanceOut).forEach((entry) => add(entry.category, entry.amount))
     expenses
-      .filter((expense) => (cashMode === 'daily' ? isSameDate(expense.date, cashDate) : isSameMonth(expense.date, cashMonth)))
+      .filter((expense) => isInCashPeriod(expense.date))
       .forEach((expense) => add(expenseCategoryLabel(data, expense.category), expense.amount))
     return Array.from(rows.values()).sort((left, right) => right.total - left.total)
-  }, [data, filteredCashEntries, expenses, cashMode, cashDate, cashMonth])
+  }, [data, filteredCashEntries, expenses, isInCashPeriod])
 
   function openCreateCash() {
     setEditingCashId(null)
@@ -932,9 +972,9 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const expenseTotalThisPeriod = useMemo(
     () =>
       expenses
-        .filter((expense) => (cashMode === 'daily' ? isSameDate(expense.date, cashDate) : isSameMonth(expense.date, cashMonth)))
+        .filter((expense) => isInCashPeriod(expense.date))
         .reduce((sum, expense) => sum + expense.amount, 0),
-    [expenses, cashMode, cashDate, cashMonth]
+    [expenses, isInCashPeriod]
   )
   const totalCashOut = cashOutTotal + expenseTotalThisPeriod
   // isOpeningBalance withdrawals ("Existing Loan") are excluded here (2026-09-14
@@ -948,16 +988,16 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     () =>
       loanTransactions
         .filter((entry) => entry.type === 'withdrawal' && !entry.isOpeningBalance && !entry.isAdjustment && isCountedEntry(entry))
-        .filter((entry) => (cashMode === 'daily' ? isSameDate(entry.date, cashDate) : isSameMonth(entry.date, cashMonth)))
+        .filter((entry) => isInCashPeriod(entry.date))
         .reduce((sum, entry) => sum + entry.amount, 0),
-    [loanTransactions, cashMode, cashDate, cashMonth]
+    [loanTransactions, isInCashPeriod]
   )
   const salesMoneyThisPeriod = useMemo(
     () =>
       collectedCashRows
-        .filter((row) => (cashMode === 'daily' ? isSameDate(row.date, cashDate) : isSameMonth(row.date, cashMonth)))
+        .filter((row) => isInCashPeriod(row.date))
         .reduce((sum, row) => sum + row.amount, 0),
-    [collectedCashRows, cashMode, cashDate, cashMonth]
+    [collectedCashRows, isInCashPeriod]
   )
   const totalCashIn = loanWithdrawalsThisPeriod + salesMoneyThisPeriod + cashMaintenanceInTotal
   const reconciliationGap = totalCashIn - totalCashOut
@@ -971,7 +1011,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   // dated strictly before the selected period and on/after BOOKS_START_DATE
   // (1 Sept 2026 — the books start at zero then, client request; earlier-
   // dated entries never carry into an opening balance).
-  const periodStartDate = cashMode === 'daily' ? cashDate : `${cashMonth}-01`
+  const periodStartDate = cashMode === 'daily' ? cashDate : cashMode === 'monthly' ? `${cashMonth}-01` : cashFrom || BOOKS_START_DATE
   const openingBalance = useMemo(() => {
     const cashInBefore =
       loanTransactions
@@ -994,6 +1034,59 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   }, [loanTransactions, collectedCashRows, expenses, cashEntries, periodStartDate])
   const closingBalance = openingBalance + totalCashIn - totalCashOut
 
+  // ---- Cash Maintenance print — Category-wise / Date-wise -----------------
+  // (2026-10-13 client request.) Whatever period + category filter is on
+  // screen, Cash In and Cash Out in separate columns; rejected entries are
+  // left out, pending ones are tagged.
+  function handlePrintCashGrouped(groupBy: ReportGroupBy) {
+    const money = (value: number) => formatCurrency(value, currency)
+    const counted = visibleCashEntries.filter(isCountedEntry).slice().sort((left, right) => left.date.localeCompare(right.date))
+    const sumIn = (items: CashMaintenanceRecord[]) => items.filter(isCashMaintenanceIn).reduce((sum, entry) => sum + entry.amount, 0)
+    const sumOut = (items: CashMaintenanceRecord[]) => items.filter(isCashMaintenanceOut).reduce((sum, entry) => sum + entry.amount, 0)
+    const groups = groupReportItems(counted, (entry) => (groupBy === 'date' ? entry.date.slice(0, 10) : entry.category)).map(
+      ({ key, items }) => ({
+        label: groupBy === 'date' ? formatDate(key) : key,
+        amounts: [money(sumIn(items)), money(sumOut(items))],
+        rows: items.map((entry, index) => [
+          String(index + 1),
+          formatDate(entry.date),
+          entry.category,
+          [entry.employeeName, entry.productReturnNumber ? `Return ${entry.productReturnNumber}` : '', entry.note]
+            .filter(Boolean)
+            .join(' · ') || '-',
+          isCashMaintenanceIn(entry) ? money(entry.amount) : '',
+          isCashMaintenanceOut(entry) ? money(entry.amount) : '',
+          entry.approvalStatus === 'pending' ? 'Pending' : 'Approved',
+        ]),
+      })
+    )
+    const byLabel = groupBy === 'date' ? 'Date-wise' : 'Category-wise'
+    const allCategories = cashCategoryFilter === ALL_CASH_CATEGORIES
+    openPrintWindow(
+      buildGroupedReportHtml({
+        title: `Cash Maintenance (${byLabel})`,
+        subtitle: `Cash Maintenance Statement — ${byLabel} — ${cashPeriodLabel}`,
+        meta: [allCategories ? 'All categories' : `Category: ${cashCategoryFilter}`],
+        groupHeading: groupBy === 'date' ? 'Date' : 'Category',
+        amountHeaders: ['Cash In', 'Cash Out'],
+        detailHeaders: ['SL', 'Date', 'Category', 'Particulars', 'Cash In', 'Cash Out', 'Status'],
+        numericColumns: [4, 5],
+        groups,
+        grandTotals: [money(sumIn(counted)), money(sumOut(counted))],
+        // Same four figures as the cards on screen — only when the whole
+        // chart is printed, since they're period-wide.
+        footerLines: allCategories
+          ? [
+              ['Cash In (Cash Maintenance)', money(cashMaintenanceInTotal)],
+              ['Cash Out (Cash Maintenance)', money(cashOutTotal)],
+              ['Direct Expense (Expense section)', money(expenseTotalThisPeriod)],
+              ['Total Cash Out (Cash Maintenance + Expense)', money(totalCashOut)],
+            ]
+          : undefined,
+      })
+    )
+  }
+
   // ---- Cash Book detail (2026-09-29 client spec §22–23) ---------------------
   // Every cash-in/cash-out transaction behind the Daily Cash Book totals, one
   // row each, from every source — sales collections, loan withdrawals, Cash
@@ -1014,7 +1107,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     amount: number
   }
   const cashBookRows = useMemo<CashBookRow[]>(() => {
-    const inPeriod = (date: string) => (cashMode === 'daily' ? isSameDate(date, cashDate) : isSameMonth(date, cashMonth))
+    const inPeriod = (date: string) => isInCashPeriod(date)
     const rows: CashBookRow[] = []
 
     const collectionsByRateCardId = new Map<string, number>()
@@ -1091,7 +1184,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       })
     }
     return rows.sort((left, right) => left.date.localeCompare(right.date))
-  }, [data, collections, rateCards, loanTransactions, cashEntries, expenses, cashMode, cashDate, cashMonth])
+  }, [data, collections, rateCards, loanTransactions, cashEntries, expenses, isInCashPeriod])
 
   const cashBookByCategory = (direction: 'in' | 'out') => {
     const map = new Map<string, { category: string; count: number; total: number }>()
@@ -1107,7 +1200,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   }
   const cashBookInByCategory = cashBookByCategory('in')
   const cashBookOutByCategory = cashBookByCategory('out')
-  const cashBookPeriodLabel = cashMode === 'daily' ? formatDate(cashDate) : cashMonth
+  const cashBookPeriodLabel = cashMode === 'monthly' ? cashMonth : cashPeriodLabel
 
   return (
     <AdminShell active={showCash ? 'Cash Maintenance' : 'Loan Chart'}>
@@ -1703,18 +1796,36 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <SelectContent>
                   <SelectItem value="daily">Daily</SelectItem>
                   <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="range">Date range</SelectItem>
                 </SelectContent>
               </Select>
               {cashMode === 'daily' ? (
                 <Input className="w-44" type="date" value={cashDate} onChange={(event) => setCashDate(event.target.value)} />
-              ) : (
+              ) : cashMode === 'monthly' ? (
                 <Input className="w-44" type="month" value={cashMonth} onChange={(event) => setCashMonth(event.target.value)} />
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Input className="w-40" type="date" aria-label="From date" value={cashRangeFromInput} onChange={(event) => setCashRangeFromInput(event.target.value)} />
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <Input className="w-40" type="date" aria-label="To date" value={cashRangeToInput} onChange={(event) => setCashRangeToInput(event.target.value)} />
+                </div>
               )}
+              <Select value={cashCategoryFilter} onValueChange={setCashCategoryFilter}>
+                <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_CASH_CATEGORIES}>All categories</SelectItem>
+                  {cashFilterCategories.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <ExportMenu
-                filenameBase="cash-maintenance"
-                title="Cash Maintenance Chart"
+                filenameBase={`cash-maintenance-${cashPeriodKey}`}
+                title={`Cash Maintenance Chart — ${cashPeriodLabel}`}
                 headers={['Date', 'Category', 'Direction', 'Amount', 'P&L Expense', 'Product Return', 'Employee', 'Note', 'Status']}
-                rows={filteredCashEntries.map((entry) => [
+                rows={visibleCashEntries.map((entry) => [
                   entry.date,
                   entry.category,
                   entry.direction === 'in' ? 'Cash In' : 'Cash Out',
@@ -1726,6 +1837,17 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   entry.approvalStatus === 'rejected' ? 'Rejected (not counted)' : entry.approvalStatus === 'pending' ? 'Pending' : 'Approved',
                 ])}
               />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="sm" className="rounded-xl" disabled={visibleCashEntries.length === 0}>
+                    <Printer className="mr-2 h-4 w-4" /> Print
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onClick={() => handlePrintCashGrouped('category')}>Category-wise</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handlePrintCashGrouped('date')}>Date-wise</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button onClick={openCreateCash}>
                 <Wallet className="mr-2 h-4 w-4" /> Record Cash Entry
               </Button>
@@ -1800,7 +1922,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredCashEntries.map((entry) => (
+                  {visibleCashEntries.map((entry) => (
                     <TableRow key={entry.id}>
                       <TableCell>{formatDate(entry.date)}</TableCell>
                       <TableCell className="font-medium">
@@ -1848,7 +1970,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {filteredCashEntries.length === 0 ? (
+                  {visibleCashEntries.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                         No cash entries recorded for this period.
@@ -1874,7 +1996,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             />
             <div className="flex flex-wrap gap-2">
               <ExportMenu
-                filenameBase={`cash-book-${cashMode === 'daily' ? cashDate : cashMonth}`}
+                filenameBase={`cash-book-${cashPeriodKey}`}
                 title={`Daily Cash Book — all transactions (${cashBookPeriodLabel})`}
                 headers={['Date', 'Cash In/Out', 'Source', 'Category', 'Party', 'Note', 'Cash In', 'Cash Out']}
                 rows={[
@@ -1894,7 +2016,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 ]}
               />
               <ExportMenu
-                filenameBase={`cash-summary-${cashMode === 'daily' ? cashDate : cashMonth}`}
+                filenameBase={`cash-summary-${cashPeriodKey}`}
                 title={`Cash Summary by category (${cashBookPeriodLabel})`}
                 headers={['Cash In/Out', 'Category', 'Entries', 'Amount']}
                 rows={[
@@ -1911,7 +2033,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           <CardContent>
             <div className="mb-4 flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
               <span className="font-medium text-foreground">
-                Opening balance ({cashMode === 'daily' ? 'as of yesterday' : 'as of last month'})
+                Opening balance ({cashMode === 'daily' ? 'as of yesterday' : cashMode === 'monthly' ? 'as of last month' : `before ${cashFrom ? formatDate(cashFrom) : 'start'}`})
               </span>
               <span className="tabular-nums font-semibold">{formatCurrency(openingBalance, currency)}</span>
             </div>
