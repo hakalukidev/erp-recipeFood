@@ -366,10 +366,9 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord, 
 
 type MaterialPurchasePeriod = 'month' | 'range' | 'date' | 'all'
 type MaterialSummaryRow = { name: string; qtyKg: number; amount: number; avgRate: number; entries: number; lastDate: string }
-type MaterialSummarySortKey = 'name' | 'qtyKg' | 'amount' | 'avgRate' | 'entries' | 'lastDate'
 
 // Printable material-wise purchase report for the selected period: the
-// summary (in whatever order it's sorted on screen) + every line date-wise.
+// summary + every line date-wise.
 function buildMaterialPurchaseReportHtml(
   periodLabel: string,
   summary: MaterialSummaryRow[],
@@ -760,10 +759,6 @@ export default function PurchasePage() {
   const [materialPurchaseFrom, setMaterialPurchaseFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
   const [materialPurchaseTo, setMaterialPurchaseTo] = useState(() => dhakaTodayIso())
   const [materialPurchaseDay, setMaterialPurchaseDay] = useState(() => dhakaTodayIso())
-  const [materialSummarySort, setMaterialSummarySort] = useState<{ key: MaterialSummarySortKey; dir: 'asc' | 'desc' }>({
-    key: 'qtyKg',
-    dir: 'desc',
-  })
   const [materialPurchaseDialogOpen, setMaterialPurchaseDialogOpen] = useState(false)
   const [editingMaterialPurchase, setEditingMaterialPurchase] = useState<MaterialPurchaseRecord | null>(null)
   const [materialPurchaseDate, setMaterialPurchaseDate] = useState(dhakaTodayIso())
@@ -819,8 +814,8 @@ export default function PurchasePage() {
     )
   }, [monthMaterialPurchases, query])
   // Material-wise "কোন কাঁচামাল কত কেজি কিনলাম" for the selected period —
-  // grouped by name (case/space-insensitive). A search that matches a
-  // material name narrows the summary to that material's lines only.
+  // grouped by name (case/space-insensitive), most Kg first. A search that
+  // matches a material name narrows the summary to that material's lines.
   const materialPurchaseSummary = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     const map = new Map<string, MaterialSummaryRow>()
@@ -837,21 +832,10 @@ export default function PurchasePage() {
         map.set(key, row)
       }
     }
-    const rows = Array.from(map.values()).map((row) => ({ ...row, avgRate: row.qtyKg > 0 ? row.amount / row.qtyKg : 0 }))
-    const { key, dir } = materialSummarySort
-    const sign = dir === 'asc' ? 1 : -1
-    return rows.sort((left, right) =>
-      key === 'name' || key === 'lastDate'
-        ? sign * left[key].localeCompare(right[key])
-        : sign * (left[key] - right[key])
-    )
-  }, [filteredMaterialPurchases, query, materialSummarySort])
-
-  function toggleMaterialSummarySort(key: MaterialSummarySortKey) {
-    setMaterialSummarySort((current) =>
-      current.key === key ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }
-    )
-  }
+    return Array.from(map.values())
+      .map((row) => ({ ...row, avgRate: row.qtyKg > 0 ? row.amount / row.qtyKg : 0 }))
+      .sort((left, right) => right.qtyKg - left.qtyKg)
+  }, [filteredMaterialPurchases, query])
 
   function printMaterialPurchaseReport() {
     openPrintWindow(
@@ -2002,39 +1986,18 @@ export default function PurchasePage() {
                 </div>
 
                 <div>
-                  <p className="mb-3 text-sm font-medium">
-                    Material-wise total — {materialPurchasePeriodLabel}
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">Click a column heading to sort</span>
-                  </p>
+                  <p className="mb-3 text-sm font-medium">Material-wise total — {materialPurchasePeriodLabel}</p>
                   <div className="overflow-x-auto rounded-2xl border border-border/70">
                     <Table>
                       <TableHeader>
                         <TableRow className="bg-muted/40 hover:bg-muted/40">
                           <TableHead className="w-12">SL</TableHead>
-                          {(
-                            [
-                              ['name', 'Material', false],
-                              ['qtyKg', 'Total Kg', true],
-                              ['avgRate', 'Avg Rate / Kg', true],
-                              ['amount', 'Amount', true],
-                              ['entries', 'Lines', true],
-                              ['lastDate', 'Last Bought', true],
-                            ] as Array<[MaterialSummarySortKey, string, boolean]>
-                          ).map(([key, label, numeric]) => (
-                            <TableHead key={key} className={numeric ? 'text-right' : undefined}>
-                              <button
-                                type="button"
-                                onClick={() => toggleMaterialSummarySort(key)}
-                                className={cn(
-                                  'inline-flex items-center gap-1 hover:text-foreground',
-                                  materialSummarySort.key === key && 'text-foreground'
-                                )}
-                              >
-                                {label}
-                                {materialSummarySort.key === key ? (materialSummarySort.dir === 'asc' ? ' ▲' : ' ▼') : null}
-                              </button>
-                            </TableHead>
-                          ))}
+                          <TableHead>Material</TableHead>
+                          <TableHead className="text-right">Total Kg</TableHead>
+                          <TableHead className="text-right">Avg Rate / Kg</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                          <TableHead className="text-right">Lines</TableHead>
+                          <TableHead className="text-right">Last Bought</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
