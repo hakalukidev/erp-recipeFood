@@ -1176,6 +1176,41 @@ export type ProductionBatchInput = {
   }>
 }
 
+// ---- Material Purchase record (2026-10-13 client request) -----------------
+// The "New Material Purchase" button on the Production Entry tab: a plain
+// log of raw material bought on a date (হলুদ/মরিচ/জিরা — qty Kg × rate).
+// Deliberately standalone — no vendor, no paid/due, no stock movement, no
+// production batch — so monthly "how many Kg of what was bought" can be
+// read straight off these lines without touching any ledger.
+export type MaterialPurchaseLine = {
+  materialName: string
+  qtyKg: number
+  ratePerKg: number
+  amount: number
+}
+
+export type MaterialPurchaseRecord = {
+  id: string
+  entryNumber: string
+  date: string
+  // 'YYYY-MM' copy of date, stored so month-wise totals can group directly.
+  month: string
+  items: MaterialPurchaseLine[]
+  totalQtyKg: number
+  totalAmount: number
+  note?: string
+  createdBy: string
+  createdByName: string
+  createdAt: string
+  updatedAt?: string
+}
+
+export type MaterialPurchaseInput = {
+  date?: string
+  note?: string
+  items: Array<{ materialName: string; qtyKg: number; ratePerKg: number }>
+}
+
 // ---- Stock Shortfall (Finished Goods) — 2026-09-12 client request --------
 // A dealer invoice (Rate Card) is allowed to sell a Finished Goods item
 // before it's actually been produced — applyRateCardStockDeltas in
@@ -1768,6 +1803,7 @@ export type ERPData = {
   finishedGoods: Record<string, FinishedGoodsRecord>
   stockShortfalls: Record<string, StockShortfallRecord>
   productionBatches: Record<string, ProductionBatchRecord>
+  materialPurchaseRecords: Record<string, MaterialPurchaseRecord>
   qualityChecks: Record<string, QualityCheckRecord>
   qcHolds: Record<string, QcHoldRecord>
   notifications: Record<string, NotificationRecord>

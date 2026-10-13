@@ -74,6 +74,9 @@ import type {
   FinishedGoodsRecord,
   ProductInput,
   ProductionBatchInput,
+  MaterialPurchaseInput,
+  MaterialPurchaseLine,
+  MaterialPurchaseRecord,
   ProductionBatchRecord,
   ProductionOutputLine,
   ProductRecord,
@@ -255,6 +258,8 @@ type ERPContextValue = {
   deleteFinishedGoods: (finishedGoodsId: string) => Promise<void>
   createProductionBatch: (input: ProductionBatchInput) => Promise<string>
   deleteProductionBatch: (productionBatchId: string) => Promise<void>
+  saveMaterialPurchaseRecord: (input: MaterialPurchaseInput, recordId?: string) => Promise<string>
+  deleteMaterialPurchaseRecord: (recordId: string) => Promise<void>
   saveSettings: (input: SettingsInput) => Promise<void>
   saveExpenseCategoryLabels: (labels: Array<{ category: string; label: string }>) => Promise<void>
 }
@@ -325,6 +330,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'materialUsages',
   'finishedGoods',
   'productionBatches',
+  'materialPurchaseRecords',
   'stockShortfalls',
   'settings',
   'meta',
@@ -978,6 +984,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     finishedGoods: source.finishedGoods ?? {},
     stockShortfalls: source.stockShortfalls ?? {},
     productionBatches: source.productionBatches ?? {},
+    materialPurchaseRecords: source.materialPurchaseRecords ?? {},
     qualityChecks: source.qualityChecks ?? {},
     qcHolds: source.qcHolds ?? {},
     notifications: source.notifications ?? {},
@@ -3130,6 +3137,82 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     return id
+  }
+
+  // "New Material Purchase" (2026-10-13) — a standalone record of raw
+  // material bought on a date. Touches nothing else: no vendor due, no
+  // purchaseMaterials stock, no production batch, no cash/ledger entry.
+  async function saveMaterialPurchaseRecord(input: MaterialPurchaseInput, recordId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before recording a material purchase.')
+    }
+
+    const existing = recordId ? data.materialPurchaseRecords[recordId] : null
+    if (recordId && !existing) {
+      throw new Error('Material purchase record not found.')
+    }
+
+    const items: MaterialPurchaseLine[] = input.items
+      .map((item) => {
+        const qtyKg = Math.max(Number(item.qtyKg) || 0, 0)
+        const ratePerKg = Math.max(Number(item.ratePerKg) || 0, 0)
+        return {
+          materialName: item.materialName.trim(),
+          qtyKg,
+          ratePerKg,
+          amount: Math.round(qtyKg * ratePerKg * 100) / 100,
+        }
+      })
+      .filter((item) => item.materialName && item.qtyKg > 0)
+
+    if (items.length === 0) {
+      throw new Error('Add at least one material with a name and quantity.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('matpurchase')
+    const now = new Date().toISOString()
+    const date = input.date?.trim() || dhakaTodayIso()
+    const record: MaterialPurchaseRecord = {
+      id,
+      entryNumber: existing?.entryNumber ?? `MP-${Date.now().toString().slice(-8)}`,
+      date,
+      month: date.slice(0, 7),
+      items,
+      totalQtyKg: items.reduce((sum, item) => sum + item.qtyKg, 0),
+      totalAmount: Math.round(items.reduce((sum, item) => sum + item.amount, 0) * 100) / 100,
+      ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      createdBy: existing?.createdBy ?? currentUser.id,
+      createdByName: existing?.createdByName ?? currentUser.name,
+      createdAt: existing?.createdAt ?? now,
+      ...(existing ? { updatedAt: now } : {}),
+    }
+
+    await update(ref(db, 'erp'), { [`materialPurchaseRecords/${id}`]: record })
+    await writeActivity(
+      existing ? 'material_purchase_updated' : 'material_purchase_created',
+      'purchase',
+      `${existing ? 'Updated' : 'Recorded'} material purchase ${record.entryNumber} — ${items
+        .map((item) => `${item.materialName} ${item.qtyKg} Kg`)
+        .join(', ')}.`
+    )
+
+    return id
+  }
+
+  async function deleteMaterialPurchaseRecord(recordId: string) {
+    if (!data) {
+      return
+    }
+
+    const record = data.materialPurchaseRecords[recordId]
+    if (!record) {
+      throw new Error('Material purchase record not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`materialPurchaseRecords/${recordId}`]: null })
+    await writeActivity('material_purchase_deleted', 'purchase', `Deleted material purchase ${record.entryNumber}.`)
   }
 
   async function deleteProductionBatch(productionBatchId: string) {
@@ -7106,6 +7189,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteFinishedGoods,
       createProductionBatch,
       deleteProductionBatch,
+      saveMaterialPurchaseRecord,
+      deleteMaterialPurchaseRecord,
       saveSettings,
       saveExpenseCategoryLabels,
     }),

@@ -10,6 +10,7 @@ import {
   Landmark,
   Pencil,
   Plus,
+  Printer,
   Scale,
   Search,
   Trash2,
@@ -43,7 +44,14 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { BOOKS_START_DATE } from '@/lib/erp/companyInfo'
+import {
+  BOOKS_START_DATE,
+  COMPANY_ADDRESS,
+  COMPANY_EMAIL,
+  COMPANY_HELPLINE,
+  COMPANY_INVOICE_FOOTER_NOTE,
+  COMPANY_NAME,
+} from '@/lib/erp/companyInfo'
 import { useERP } from '@/lib/erp/provider'
 import {
   CASH_CATEGORY_ADVANCE_SALARY,
@@ -76,6 +84,78 @@ import { cn } from '@/lib/utils'
 // Asia/Dhaka calendar date (the company's timezone), not UTC — toISOString()
 // gave the previous day for anything entered before 6am local time.
 const dhakaDateFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' })
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function openPrintWindow(html: string) {
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) return
+  printWindow.document.write(html)
+  printWindow.document.close()
+}
+
+// Printable Loan Chart statement (ঋণ চার্ট স্টেটমেন্ট) — company letterhead +
+// a table, same layout family as buildExpenseReportHtml in finance/page.tsx.
+// Used both for the whole-chart summary and for one member's ledger.
+function buildLoanStatementHtml(options: {
+  title: string
+  subtitle: string
+  meta?: string[]
+  headers: string[]
+  numericColumns: number[]
+  rows: string[][]
+  totals?: string[]
+}) {
+  const cell = (value: string, index: number) =>
+    `<td${options.numericColumns.includes(index) ? ' class="numeric"' : ''}>${escapeHtml(value)}</td>`
+  const bodyRows = options.rows.map((row) => `<tr>${row.map(cell).join('')}</tr>`).join('')
+  const totalsRow = options.totals ? `<tr class="totals">${options.totals.map(cell).join('')}</tr>` : ''
+  const meta = (options.meta ?? []).map((line) => `<p class="meta">${escapeHtml(line)}</p>`).join('')
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(options.title)}</title>
+        <style>
+          * { box-sizing: border-box; }
+          @page { margin: 12mm 16mm; size: A4; }
+          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 0; }
+          .title { font-size: 22px; font-weight: 700; text-align: center; margin: 0 0 4px; color: #0f766e; }
+          .company-meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
+          .subtitle { text-align: center; color: #111827; font-size: 15px; font-weight: 700; margin: 12px 0 4px; }
+          .meta { text-align: center; color: #4b5563; font-size: 12.5px; margin: 0 0 2px; }
+          table.doc { border-collapse: collapse; width: 100%; margin: 14px 0 12px; }
+          table.doc th, table.doc td { border: 1px solid #d1d5db; padding: 5px 7px; font-size: 12.5px; }
+          table.doc th { background: #f3f4f6; text-transform: uppercase; font-size: 11px; }
+          .numeric { text-align: right; white-space: nowrap; }
+          tr.totals td { font-weight: 700; border-top: 2px solid #111827; background: #fef9c3; }
+          .footnote { text-align: center; font-style: italic; font-size: 11.5px; color: #4b5563; margin-top: 16px; }
+        </style>
+      </head>
+      <body>
+        <p class="title">${escapeHtml(COMPANY_NAME)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+        <p class="subtitle">${escapeHtml(options.subtitle)}</p>
+        ${meta}
+        <table class="doc">
+          <thead><tr>${options.headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+          <tbody>${bodyRows}${totalsRow}</tbody>
+        </table>
+        <p class="footnote">${escapeHtml(COMPANY_INVOICE_FOOTER_NOTE)}</p>
+        <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
+      </body>
+    </html>
+  `
+}
 
 function todayIso() {
   return dhakaDateFormat.format(new Date())
@@ -301,24 +381,46 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   // carried in from before the period, Withdrawn/Repaid = movement inside
   // it, Closing = balance at the period's end (later entries ignored).
   // Rejected entries never count (isCountedEntry), same as computeLoanBalance.
-  const [loanMode, setLoanMode] = useState<'monthly' | 'daily' | 'all'>('monthly')
+  const [loanMode, setLoanMode] = useState<'monthly' | 'daily' | 'range' | 'all'>('monthly')
   const [loanDate, setLoanDate] = useState(dateInputValue())
   const [loanMonth, setLoanMonth] = useState(monthInputValue())
+  // Custom range (From → To, both inclusive). Either end may be left blank
+  // — blank From = since the first entry, blank To = through today. Picked
+  // backwards, the two dates are swapped rather than showing nothing.
+  const [loanRangeFrom, setLoanRangeFrom] = useState(`${monthInputValue()}-01`)
+  const [loanRangeTo, setLoanRangeTo] = useState(dateInputValue())
+  const [rangeFrom, rangeTo] =
+    loanRangeFrom && loanRangeTo && loanRangeFrom > loanRangeTo ? [loanRangeTo, loanRangeFrom] : [loanRangeFrom, loanRangeTo]
   const effectiveLoanMode =
-    (loanMode === 'monthly' && !loanMonth) || (loanMode === 'daily' && !loanDate) ? 'all' : loanMode
-  const loanPeriodStart = effectiveLoanMode === 'daily' ? loanDate : effectiveLoanMode === 'monthly' ? `${loanMonth}-01` : ''
+    (loanMode === 'monthly' && !loanMonth) ||
+    (loanMode === 'daily' && !loanDate) ||
+    (loanMode === 'range' && !rangeFrom && !rangeTo)
+      ? 'all'
+      : loanMode
+  const loanPeriodStart =
+    effectiveLoanMode === 'daily'
+      ? loanDate
+      : effectiveLoanMode === 'monthly'
+        ? `${loanMonth}-01`
+        : effectiveLoanMode === 'range'
+          ? rangeFrom
+          : ''
   const loanPeriodLabel =
     effectiveLoanMode === 'daily'
       ? formatDate(loanDate)
       : effectiveLoanMode === 'monthly'
         ? new Date(`${loanMonth}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
-        : 'All time'
+        : effectiveLoanMode === 'range'
+          ? `${rangeFrom ? formatDate(rangeFrom) : 'Start'} to ${rangeTo ? formatDate(rangeTo) : 'Today'}`
+          : 'All time'
   const isInLoanPeriod = (date: string) =>
     effectiveLoanMode === 'daily'
       ? isSameDate(date, loanDate)
       : effectiveLoanMode === 'monthly'
         ? isSameMonth(date, loanMonth)
-        : true
+        : effectiveLoanMode === 'range'
+          ? (!rangeFrom || date.slice(0, 10) >= rangeFrom) && (!rangeTo || date.slice(0, 10) <= rangeTo)
+          : true
 
   const loanPeriodRows = useMemo(() => {
     const byAccount = new Map<string, { opening: number; withdrawn: number; repaid: number }>()
@@ -341,7 +443,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       })
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loanTransactions, loanAccounts, effectiveLoanMode, loanDate, loanMonth])
+  }, [loanTransactions, loanAccounts, effectiveLoanMode, loanDate, loanMonth, rangeFrom, rangeTo])
 
   const loanPeriodTotals = useMemo(() => {
     const totals = { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
@@ -357,7 +459,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const periodLoanTransactions = useMemo(
     () => loanTransactions.filter((transaction) => isInLoanPeriod(transaction.date)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [loanTransactions, effectiveLoanMode, loanDate, loanMonth]
+    [loanTransactions, effectiveLoanMode, loanDate, loanMonth, rangeFrom, rangeTo]
   )
   const periodLoanTransactionTotals = useMemo(() => {
     const counted = periodLoanTransactions.filter(isCountedEntry)
@@ -378,11 +480,114 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const periodExpenseRepayments = useMemo(
     () => expenseRepayments.filter(({ transaction }) => isInLoanPeriod(transaction.date)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenseRepayments, effectiveLoanMode, loanDate, loanMonth]
+    [expenseRepayments, effectiveLoanMode, loanDate, loanMonth, rangeFrom, rangeTo]
   )
   const periodExpenseRepaymentTotal = periodExpenseRepayments
     .filter(({ transaction, approvalStatus }) => approvalStatus !== 'rejected' && isCountedEntry(transaction))
     .reduce((sum, { transaction }) => sum + transaction.amount, 0)
+
+  // ---- Loan Chart statement — download / print (client request) ----------
+  // Same period + member search as the on-screen Loan Chart table, so what
+  // gets downloaded/printed always matches what's visible.
+  const loanChartExportHeaders = [
+    'Member',
+    'Phone',
+    ...(effectiveLoanMode === 'all' ? [] : ['Opening']),
+    effectiveLoanMode === 'all' ? 'Total Withdrawn' : 'Withdrawn',
+    effectiveLoanMode === 'all' ? 'Total Repaid' : 'Repaid',
+    effectiveLoanMode === 'all' ? 'Balance' : 'Closing',
+  ]
+  const loanChartExportRows = filteredAccounts.map((account) => {
+    const period = loanPeriodRows.get(account.id) ?? { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
+    return [
+      account.memberName,
+      account.phone || '',
+      ...(effectiveLoanMode === 'all' ? [] : [period.opening]),
+      period.withdrawn,
+      period.repaid,
+      period.closing,
+    ]
+  })
+  const loanChartExportTotals = filteredAccounts.reduce(
+    (totals, account) => {
+      const period = loanPeriodRows.get(account.id)
+      if (!period) return totals
+      return {
+        opening: totals.opening + period.opening,
+        withdrawn: totals.withdrawn + period.withdrawn,
+        repaid: totals.repaid + period.repaid,
+        closing: totals.closing + period.closing,
+      }
+    },
+    { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
+  )
+
+  function handlePrintLoanChart() {
+    const money = (value: number) => formatCurrency(value, currency)
+    const firstNumeric = 2
+    openPrintWindow(
+      buildLoanStatementHtml({
+        title: 'Loan Chart Statement',
+        subtitle: `Loan Chart Statement — ${loanPeriodLabel}`,
+        headers: ['SL', ...loanChartExportHeaders],
+        numericColumns: loanChartExportHeaders.slice(firstNumeric).map((_, index) => index + firstNumeric + 1),
+        rows: loanChartExportRows.map((row, index) => [
+          String(index + 1),
+          ...row.map((value, column) => (column >= firstNumeric ? money(Number(value)) : String(value) || '-')),
+        ]),
+        totals: [
+          '',
+          'Total',
+          '',
+          ...(effectiveLoanMode === 'all' ? [] : [money(loanChartExportTotals.opening)]),
+          money(loanChartExportTotals.withdrawn),
+          money(loanChartExportTotals.repaid),
+          money(loanChartExportTotals.closing),
+        ],
+      })
+    )
+  }
+
+  // One member's ledger for the selected period: opening balance carried in,
+  // every counted withdrawal/repayment oldest-first with a running balance,
+  // closing balance at the bottom. Rejected entries are left out, same as
+  // the chart totals (isCountedEntry).
+  function handlePrintMemberStatement(account: LoanAccountRecord) {
+    const money = (value: number) => formatCurrency(value, currency)
+    const period = loanPeriodRows.get(account.id) ?? { opening: 0, withdrawn: 0, repaid: 0, closing: 0 }
+    const entries = loanTransactions
+      .filter((entry) => entry.loanAccountId === account.id && isCountedEntry(entry) && isInLoanPeriod(entry.date))
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))
+    let balance = period.opening
+    const rows: string[][] = []
+    if (effectiveLoanMode !== 'all') rows.push(['', '', 'Opening balance', '', '', '', money(balance)])
+    entries.forEach((entry, index) => {
+      balance += entry.type === 'withdrawal' ? entry.amount : -entry.amount
+      rows.push([
+        String(index + 1),
+        formatDate(entry.date),
+        loanTransactionTypeLabel(entry),
+        entry.note || '-',
+        entry.type === 'withdrawal' ? money(entry.amount) : '',
+        entry.type === 'repayment' ? money(entry.amount) : '',
+        money(balance),
+      ])
+    })
+    openPrintWindow(
+      buildLoanStatementHtml({
+        title: `Loan Statement - ${account.memberName}`,
+        subtitle: `Loan Statement — ${loanPeriodLabel}`,
+        meta: [
+          `Member: ${account.memberName}`,
+          [account.phone ? `Phone: ${account.phone}` : '', account.address ? `Address: ${account.address}` : ''].filter(Boolean).join(' · '),
+        ].filter(Boolean),
+        headers: ['SL', 'Date', 'Type', 'Note', 'Withdrawn', 'Repaid', 'Balance'],
+        numericColumns: [4, 5, 6],
+        rows,
+        totals: ['', '', 'Closing balance', '', money(period.withdrawn), money(period.repaid), money(period.closing)],
+      })
+    )
+  }
 
   function openCreateAccount() {
     setEditingAccountId(null)
@@ -912,7 +1117,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
             <div>
               <p className="text-sm font-medium text-foreground">Reporting period — {loanPeriodLabel}</p>
               <p className="text-xs text-muted-foreground">
-                Pick a month or a day — the cards, the Loan Chart and both transaction lists below show that period's totals.
+                Pick a month, a day or a custom date range — the cards, the Loan Chart and both transaction lists below show that period's totals.
               </p>
             </div>
             <div className="flex flex-col flex-wrap gap-3 sm:flex-row sm:items-center">
@@ -921,6 +1126,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <SelectContent>
                   <SelectItem value="monthly">Monthly</SelectItem>
                   <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="range">Custom range</SelectItem>
                   <SelectItem value="all">All time</SelectItem>
                 </SelectContent>
               </Select>
@@ -928,6 +1134,12 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <Input className="w-full sm:w-48" type="date" value={loanDate} onChange={(event) => setLoanDate(event.target.value)} />
               ) : loanMode === 'monthly' ? (
                 <Input className="w-full sm:w-48" type="month" value={loanMonth} onChange={(event) => setLoanMonth(event.target.value)} />
+              ) : loanMode === 'range' ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input className="w-full sm:w-44" type="date" aria-label="From date" value={loanRangeFrom} onChange={(event) => setLoanRangeFrom(event.target.value)} />
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <Input className="w-full sm:w-44" type="date" aria-label="To date" value={loanRangeTo} onChange={(event) => setLoanRangeTo(event.target.value)} />
+                </div>
               ) : null}
             </div>
           </div>
@@ -1039,6 +1251,15 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} className="pl-9" placeholder="Search member" />
               </div>
+              <ExportMenu
+                filenameBase={`loan-chart-${loanPeriodLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`}
+                title={`Loan Chart Statement — ${loanPeriodLabel}`}
+                headers={loanChartExportHeaders}
+                rows={loanChartExportRows}
+              />
+              <Button variant="outline" size="sm" className="rounded-xl" onClick={handlePrintLoanChart} disabled={filteredAccounts.length === 0}>
+                <Printer className="mr-2 h-4 w-4" /> Print
+              </Button>
               <Button variant="outline" onClick={() => openCreateTransaction('withdrawal')}>
                 <ArrowUpCircle className="mr-2 h-4 w-4" /> New Loan Withdrawal
               </Button>
@@ -1111,6 +1332,9 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                               <DropdownMenuItem onClick={() => toggleSchedule(account.id)}>
                                 <CalendarClock className="mr-2 h-4 w-4" />
                                 {scheduleAccountId === account.id ? 'Hide monthly schedule' : 'Monthly schedule'}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handlePrintMemberStatement(account)}>
+                                <Printer className="mr-2 h-4 w-4" /> Print statement
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => openEditAccount(account)}>
                                 <Pencil className="mr-2 h-4 w-4" /> Edit

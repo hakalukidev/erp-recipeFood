@@ -56,6 +56,7 @@ import {
 import { useERP } from '@/lib/erp/provider'
 import type {
   FinishedGoodsRecord,
+  MaterialPurchaseRecord,
   PackagingType,
   ProductionBatchRecord,
   PurchaseMaterialCategory,
@@ -197,17 +198,18 @@ function formFromFinishedGoods(item: FinishedGoodsRecord): FinishedGoodsFormStat
   }
 }
 
-// ---- Production entry dialog ---------------------------------------------
-type ProductionOutputDraft = {
+// ---- Material purchase dialog (2026-10-13) --------------------------------
+// Production Entry tab's "New Material Purchase": qty Kg × rate per Kg =
+// amount, no vendor/payment/stock — see MaterialPurchaseRecord in types.ts.
+type MaterialPurchaseLineDraft = {
   key: string
-  finishedGoodsId?: string
-  finishedGoodsName: string
-  qtyProduced: string
-  unitWeightKg: string
+  materialName: string
+  qtyKg: string
+  ratePerKg: string
 }
 
-function emptyProductionOutput(): ProductionOutputDraft {
-  return { key: createId('line'), finishedGoodsName: '', qtyProduced: '0', unitWeightKg: '0' }
+function emptyMaterialPurchaseLine(): MaterialPurchaseLineDraft {
+  return { key: createId('line'), materialName: '', qtyKg: '', ratePerKg: '' }
 }
 
 // ---- Purchase entry dialog --------------------------------------------------
@@ -369,7 +371,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; description: string }> = [
   { id: 'ledger', label: 'Ledger Overview', description: 'Vendor-wise due + product-wise stock, side by side' },
   { id: 'factoryStock', label: 'Factory Stock', description: 'Product-wise: purchased, sold to dealers, remaining' },
   { id: 'materials', label: 'Materials & Stock', description: 'Raw + packaging material stock and low-stock alerts' },
-  { id: 'production', label: 'Production Entry', description: 'Raw material repacked into Finished Goods pack sizes' },
+  { id: 'production', label: 'Production Entry', description: 'Material purchase record — date, material, Kg and rate' },
   { id: 'finishedGoods', label: 'Finished Goods', description: 'Production output stock, ready for Rate Card invoicing' },
 ]
 
@@ -387,8 +389,9 @@ export default function PurchasePage() {
     deleteMaterialUsage,
     saveFinishedGoods,
     deleteFinishedGoods,
-    createProductionBatch,
     deleteProductionBatch,
+    saveMaterialPurchaseRecord,
+    deleteMaterialPurchaseRecord,
   } = useERP()
 
   const vendors = useMemo(() => sortByCreatedAtDesc(toArray(data?.vendors)), [data?.vendors])
@@ -412,6 +415,13 @@ export default function PurchasePage() {
   const finishedGoodsList = useMemo(() => sortByCreatedAtDesc(toArray(data?.finishedGoods)), [data?.finishedGoods])
   const finishedGoodsById = useMemo(() => new Map(finishedGoodsList.map((item) => [item.id, item])), [finishedGoodsList])
   const productionBatches = useMemo(() => sortByCreatedAtDesc(toArray(data?.productionBatches)), [data?.productionBatches])
+  const materialPurchaseRecords = useMemo(
+    () =>
+      sortByCreatedAtDesc(toArray(data?.materialPurchaseRecords)).sort((left, right) =>
+        right.date.localeCompare(left.date)
+      ),
+    [data?.materialPurchaseRecords]
+  )
   // "পুরনো ডিলার ইনভয়েসের stock reconciliation" (2026-09-12) — negative
   // stock a Rate Card invoice caused, auto-linked/resolved against later
   // Production output. Open ones first, then resolved ones (newest first
@@ -449,15 +459,6 @@ export default function PurchasePage() {
   const rawMaterialOptions: ComboboxOption[] = useMemo(
     () => rawMaterials.map((material) => ({ value: material.id, label: material.name, sublabel: `${formatQty(material.stockQty)} Kg in stock` })),
     [rawMaterials]
-  )
-  const finishedGoodsOptions: ComboboxOption[] = useMemo(
-    () =>
-      finishedGoodsList.map((item) => ({
-        value: item.id,
-        label: item.name,
-        sublabel: item.packSize ? `${item.packSize} · ${formatQty(item.stockQty)} in stock` : `${formatQty(item.stockQty)} in stock`,
-      })),
-    [finishedGoodsList]
   )
   const productNameOptions: ComboboxOption[] = useMemo(() => {
     const seen = new Set<string>()
@@ -655,14 +656,16 @@ export default function PurchasePage() {
     }
   }
 
-  // ---- Production entry --------------------------------------------------------
-  const [productionDialogOpen, setProductionDialogOpen] = useState(false)
-  const [productionRawMaterialId, setProductionRawMaterialId] = useState('')
-  const [productionDate, setProductionDate] = useState(dhakaTodayIso())
-  const [productionOutputs, setProductionOutputs] = useState<ProductionOutputDraft[]>([emptyProductionOutput()])
-  const [productionNote, setProductionNote] = useState('')
-  const [productionSaving, setProductionSaving] = useState(false)
-  const [productionFormError, setProductionFormError] = useState<string | null>(null)
+  // ---- Material purchase (Production Entry tab) ---------------------------------
+  // Month filter for the list + the month-wise Kg-per-material summary; '' = all.
+  const [materialPurchaseMonth, setMaterialPurchaseMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [materialPurchaseDialogOpen, setMaterialPurchaseDialogOpen] = useState(false)
+  const [editingMaterialPurchase, setEditingMaterialPurchase] = useState<MaterialPurchaseRecord | null>(null)
+  const [materialPurchaseDate, setMaterialPurchaseDate] = useState(dhakaTodayIso())
+  const [materialPurchaseLines, setMaterialPurchaseLines] = useState<MaterialPurchaseLineDraft[]>([emptyMaterialPurchaseLine()])
+  const [materialPurchaseNote, setMaterialPurchaseNote] = useState('')
+  const [materialPurchaseSaving, setMaterialPurchaseSaving] = useState(false)
+  const [materialPurchaseFormError, setMaterialPurchaseFormError] = useState<string | null>(null)
 
   const filteredProductionBatches = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -672,85 +675,129 @@ export default function PurchasePage() {
     )
   }, [productionBatches, query])
 
-  const productionRawMaterial = useMemo(
-    () => (productionRawMaterialId ? data?.purchaseMaterials[productionRawMaterialId] : undefined),
-    [data?.purchaseMaterials, productionRawMaterialId]
-  )
-  const productionRawKgTotal = useMemo(
+  const monthMaterialPurchases = useMemo(
     () =>
-      productionOutputs.reduce(
-        (sum, output) => sum + (Number(output.qtyProduced) || 0) * (Number(output.unitWeightKg) || 0),
-        0
-      ),
-    [productionOutputs]
+      materialPurchaseMonth
+        ? materialPurchaseRecords.filter((record) => record.date.slice(0, 7) === materialPurchaseMonth)
+        : materialPurchaseRecords,
+    [materialPurchaseRecords, materialPurchaseMonth]
+  )
+  const filteredMaterialPurchases = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return monthMaterialPurchases
+    return monthMaterialPurchases.filter((record) =>
+      [record.entryNumber, record.note ?? '', ...record.items.map((item) => item.materialName)]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalized)
+    )
+  }, [monthMaterialPurchases, query])
+  // Month-wise "কত কেজি কোন কাঁচামাল" — grouped by name, case/space-insensitive.
+  const materialPurchaseSummary = useMemo(() => {
+    const map = new Map<string, { name: string; qtyKg: number; amount: number }>()
+    for (const record of monthMaterialPurchases) {
+      for (const item of record.items) {
+        const key = item.materialName.trim().toLowerCase().replace(/\s+/g, ' ')
+        const row = map.get(key) ?? { name: item.materialName.trim(), qtyKg: 0, amount: 0 }
+        row.qtyKg += item.qtyKg
+        row.amount += item.amount
+        map.set(key, row)
+      }
+    }
+    return Array.from(map.values()).sort((left, right) => right.qtyKg - left.qtyKg)
+  }, [monthMaterialPurchases])
+  const materialPurchaseNameSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...rawMaterials.map((material) => material.name),
+          ...materialPurchaseRecords.flatMap((record) => record.items.map((item) => item.materialName)),
+        ])
+      ).sort((a, b) => a.localeCompare(b)),
+    [rawMaterials, materialPurchaseRecords]
   )
 
-  function openCreateProductionDialog() {
-    setProductionRawMaterialId('')
-    setProductionDate(dhakaTodayIso())
-    setProductionOutputs([emptyProductionOutput()])
-    setProductionNote('')
-    setProductionFormError(null)
+  function openCreateMaterialPurchaseDialog() {
+    setEditingMaterialPurchase(null)
+    setMaterialPurchaseDate(dhakaTodayIso())
+    setMaterialPurchaseLines([emptyMaterialPurchaseLine()])
+    setMaterialPurchaseNote('')
+    setMaterialPurchaseFormError(null)
     setFeedback(null)
-    setProductionDialogOpen(true)
+    setMaterialPurchaseDialogOpen(true)
   }
 
-  function updateProductionOutput(key: string, patch: Partial<ProductionOutputDraft>) {
-    setProductionOutputs((current) => current.map((output) => (output.key === key ? { ...output, ...patch } : output)))
-  }
-
-  function selectProductionOutput(key: string, finishedGoodsId: string) {
-    const finishedGoods = finishedGoodsById.get(finishedGoodsId)
-    updateProductionOutput(key, {
-      finishedGoodsId,
-      finishedGoodsName: finishedGoods?.name ?? '',
-      unitWeightKg: finishedGoods?.unitWeightKg ? String(finishedGoods.unitWeightKg) : '0',
-    })
-  }
-
-  function addProductionOutput() {
-    setProductionOutputs((current) => [...current, emptyProductionOutput()])
-  }
-
-  function removeProductionOutput(key: string) {
-    setProductionOutputs((current) => (current.length > 1 ? current.filter((output) => output.key !== key) : current))
-  }
-
-  async function handleSaveProductionBatch() {
-    setProductionFormError(null)
-
-    if (!productionRawMaterialId) {
-      setProductionFormError('Pick the raw material this batch repacks.')
-      return
-    }
-
-    const outputs = productionOutputs
-      .filter((output) => output.finishedGoodsId && (Number(output.qtyProduced) || 0) > 0)
-      .map((output) => ({
-        finishedGoodsId: output.finishedGoodsId as string,
-        qtyProduced: Number(output.qtyProduced) || 0,
-        unitWeightKg: Number(output.unitWeightKg) || 0,
+  function openEditMaterialPurchaseDialog(record: MaterialPurchaseRecord) {
+    setEditingMaterialPurchase(record)
+    setMaterialPurchaseDate(record.date)
+    setMaterialPurchaseLines(
+      record.items.map((item) => ({
+        key: createId('line'),
+        materialName: item.materialName,
+        qtyKg: String(item.qtyKg),
+        ratePerKg: String(item.ratePerKg),
       }))
+    )
+    setMaterialPurchaseNote(record.note ?? '')
+    setMaterialPurchaseFormError(null)
+    setFeedback(null)
+    setMaterialPurchaseDialogOpen(true)
+  }
 
-    if (outputs.length === 0) {
-      setProductionFormError('Pick at least one finished goods pack size and enter a quantity produced.')
+  function updateMaterialPurchaseLine(key: string, patch: Partial<MaterialPurchaseLineDraft>) {
+    setMaterialPurchaseLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
+  }
+
+  function removeMaterialPurchaseLine(key: string) {
+    setMaterialPurchaseLines((current) => (current.length > 1 ? current.filter((line) => line.key !== key) : current))
+  }
+
+  async function handleSaveMaterialPurchase() {
+    setMaterialPurchaseFormError(null)
+    const filled = materialPurchaseLines.filter(
+      (line) => line.materialName.trim() || Number(line.qtyKg) || Number(line.ratePerKg)
+    )
+    if (filled.length === 0) {
+      setMaterialPurchaseFormError('Add at least one material with its quantity and rate.')
+      return
+    }
+    const invalid = filled.find((line) => !line.materialName.trim() || !(Number(line.qtyKg) > 0) || !(Number(line.ratePerKg) >= 0) || line.ratePerKg === '')
+    if (invalid) {
+      setMaterialPurchaseFormError('Every material line needs a name, a quantity above 0 and a rate per Kg.')
       return
     }
 
-    setProductionSaving(true)
+    setMaterialPurchaseSaving(true)
     try {
-      await createProductionBatch({
-        rawMaterialId: productionRawMaterialId,
-        date: productionDate,
-        note: productionNote.trim() || undefined,
-        outputs,
-      })
-      setProductionDialogOpen(false)
-      setFeedback('Production batch recorded — raw material and finished goods stock updated.')
+      await saveMaterialPurchaseRecord(
+        {
+          date: materialPurchaseDate,
+          note: materialPurchaseNote.trim() || undefined,
+          items: filled.map((line) => ({
+            materialName: line.materialName.trim(),
+            qtyKg: Number(line.qtyKg),
+            ratePerKg: Number(line.ratePerKg),
+          })),
+        },
+        editingMaterialPurchase?.id
+      )
+      setMaterialPurchaseDialogOpen(false)
+      setFeedback(editingMaterialPurchase ? 'Material purchase updated.' : 'Material purchase recorded.')
     } catch (reason) {
-      setProductionFormError(reason instanceof Error ? reason.message : 'Unable to record production batch.')
+      setMaterialPurchaseFormError(reason instanceof Error ? reason.message : 'Unable to save material purchase.')
     } finally {
-      setProductionSaving(false)
+      setMaterialPurchaseSaving(false)
+    }
+  }
+
+  async function handleDeleteMaterialPurchase(record: MaterialPurchaseRecord) {
+    if (!window.confirm(`Delete material purchase ${record.entryNumber}?`)) return
+    setFeedback(null)
+    try {
+      await deleteMaterialPurchaseRecord(record.id)
+      setFeedback(`Deleted material purchase ${record.entryNumber}.`)
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete material purchase.')
     }
   }
 
@@ -1690,29 +1737,27 @@ export default function PurchasePage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
-                  <p className="text-sm text-muted-foreground">Production batches</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">{productionBatches.length.toLocaleString('en-BD')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Raw material repacked into Finished Goods</p>
+                  <p className="text-sm text-muted-foreground">Material purchase entries</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-tight">{monthMaterialPurchases.length.toLocaleString('en-BD')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{materialPurchaseMonth ? `In ${materialPurchaseMonth}` : 'All time'}</p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
-                  <p className="text-sm text-muted-foreground">Raw material consumed</p>
+                  <p className="text-sm text-muted-foreground">Material bought</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight">
-                    {formatQty(productionBatches.reduce((sum, batch) => sum + batch.rawKgConsumedTotal, 0))} Kg
+                    {formatQty(monthMaterialPurchases.reduce((sum, record) => sum + record.totalQtyKg, 0))} Kg
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">Sum of every batch's raw Kg used</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Sum of every material line&apos;s Kg</p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
                 <CardContent className="p-5">
-                  <p className="text-sm text-muted-foreground">Finished units produced</p>
+                  <p className="text-sm text-muted-foreground">Purchase value</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight">
-                    {productionBatches
-                      .reduce((sum, batch) => sum + batch.outputs.reduce((s, o) => s + o.qtyProduced, 0), 0)
-                      .toLocaleString('en-BD')}
+                    ৳ {formatAmount(monthMaterialPurchases.reduce((sum, record) => sum + record.totalAmount, 0))}
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">Across every pack size, every batch</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Qty × rate — record only, no vendor due or payment</p>
                 </CardContent>
               </Card>
             </div>
@@ -1720,83 +1765,113 @@ export default function PurchasePage() {
             <Card className="border-border/70 shadow-sm">
               <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <CardTitle>Production Entry</CardTitle>
+                  <CardTitle>Material Purchase</CardTitle>
                   <CardDescription>
-                    Pick a raw material, then repack it into one or more Finished Goods pack sizes — raw material
-                    stock drops by the Kg used, each pack size's Finished Goods stock rises by the qty produced, and
-                    whatever raw material is left over just stays on the shelf.
+                    কাঁচামাল কেনার আলাদা হিসাব — date, material, Kg and rate. This doesn&apos;t touch vendors, payments,
+                    due, Factory Stock or raw material stock.
                   </CardDescription>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[minmax(200px,1fr)_auto]">
+                <div className="grid gap-3 sm:grid-cols-[auto_minmax(200px,1fr)_auto]">
+                  <Input
+                    type="month"
+                    value={materialPurchaseMonth}
+                    onChange={(event) => setMaterialPurchaseMonth(event.target.value)}
+                    className="h-10 w-full sm:w-44"
+                    aria-label="Month"
+                    title="Clear to show all months"
+                  />
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
                       className="pl-9"
-                      placeholder="Search batch no or raw material"
+                      placeholder="Search entry no or material"
                     />
                   </div>
-                  <Button
-                    onClick={openCreateProductionDialog}
-                    className="h-10 rounded-xl"
-                    disabled={rawMaterials.length === 0 || finishedGoodsList.length === 0}
-                  >
+                  <Button onClick={openCreateMaterialPurchaseDialog} className="h-10 rounded-xl">
                     <Plus className="mr-2 h-4 w-4" />
-                    New Production
+                    New Material Purchase
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
-                {rawMaterials.length === 0 ? (
-                  <div className="mb-4 rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-                    Add at least one raw material on the Materials & Stock tab before recording production.
-                  </div>
-                ) : finishedGoodsList.length === 0 ? (
-                  <div className="mb-4 rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
-                    Add at least one pack size on the Finished Goods tab before recording production.
+              <CardContent className="space-y-6">
+                {materialPurchaseSummary.length > 0 ? (
+                  <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+                    <p className="mb-3 text-sm font-medium">
+                      Material-wise total {materialPurchaseMonth ? `— ${materialPurchaseMonth}` : '— all months'}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {materialPurchaseSummary.map((row) => (
+                        <div key={row.name} className="rounded-xl border border-border/60 bg-background px-3 py-2 text-sm">
+                          <span className="font-medium">{row.name}</span>
+                          <span className="ml-2 tabular-nums text-muted-foreground">
+                            {formatQty(row.qtyKg)} Kg · ৳ {formatAmount(row.amount)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
+
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableHead>Batch No</TableHead>
-                        <TableHead>Raw Material</TableHead>
+                        <TableHead>Entry No</TableHead>
                         <TableHead>Date</TableHead>
-                        <TableHead>Output</TableHead>
-                        <TableHead className="text-right">Raw Kg Used</TableHead>
+                        <TableHead>Materials</TableHead>
+                        <TableHead className="text-right">Total Kg</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredProductionBatches.map((batch) => (
-                        <TableRow key={batch.id}>
-                          <TableCell className="font-medium">{batch.batchNumber}<RecordApprovalTag record={batch} /></TableCell>
-                          <TableCell>{batch.rawMaterialName}</TableCell>
-                          <TableCell>{formatDate(batch.date)}</TableCell>
-                          <TableCell className="max-w-64 truncate text-muted-foreground">
-                            {batch.outputs.map((output) => `${output.finishedGoodsName} (${output.qtyProduced})`).join(', ')}
+                      {filteredMaterialPurchases.map((record) => (
+                        <TableRow key={record.id}>
+                          <TableCell className="font-medium">
+                            {record.entryNumber}
+                            {record.note ? <p className="max-w-48 truncate text-xs font-normal text-muted-foreground">{record.note}</p> : null}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">{formatQty(batch.rawKgConsumedTotal)} Kg</TableCell>
+                          <TableCell>{formatDate(record.date)}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {record.items.map((item, index) => (
+                              <p key={index} className="whitespace-nowrap">
+                                {item.materialName}: {formatQty(item.qtyKg)} Kg × ৳ {formatAmount(item.ratePerKg)} = ৳ {formatAmount(item.amount)}
+                              </p>
+                            ))}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{formatQty(record.totalQtyKg)} Kg</TableCell>
+                          <TableCell className="text-right tabular-nums">৳ {formatAmount(record.totalAmount)}</TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                              onClick={() => handleDeleteProductionBatch(batch)}
-                              aria-label={`Delete production batch ${batch.batchNumber}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground"
+                                onClick={() => openEditMaterialPurchaseDialog(record)}
+                                aria-label={`Edit material purchase ${record.entryNumber}`}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => void handleDeleteMaterialPurchase(record)}
+                                aria-label={`Delete material purchase ${record.entryNumber}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
-                      {filteredProductionBatches.length === 0 ? (
+                      {filteredMaterialPurchases.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                            <Factory className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                            No production batches recorded yet.
+                            <Boxes className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                            No material purchases recorded{materialPurchaseMonth ? ' for this month' : ''} yet.
                           </TableCell>
                         </TableRow>
                       ) : null}
@@ -1805,6 +1880,20 @@ export default function PurchasePage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Earlier production batches (raw material → Finished Goods) stay
+                listed so they can still be reviewed or deleted; new batches
+                are no longer created from this tab (2026-10-13). */}
+            {productionBatches.length > 0 ? (
+              <Card className="border-border/70 shadow-sm">
+                <CardHeader>
+                  <CardTitle>Earlier production batches</CardTitle>
+                  <CardDescription>Recorded before this tab switched to material purchases. Deleting one reverses its stock.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
         ) : null}
 
@@ -2692,18 +2781,18 @@ export default function PurchasePage() {
       </Dialog>
 
       {/* ---- New production batch dialog ---- */}
-      <Dialog open={productionDialogOpen} onOpenChange={setProductionDialogOpen}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-4xl overflow-y-auto p-0 sm:max-h-[calc(100dvh-3rem)]">
+      <Dialog open={materialPurchaseDialogOpen} onOpenChange={setMaterialPurchaseDialogOpen}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto p-0 sm:max-h-[calc(100dvh-3rem)]">
           <DialogHeader className="border-b border-border/60 px-6 pb-4 pt-6">
             <div className="flex items-center gap-3">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Factory className="h-4.5 w-4.5" />
+                <Boxes className="h-4.5 w-4.5" />
               </span>
               <div>
-                <DialogTitle>New production batch</DialogTitle>
-                <DialogDescription>
-                  Pick the raw material, then add every pack size it's being repacked into with the qty produced.
-                </DialogDescription>
+                <DialogTitle>
+                  {editingMaterialPurchase ? `Edit material purchase — ${editingMaterialPurchase.entryNumber}` : 'New Material Purchase'}
+                </DialogTitle>
+                <DialogDescription>কাঁচামাল কেনার রেকর্ড তৈরি করুন</DialogDescription>
               </div>
             </div>
           </DialogHeader>
@@ -2711,128 +2800,123 @@ export default function PurchasePage() {
           <div className="space-y-5 px-6 pb-6">
             <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-4 sm:grid-cols-2">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Raw material</label>
-                <Combobox
-                  options={rawMaterialOptions}
-                  value={productionRawMaterialId}
-                  onChange={setProductionRawMaterialId}
-                  placeholder="Select raw material"
-                  searchPlaceholder="Search raw materials..."
-                  emptyText="No raw materials found — add one in Materials & Stock first."
-                />
-                {productionRawMaterial ? (
-                  <p className="text-xs text-muted-foreground">
-                    {formatQty(productionRawMaterial.stockQty)} Kg currently in stock
-                    {productionRawKgTotal > productionRawMaterial.stockQty ? (
-                      <span className="text-destructive"> — this batch uses more than what's on hand</span>
-                    ) : null}
-                  </p>
-                ) : null}
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Production Date</label>
+                <label className="text-xs font-medium text-muted-foreground">Purchase Date *</label>
                 <Input
                   type="date"
-                  value={productionDate}
-                  onChange={(event) => setProductionDate(event.target.value)}
+                  value={materialPurchaseDate}
+                  onChange={(event) => setMaterialPurchaseDate(event.target.value)}
                   className="bg-background"
                 />
               </div>
             </div>
 
-            {/* Cards, not a <Table>, on purpose — the Combobox's dropdown is
-                absolutely positioned relative to this row, and a horizontally
-                scrolling table clips that popover to a sliver instead of
-                letting it float over the rest of the row. */}
-            <div className="space-y-3">
-              {productionOutputs.map((output, index) => (
-                <div key={output.key} className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                      {index + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <Combobox
-                        options={finishedGoodsOptions}
-                        value={output.finishedGoodsId ?? ''}
-                        onChange={(value) => selectProductionOutput(output.key, value)}
-                        placeholder="Select pack size"
-                        searchPlaceholder="Search finished goods..."
-                        emptyText="No finished goods found — add one in the Finished Goods tab first."
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => removeProductionOutput(output.key)}
-                      aria-label="Remove output line"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-muted-foreground">Qty produced</label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={output.qtyProduced}
-                        onChange={(event) => updateProductionOutput(output.key, { qtyProduced: event.target.value })}
-                        className="bg-background"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-muted-foreground">Raw Kg per unit</label>
-                      <Input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={output.unitWeightKg}
-                        onChange={(event) => updateProductionOutput(output.key, { unitWeightKg: event.target.value })}
-                        className="bg-background"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-muted-foreground">Raw Kg consumed</label>
-                      <p className="flex h-9 items-center justify-end rounded-md border border-transparent px-3 text-sm font-medium tabular-nums">
-                        {formatQty((Number(output.qtyProduced) || 0) * (Number(output.unitWeightKg) || 0))} Kg
-                      </p>
-                    </div>
-                  </div>
-                </div>
+            <datalist id="material-purchase-suggestions">
+              {materialPurchaseNameSuggestions.map((name) => (
+                <option key={name} value={name} />
               ))}
-              <Button type="button" variant="outline" size="sm" onClick={addProductionOutput}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add pack size
-              </Button>
+            </datalist>
+            <div className="space-y-3">
+              {materialPurchaseLines.map((line, index) => {
+                const qtyKg = Number(line.qtyKg) || 0
+                const ratePerKg = Number(line.ratePerKg) || 0
+                return (
+                  <div key={line.key} className="space-y-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <label className="text-xs text-muted-foreground">Type of Materials *</label>
+                        <Input
+                          list="material-purchase-suggestions"
+                          value={line.materialName}
+                          onChange={(event) => updateMaterialPurchaseLine(line.key, { materialName: event.target.value })}
+                          placeholder="যেমন: হলুদ"
+                          className="bg-background"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="mt-5 h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => removeMaterialPurchaseLine(line.key)}
+                        aria-label="Remove material"
+                        disabled={materialPurchaseLines.length === 1}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
 
-              <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
-                <p className="text-xs text-muted-foreground">Total raw material consumed</p>
-                <p className="text-lg font-semibold">{formatQty(productionRawKgTotal)} Kg</p>
-              </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Qty (Kg) *</label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={line.qtyKg}
+                          onChange={(event) => updateMaterialPurchaseLine(line.key, { qtyKg: event.target.value })}
+                          placeholder="0"
+                          className="bg-background"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Rate (per Kg) *</label>
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={line.ratePerKg}
+                          onChange={(event) => updateMaterialPurchaseLine(line.key, { ratePerKg: event.target.value })}
+                          placeholder="0"
+                          className="bg-background"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Amount</label>
+                        <p className="flex h-9 items-center justify-end rounded-md border border-border/60 bg-muted/30 px-3 text-sm font-medium tabular-nums">
+                          ৳ {formatAmount(roundMoney(qtyKg * ratePerKg))}
+                        </p>
+                        {qtyKg > 0 && ratePerKg > 0 ? (
+                          <p className="text-right text-[11px] text-muted-foreground">
+                            {formatQty(qtyKg)} কেজি × {formatQty(ratePerKg)} টাকা
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setMaterialPurchaseLines((current) => [...current, emptyMaterialPurchaseLine()])}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Materials
+              </Button>
 
               <div className="space-y-1">
                 <label className="text-xs font-medium text-muted-foreground">Note (optional)</label>
                 <Textarea
-                  value={productionNote}
-                  onChange={(event) => setProductionNote(event.target.value)}
-                  placeholder="Any remarks about this batch"
+                  value={materialPurchaseNote}
+                  onChange={(event) => setMaterialPurchaseNote(event.target.value)}
+                  placeholder="প্রয়োজনে মন্তব্য লিখুন..."
                   className="bg-background"
                 />
               </div>
             </div>
 
-            {productionFormError ? <p className="text-sm text-destructive">{productionFormError}</p> : null}
+            {materialPurchaseFormError ? <p className="text-sm text-destructive">{materialPurchaseFormError}</p> : null}
 
             <div className="flex justify-end gap-3 border-t border-border/60 pt-4">
-              <Button variant="outline" onClick={() => setProductionDialogOpen(false)}>
+              <Button variant="outline" onClick={() => setMaterialPurchaseDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => void handleSaveProductionBatch()} disabled={productionSaving}>
-                {productionSaving ? 'Saving…' : 'Record production'}
+              <Button onClick={() => void handleSaveMaterialPurchase()} disabled={materialPurchaseSaving}>
+                {materialPurchaseSaving ? 'Saving…' : editingMaterialPurchase ? 'Save changes' : 'Record Entry'}
               </Button>
             </div>
           </div>
