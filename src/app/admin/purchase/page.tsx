@@ -364,6 +364,102 @@ function buildPurchaseVoucherHtml(entry: PurchaseRecord, vendor?: VendorRecord, 
   `
 }
 
+type MaterialPurchasePeriod = 'month' | 'range' | 'date' | 'all'
+type MaterialSummaryRow = { name: string; qtyKg: number; amount: number; avgRate: number; entries: number; lastDate: string }
+type MaterialSummarySortKey = 'name' | 'qtyKg' | 'amount' | 'avgRate' | 'entries' | 'lastDate'
+
+// Printable material-wise purchase report for the selected period: the
+// summary (in whatever order it's sorted on screen) + every line date-wise.
+function buildMaterialPurchaseReportHtml(
+  periodLabel: string,
+  summary: MaterialSummaryRow[],
+  records: MaterialPurchaseRecord[],
+  search: string
+) {
+  const totalKg = summary.reduce((sum, row) => sum + row.qtyKg, 0)
+  const totalAmount = summary.reduce((sum, row) => sum + row.amount, 0)
+  const summaryRows = summary
+    .map(
+      (row, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(row.name)}</td>
+        <td class="numeric">${formatQty(row.qtyKg)} Kg</td>
+        <td class="numeric">${formatAmount(row.avgRate)}</td>
+        <td class="numeric">${formatAmount(row.amount)}</td>
+        <td class="numeric">${row.entries}</td>
+      </tr>
+    `
+    )
+    .join('')
+  const normalized = search.toLowerCase()
+  const detailRows = records
+    .flatMap((record) => {
+      const entryMatches = !normalized || [record.entryNumber, record.note ?? ''].join(' ').toLowerCase().includes(normalized)
+      return record.items
+        .filter((item) => entryMatches || item.materialName.toLowerCase().includes(normalized))
+        .map((item) => ({ record, item }))
+    })
+    .map(
+      ({ record, item }, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(formatDate(record.date))}</td>
+        <td>${escapeHtml(record.entryNumber)}</td>
+        <td>${escapeHtml(item.materialName)}</td>
+        <td class="numeric">${formatQty(item.qtyKg)} Kg</td>
+        <td class="numeric">${formatAmount(item.ratePerKg)}</td>
+        <td class="numeric">${formatAmount(item.amount)}</td>
+      </tr>
+    `
+    )
+    .join('')
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Material Purchase Report — ${escapeHtml(periodLabel)}</title>
+        <style>${PRINT_STYLES}</style>
+      </head>
+      <body>
+        <p class="title">${escapeHtml(COMPANY_NAME)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_ADDRESS)}</p>
+        <p class="company-meta">${escapeHtml(COMPANY_EMAIL)} &middot; Help Line: ${escapeHtml(COMPANY_HELPLINE)}</p>
+        <p class="subtitle">Material Purchase Report</p>
+        <table class="meta">
+          <tr><td>Period:</td><td>${escapeHtml(periodLabel)}</td></tr>
+          ${search ? `<tr><td>Filter:</td><td>${escapeHtml(search)}</td></tr>` : ''}
+          <tr><td>Total Kg:</td><td class="numeric hl">${formatQty(totalKg)} Kg</td></tr>
+          <tr><td>Total Amount:</td><td class="numeric hl">${formatAmount(totalAmount)}</td></tr>
+        </table>
+        <p class="section-heading">Material-wise Summary</p>
+        <table class="doc">
+          <thead>
+            <tr><th>SL</th><th>Material</th><th>Total Kg</th><th>Avg Rate / Kg</th><th>Amount</th><th>Lines</th></tr>
+          </thead>
+          <tbody>${summaryRows || '<tr><td colspan="6" style="text-align:center">No purchases in this period.</td></tr>'}</tbody>
+          <tr class="totals"><td colspan="2">Total</td><td class="numeric">${formatQty(totalKg)} Kg</td><td></td><td class="numeric">${formatAmount(totalAmount)}</td><td></td></tr>
+        </table>
+        ${
+          detailRows
+            ? `<p class="section-heading">Date-wise Details</p>
+        <table class="doc">
+          <thead>
+            <tr><th>SL</th><th>Date</th><th>Entry No</th><th>Material</th><th>Qty</th><th>Rate / Kg</th><th>Amount</th></tr>
+          </thead>
+          <tbody>${detailRows}</tbody>
+          <tr class="totals"><td colspan="4">Total</td><td class="numeric">${formatQty(totalKg)} Kg</td><td></td><td class="numeric">${formatAmount(totalAmount)}</td></tr>
+        </table>`
+            : ''
+        }
+        <script>window.addEventListener('load', function () { window.focus(); window.print(); });</script>
+      </body>
+    </html>
+  `
+}
+
 type SectionId = 'purchases' | 'ledger' | 'factoryStock' | 'materials' | 'production' | 'finishedGoods'
 
 const SECTIONS: Array<{ id: SectionId; label: string; description: string }> = [
@@ -657,8 +753,17 @@ export default function PurchasePage() {
   }
 
   // ---- Material purchase (Production Entry tab) ---------------------------------
-  // Month filter for the list + the month-wise Kg-per-material summary; '' = all.
+  // Period filter for the list + the material-wise Kg summary: a month, a
+  // custom from–to range, a single date, or all time (2026-10-13).
+  const [materialPurchasePeriod, setMaterialPurchasePeriod] = useState<MaterialPurchasePeriod>('month')
   const [materialPurchaseMonth, setMaterialPurchaseMonth] = useState(() => dhakaTodayIso().slice(0, 7))
+  const [materialPurchaseFrom, setMaterialPurchaseFrom] = useState(() => `${dhakaTodayIso().slice(0, 7)}-01`)
+  const [materialPurchaseTo, setMaterialPurchaseTo] = useState(() => dhakaTodayIso())
+  const [materialPurchaseDay, setMaterialPurchaseDay] = useState(() => dhakaTodayIso())
+  const [materialSummarySort, setMaterialSummarySort] = useState<{ key: MaterialSummarySortKey; dir: 'asc' | 'desc' }>({
+    key: 'qtyKg',
+    dir: 'desc',
+  })
   const [materialPurchaseDialogOpen, setMaterialPurchaseDialogOpen] = useState(false)
   const [editingMaterialPurchase, setEditingMaterialPurchase] = useState<MaterialPurchaseRecord | null>(null)
   const [materialPurchaseDate, setMaterialPurchaseDate] = useState(dhakaTodayIso())
@@ -675,12 +780,33 @@ export default function PurchasePage() {
     )
   }, [productionBatches, query])
 
+  const materialPurchasePeriodLabel = useMemo(() => {
+    switch (materialPurchasePeriod) {
+      case 'month':
+        return materialPurchaseMonth ? `Month ${materialPurchaseMonth}` : 'All time'
+      case 'range':
+        return `${materialPurchaseFrom ? formatDate(materialPurchaseFrom) : 'Start'} – ${materialPurchaseTo ? formatDate(materialPurchaseTo) : 'Today'}`
+      case 'date':
+        return materialPurchaseDay ? formatDate(materialPurchaseDay) : 'All time'
+      default:
+        return 'All time'
+    }
+  }, [materialPurchasePeriod, materialPurchaseMonth, materialPurchaseFrom, materialPurchaseTo, materialPurchaseDay])
   const monthMaterialPurchases = useMemo(
     () =>
-      materialPurchaseMonth
-        ? materialPurchaseRecords.filter((record) => record.date.slice(0, 7) === materialPurchaseMonth)
-        : materialPurchaseRecords,
-    [materialPurchaseRecords, materialPurchaseMonth]
+      materialPurchaseRecords.filter((record) => {
+        switch (materialPurchasePeriod) {
+          case 'month':
+            return !materialPurchaseMonth || record.date.slice(0, 7) === materialPurchaseMonth
+          case 'range':
+            return (!materialPurchaseFrom || record.date >= materialPurchaseFrom) && (!materialPurchaseTo || record.date <= materialPurchaseTo)
+          case 'date':
+            return !materialPurchaseDay || record.date === materialPurchaseDay
+          default:
+            return true
+        }
+      }),
+    [materialPurchaseRecords, materialPurchasePeriod, materialPurchaseMonth, materialPurchaseFrom, materialPurchaseTo, materialPurchaseDay]
   )
   const filteredMaterialPurchases = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -692,20 +818,52 @@ export default function PurchasePage() {
         .includes(normalized)
     )
   }, [monthMaterialPurchases, query])
-  // Month-wise "কত কেজি কোন কাঁচামাল" — grouped by name, case/space-insensitive.
+  // Material-wise "কোন কাঁচামাল কত কেজি কিনলাম" for the selected period —
+  // grouped by name (case/space-insensitive). A search that matches a
+  // material name narrows the summary to that material's lines only.
   const materialPurchaseSummary = useMemo(() => {
-    const map = new Map<string, { name: string; qtyKg: number; amount: number }>()
-    for (const record of monthMaterialPurchases) {
+    const normalized = query.trim().toLowerCase()
+    const map = new Map<string, MaterialSummaryRow>()
+    for (const record of filteredMaterialPurchases) {
+      const entryMatches = !normalized || [record.entryNumber, record.note ?? ''].join(' ').toLowerCase().includes(normalized)
       for (const item of record.items) {
+        if (!entryMatches && !item.materialName.toLowerCase().includes(normalized)) continue
         const key = item.materialName.trim().toLowerCase().replace(/\s+/g, ' ')
-        const row = map.get(key) ?? { name: item.materialName.trim(), qtyKg: 0, amount: 0 }
+        const row = map.get(key) ?? { name: item.materialName.trim(), qtyKg: 0, amount: 0, avgRate: 0, entries: 0, lastDate: '' }
         row.qtyKg += item.qtyKg
         row.amount += item.amount
+        row.entries += 1
+        if (record.date > row.lastDate) row.lastDate = record.date
         map.set(key, row)
       }
     }
-    return Array.from(map.values()).sort((left, right) => right.qtyKg - left.qtyKg)
-  }, [monthMaterialPurchases])
+    const rows = Array.from(map.values()).map((row) => ({ ...row, avgRate: row.qtyKg > 0 ? row.amount / row.qtyKg : 0 }))
+    const { key, dir } = materialSummarySort
+    const sign = dir === 'asc' ? 1 : -1
+    return rows.sort((left, right) =>
+      key === 'name' || key === 'lastDate'
+        ? sign * left[key].localeCompare(right[key])
+        : sign * (left[key] - right[key])
+    )
+  }, [filteredMaterialPurchases, query, materialSummarySort])
+
+  function toggleMaterialSummarySort(key: MaterialSummarySortKey) {
+    setMaterialSummarySort((current) =>
+      current.key === key ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }
+    )
+  }
+
+  function printMaterialPurchaseReport() {
+    openPrintWindow(
+      buildMaterialPurchaseReportHtml(
+        materialPurchasePeriodLabel,
+        materialPurchaseSummary,
+        [...filteredMaterialPurchases].sort((left, right) => left.date.localeCompare(right.date) || left.entryNumber.localeCompare(right.entryNumber)),
+        query.trim()
+      )
+    )
+  }
+
   const materialPurchaseNameSuggestions = useMemo(
     () =>
       Array.from(
@@ -1739,7 +1897,7 @@ export default function PurchasePage() {
                 <CardContent className="p-5">
                   <p className="text-sm text-muted-foreground">Material purchase entries</p>
                   <p className="mt-2 text-2xl font-semibold tracking-tight">{monthMaterialPurchases.length.toLocaleString('en-BD')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{materialPurchaseMonth ? `In ${materialPurchaseMonth}` : 'All time'}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{materialPurchasePeriodLabel}</p>
                 </CardContent>
               </Card>
               <Card className="border-border/70 shadow-sm">
@@ -1771,24 +1929,7 @@ export default function PurchasePage() {
                     due, Factory Stock or raw material stock.
                   </CardDescription>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[auto_minmax(200px,1fr)_auto]">
-                  <Input
-                    type="month"
-                    value={materialPurchaseMonth}
-                    onChange={(event) => setMaterialPurchaseMonth(event.target.value)}
-                    className="h-10 w-full sm:w-44"
-                    aria-label="Month"
-                    title="Clear to show all months"
-                  />
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      className="pl-9"
-                      placeholder="Search entry no or material"
-                    />
-                  </div>
+                <div className="flex flex-wrap items-center gap-3">
                   <Button onClick={openCreateMaterialPurchaseDialog} className="h-10 rounded-xl">
                     <Plus className="mr-2 h-4 w-4" />
                     New Material Purchase
@@ -1796,23 +1937,141 @@ export default function PurchasePage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {materialPurchaseSummary.length > 0 ? (
-                  <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
-                    <p className="mb-3 text-sm font-medium">
-                      Material-wise total {materialPurchaseMonth ? `— ${materialPurchaseMonth}` : '— all months'}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {materialPurchaseSummary.map((row) => (
-                        <div key={row.name} className="rounded-xl border border-border/60 bg-background px-3 py-2 text-sm">
-                          <span className="font-medium">{row.name}</span>
-                          <span className="ml-2 tabular-nums text-muted-foreground">
-                            {formatQty(row.qtyKg)} Kg · ৳ {formatAmount(row.amount)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Select value={materialPurchasePeriod} onValueChange={(value) => setMaterialPurchasePeriod(value as MaterialPurchasePeriod)}>
+                    <SelectTrigger className="h-10 w-40" aria-label="Period">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="month">Month-wise</SelectItem>
+                      <SelectItem value="range">Custom range</SelectItem>
+                      <SelectItem value="date">Single date</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {materialPurchasePeriod === 'month' ? (
+                    <Input
+                      type="month"
+                      value={materialPurchaseMonth}
+                      onChange={(event) => setMaterialPurchaseMonth(event.target.value)}
+                      className="h-10 w-44"
+                      aria-label="Month"
+                    />
+                  ) : null}
+                  {materialPurchasePeriod === 'range' ? (
+                    <>
+                      <Input
+                        type="date"
+                        value={materialPurchaseFrom}
+                        onChange={(event) => setMaterialPurchaseFrom(event.target.value)}
+                        className="h-10 w-44"
+                        aria-label="From date"
+                      />
+                      <span className="text-sm text-muted-foreground">to</span>
+                      <Input
+                        type="date"
+                        value={materialPurchaseTo}
+                        onChange={(event) => setMaterialPurchaseTo(event.target.value)}
+                        className="h-10 w-44"
+                        aria-label="To date"
+                      />
+                    </>
+                  ) : null}
+                  {materialPurchasePeriod === 'date' ? (
+                    <Input
+                      type="date"
+                      value={materialPurchaseDay}
+                      onChange={(event) => setMaterialPurchaseDay(event.target.value)}
+                      className="h-10 w-44"
+                      aria-label="Date"
+                    />
+                  ) : null}
+                  <div className="relative min-w-[200px] flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      className="h-10 pl-9"
+                      placeholder="Search entry no or material"
+                    />
                   </div>
-                ) : null}
+                  <Button variant="outline" onClick={printMaterialPurchaseReport} className="h-10 rounded-xl">
+                    <Printer className="mr-2 h-4 w-4" />
+                    Print Report
+                  </Button>
+                </div>
+
+                <div>
+                  <p className="mb-3 text-sm font-medium">
+                    Material-wise total — {materialPurchasePeriodLabel}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">Click a column heading to sort</span>
+                  </p>
+                  <div className="overflow-x-auto rounded-2xl border border-border/70">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableHead className="w-12">SL</TableHead>
+                          {(
+                            [
+                              ['name', 'Material', false],
+                              ['qtyKg', 'Total Kg', true],
+                              ['avgRate', 'Avg Rate / Kg', true],
+                              ['amount', 'Amount', true],
+                              ['entries', 'Lines', true],
+                              ['lastDate', 'Last Bought', true],
+                            ] as Array<[MaterialSummarySortKey, string, boolean]>
+                          ).map(([key, label, numeric]) => (
+                            <TableHead key={key} className={numeric ? 'text-right' : undefined}>
+                              <button
+                                type="button"
+                                onClick={() => toggleMaterialSummarySort(key)}
+                                className={cn(
+                                  'inline-flex items-center gap-1 hover:text-foreground',
+                                  materialSummarySort.key === key && 'text-foreground'
+                                )}
+                              >
+                                {label}
+                                {materialSummarySort.key === key ? (materialSummarySort.dir === 'asc' ? ' ▲' : ' ▼') : null}
+                              </button>
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {materialPurchaseSummary.map((row, index) => (
+                          <TableRow key={row.name}>
+                            <TableCell className="text-muted-foreground">{index + 1}</TableCell>
+                            <TableCell className="font-medium">{row.name}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatQty(row.qtyKg)} Kg</TableCell>
+                            <TableCell className="text-right tabular-nums">৳ {formatAmount(row.avgRate)}</TableCell>
+                            <TableCell className="text-right tabular-nums">৳ {formatAmount(row.amount)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{row.entries}</TableCell>
+                            <TableCell className="text-right">{row.lastDate ? formatDate(row.lastDate) : '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                        {materialPurchaseSummary.length > 0 ? (
+                          <TableRow className="bg-muted/30 font-semibold hover:bg-muted/30">
+                            <TableCell colSpan={2}>Total</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {formatQty(materialPurchaseSummary.reduce((sum, row) => sum + row.qtyKg, 0))} Kg
+                            </TableCell>
+                            <TableCell />
+                            <TableCell className="text-right tabular-nums">
+                              ৳ {formatAmount(materialPurchaseSummary.reduce((sum, row) => sum + row.amount, 0))}
+                            </TableCell>
+                            <TableCell colSpan={2} />
+                          </TableRow>
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                              No material bought in this period.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
 
                 <div className="overflow-x-auto rounded-2xl border border-border/70">
                   <Table>
@@ -1871,7 +2130,7 @@ export default function PurchasePage() {
                         <TableRow>
                           <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                             <Boxes className="mx-auto mb-2 h-8 w-8 opacity-50" />
-                            No material purchases recorded{materialPurchaseMonth ? ' for this month' : ''} yet.
+                            No material purchases recorded for this period.
                           </TableCell>
                         </TableRow>
                       ) : null}
