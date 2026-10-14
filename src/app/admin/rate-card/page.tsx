@@ -186,15 +186,6 @@ function dealerColumnLabel(isCommission: boolean) {
   return isCommission ? { unit: 'SR Rate', total: 'SR Amount' } : RATE_COLUMN_LABELS.dealer
 }
 
-// Small inline note appended to a row's product name on any of the three
-// printed vouchers, so the commission actually billed is visible on the
-// document itself — not just in the admin form.
-function commissionNote(item: RateCardLineItem) {
-  return item.srCommissionPercent
-    ? ` <span style="color:#0f766e;font-weight:600;">(SR +${item.srCommissionPercent}%)</span>`
-    : ''
-}
-
 function formatAmount(value: number) {
   return value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
@@ -269,7 +260,7 @@ function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean, deal
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
+        <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty}</td>
         ${columns.map((column) => `<td class="numeric">${formatAmount(rateValue(item, column))}</td>`).join('')}
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
@@ -459,7 +450,7 @@ function buildDealerInvoiceHtml(
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
+        <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
         <td class="numeric">${formatAmount(item.tpRate ?? 0)}</td>
@@ -560,7 +551,7 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, 
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
+        <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty}</td>
         <td class="numeric">${formatAmount(item.depotRate)}</td>
         <td class="numeric">${formatAmount(item.dealerRate)}</td>
@@ -707,7 +698,7 @@ function buildRetailInvoiceHtml(rateCard: RateCardRecord, dealer?: DealerRecord)
       (item, index) => `
       <tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(item.productName)}${commissionNote(item)}</td>
+        <td>${escapeHtml(item.productName)}</td>
         <td class="numeric">${item.qty}</td>
         ${columns.map((column) => `<td class="numeric">${formatAmount(retailRateValue(item, column))}</td>`).join('')}
         <td>${escapeHtml(item.perCtnBgs ?? '')}</td>
