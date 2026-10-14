@@ -18,11 +18,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { PAGE_ACCESS_OPTIONS } from '@/components/admin/AdminShell'
 import { useERP } from '@/lib/erp/provider'
 import { ACTION_LABELS, MODULE_DEFINITIONS } from '@/lib/erp/defaultData'
 import type { RoleRecord } from '@/lib/erp/types'
 
-const initialForm = { name: '', description: '', permissions: new Set<string>() }
+const initialForm = { name: '', description: '', permissions: new Set<string>(), pageAccess: new Set<string>() }
 
 // Section 63 — User Role & Permission: Role-based Access Control is
 // mandatory. Every role's View/Create/Edit/Delete/Approve/Export
@@ -60,7 +61,12 @@ export function RoleManagementSection() {
 
   function handleEditClick(role: RoleRecord) {
     setEditingRole(role)
-    setForm({ name: role.name, description: role.description, permissions: new Set(Object.keys(role.permissions)) })
+    setForm({
+      name: role.name,
+      description: role.description,
+      permissions: new Set(Object.keys(role.permissions)),
+      pageAccess: new Set(role.pageAccess ?? []),
+    })
     setError(null)
     setOpen(true)
   }
@@ -71,6 +77,15 @@ export function RoleManagementSection() {
       if (permissions.has(id)) permissions.delete(id)
       else permissions.add(id)
       return { ...current, permissions }
+    })
+  }
+
+  function togglePageAccess(href: string) {
+    setForm((current) => {
+      const pageAccess = new Set(current.pageAccess)
+      if (pageAccess.has(href)) pageAccess.delete(href)
+      else pageAccess.add(href)
+      return { ...current, pageAccess }
     })
   }
 
@@ -89,7 +104,12 @@ export function RoleManagementSection() {
     setMessage(null)
     try {
       await saveRole(
-        { name: form.name, description: form.description, permissions: Array.from(form.permissions) },
+        {
+          name: form.name,
+          description: form.description,
+          permissions: Array.from(form.permissions),
+          pageAccess: Array.from(form.pageAccess),
+        },
         editingRole?.id
       )
       setMessage(editingRole ? 'Role updated successfully.' : 'Role created successfully.')
@@ -220,6 +240,31 @@ export function RoleManagementSection() {
                   ) : null}
                 </div>
 
+                {editingRole?.id !== 'super_admin' ? (
+                  <div className="space-y-3 rounded-2xl border border-border/70 p-4">
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Page access</p>
+                      <p className="text-xs text-muted-foreground">
+                        Leave all unchecked to show every page the permissions above allow. Tick pages to show only
+                        those pages in this role&apos;s menu.
+                      </p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {PAGE_ACCESS_OPTIONS.map((page) => (
+                        <label key={page.href} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-border"
+                            checked={form.pageAccess.has(page.href)}
+                            onChange={() => togglePageAccess(page.href)}
+                          />
+                          {page.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
 
                 <DialogFooter>
@@ -251,7 +296,12 @@ export function RoleManagementSection() {
                   <TableRow key={role.id}>
                     <TableCell className="font-medium">{role.name}</TableCell>
                     <TableCell className="max-w-sm text-sm text-muted-foreground">{role.description || '—'}</TableCell>
-                    <TableCell className="text-right">{Object.keys(role.permissions).length}</TableCell>
+                    <TableCell className="text-right">
+                      {Object.keys(role.permissions).length}
+                      {role.pageAccess?.length ? (
+                        <span className="block text-xs text-muted-foreground">{role.pageAccess.length} pages only</span>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="text-right">{userCountByRole.get(role.id) ?? 0}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

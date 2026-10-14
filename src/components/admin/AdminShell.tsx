@@ -3,7 +3,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BadgePercent,
   Bell,
@@ -236,6 +236,29 @@ const navigationGroups: NavigationGroup[] = [
   },
 ] as const
 
+const allNavigationItems = navigationGroups.flatMap((group) => group.items)
+
+// The pages a role can be limited to in the Role & Permission Matrix.
+export const PAGE_ACCESS_OPTIONS = allNavigationItems.map(({ href, label }) => ({ href, label }))
+
+// Whether the signed-in user may open an /admin page: its module permission
+// plus, when the role has one, the role's page allow-list (RoleRecord.pageAccess
+// — e.g. Account Officer sees Invoice/Product Return but not Product List,
+// though all three need products:view).
+function useCanOpenPage() {
+  const { hasPermission, currentUser, data } = useERP()
+  const pageAccess = currentUser ? data?.roles[currentUser.roleId]?.pageAccess : undefined
+
+  return useCallback(
+    (href: string) => {
+      const item = allNavigationItems.find((candidate) => candidate.href === href)
+      if (item && !hasPermission(item.permission)) return false
+      return !pageAccess?.length || pageAccess.includes(href)
+    },
+    [hasPermission, pageAccess]
+  )
+}
+
 type AdminShellProps = {
   active: string
   children: ReactNode
@@ -254,6 +277,7 @@ function SidebarContent({
   onToggleCollapse?: () => void
 }) {
   const { hasPermission, currentUser, data } = useERP()
+  const canOpenPage = useCanOpenPage()
 
   // Entries this user can authorize right now — shown as a count on the
   // Approvals nav item.
@@ -270,7 +294,7 @@ function SidebarContent({
   const visibleGroups = navigationGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => hasPermission(item.permission)),
+      items: group.items.filter((item) => canOpenPage(item.href)),
     }))
     .filter((group) => group.items.length > 0)
 
@@ -646,7 +670,8 @@ function GlobalSearch() {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
-  const results = useGlobalSearchResults(query)
+  const canOpenPage = useCanOpenPage()
+  const results = useGlobalSearchResults(query).filter((result) => canOpenPage(result.href))
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -733,7 +758,9 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('admin-sidebar-collapsed') === '1'
   })
-  const { currentUser, data, logout, hasPermission, loading } = useERP()
+  const { currentUser, data, logout, loading } = useERP()
+  const router = useRouter()
+  const canOpenPage = useCanOpenPage()
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -743,12 +770,22 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
     })
   }
 
-  const allNavigationItems = navigationGroups.flatMap((group) => group.items)
-
   const currentPage = useMemo(
     () => allNavigationItems.find((item) => item.label === active) ?? allNavigationItems[0],
-    [active, allNavigationItems]
+    [active]
   )
+  const canViewCurrentPage = canOpenPage(currentPage.href)
+
+  // Login always lands on /admin/dashboard — a page-restricted role (e.g.
+  // Account Officer) can't open it, so send it to its first allowed page
+  // instead of an "Access restricted" screen.
+  const restrictedToPages = Boolean(currentUser && data?.roles[currentUser.roleId]?.pageAccess?.length)
+  const firstAllowedHref = allNavigationItems.find((item) => canOpenPage(item.href))?.href
+  useEffect(() => {
+    if (restrictedToPages && !canViewCurrentPage && firstAllowedHref) {
+      router.replace(firstAllowedHref)
+    }
+  }, [restrictedToPages, canViewCurrentPage, firstAllowedHref, router])
 
   const roleName = currentUser ? data?.roles[currentUser.roleId]?.name ?? currentUser.roleId : 'Loading'
 
@@ -839,7 +876,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
 
           <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             <div className={cn('mx-auto w-full', fullWidth ? 'max-w-full' : 'max-w-7xl')}>
-              {hasPermission(currentPage.permission) ? (
+              {canViewCurrentPage ? (
                 children
               ) : (
                 <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-10 text-center">

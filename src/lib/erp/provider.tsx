@@ -18,7 +18,14 @@ import { get, limitToLast, onValue, orderByKey, query, ref, set, update } from '
 import toast from 'react-hot-toast'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 
-import { ALL_PERMISSION_IDS, createDefaultERPData, toPermissionSet } from '@/lib/erp/defaultData'
+import {
+  ACCOUNT_OFFICER_PAGE_ACCESS,
+  ACCOUNT_OFFICER_PERMISSION_IDS,
+  ACCOUNT_OFFICER_PRESET_VERSION,
+  ALL_PERMISSION_IDS,
+  createDefaultERPData,
+  toPermissionSet,
+} from '@/lib/erp/defaultData'
 import { APPROVAL_SOURCES, getApprovalStatus, pendingApprovalFields, type ApprovalCollection } from '@/lib/erp/approvals'
 import { clearCachedERPData, readCachedERPData, writeCachedERPData } from '@/lib/erp/offlineCache'
 import type {
@@ -956,7 +963,10 @@ function normalizeERPData(data: ERPData | null): ERPData {
 
   return {
     permissions: DEFAULT_ERP_DATA.permissions,
-    roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles)),
+    // A role that exists in the database is taken as-is rather than merged
+    // over its seeded default — otherwise a seeded `pageAccess` would creep
+    // back onto a live role whose admin deliberately cleared it.
+    roles: normalizeRoleMap({ ...DEFAULT_ERP_DATA.roles, ...(source.roles ?? {}) }),
     users: source.users ?? {},
     dealers: normalizeDealerMap(source.dealers),
     dealerCategories: normalizeDealerCategoryMap(source.dealerCategories),
@@ -1398,6 +1408,39 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, data?.roles.super_admin])
+
+  // Same idea for the Account Officer preset (2026-10-15 client request):
+  // the seeded role only fills a *missing* role, so an already-seeded live
+  // account_officer keeps its old permission list. Super Admin's next login
+  // rewrites it to the current preset once — presetVersion stops it from
+  // undoing later edits made in the Role & Permission Matrix.
+  useEffect(() => {
+    if (!data || !currentUser || currentUser.roleId !== 'super_admin') {
+      return
+    }
+
+    if ((data.roles.account_officer?.presetVersion ?? 0) >= ACCOUNT_OFFICER_PRESET_VERSION) {
+      return
+    }
+
+    void (async () => {
+      try {
+        const db = getDatabaseOrThrow()
+        await update(ref(db, 'erp/roles/account_officer'), {
+          id: 'account_officer',
+          name: 'Account Officer',
+          description: 'Invoice (Depot/Dealer vouchers only), Product Return, Expenses, and Cash Maintenance.',
+          permissions: toPermissionSet(ACCOUNT_OFFICER_PERMISSION_IDS),
+          pageAccess: ACCOUNT_OFFICER_PAGE_ACCESS,
+          presetVersion: ACCOUNT_OFFICER_PRESET_VERSION,
+        })
+        console.info('[self-heal] Applied the Account Officer role preset.')
+      } catch (reason) {
+        console.warn('[self-heal] Could not apply the Account Officer role preset.', reason)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, data?.roles.account_officer])
 
   // Idle timeout + absolute session expiry. There's no backend session to
   // force-expire here, so this just watches for activity/elapsed time on
@@ -4655,15 +4698,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Super Admin must always keep every permission.')
     }
 
+    if (roleId === 'super_admin' && input.pageAccess?.length) {
+      throw new Error('Super Admin cannot be limited to specific pages.')
+    }
+    const pageAccess = (input.pageAccess ?? []).filter((href) => href.startsWith('/admin/'))
+
     const id = roleId ?? createId('role')
     const role: RoleRecord = {
       id,
       name,
       description: input.description?.trim() ?? existing?.description ?? '',
       permissions,
+      ...(pageAccess.length ? { pageAccess } : {}),
     }
 
-    await update(ref(db, `erp/roles/${id}`), role)
+    // null clears a previously saved page restriction (update() would
+    // otherwise leave the old child in place).
+    await update(ref(db, `erp/roles/${id}`), { ...role, pageAccess: pageAccess.length ? pageAccess : null })
     await writeActivity(roleId ? 'role_updated' : 'role_created', 'users', `${roleId ? 'Updated' : 'Created'} role ${role.name}.`)
     return id
   }
@@ -4734,13 +4785,32 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Selected role does not exist.')
     }
 
-    const email = `${normalizedLoginId}@${SYNTHETIC_EMAIL_DOMAIN}`
+    // A login ID that is already an email (e.g. "account@recipe.com") is
+    // used as the sign-in email itself — appending the synthetic domain to
+    // it produced "account@recipe.com@users.internal", which Firebase Auth
+    // rejects as an invalid email. Plain IDs still get the synthetic domain.
+    const email = normalizedLoginId.includes('@')
+      ? normalizedLoginId
+      : `${normalizedLoginId}@${SYNTHETIC_EMAIL_DOMAIN}`
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error('Login ID must be a plain ID (e.g. "rahim") or a valid email address.')
+    }
 
     let uid: string
     try {
       uid = await createManagedUser(email, input.password)
     } catch (reason) {
       console.error('[createUser] Firebase Auth account creation failed:', reason)
+      const code = (reason as { code?: string } | null)?.code
+      if (code === 'auth/email-already-in-use') {
+        throw new Error(`A login for ${email} already exists. Try a different login ID.`)
+      }
+      if (code === 'auth/invalid-email') {
+        throw new Error(`"${email}" is not a valid sign-in email. Try a different login ID.`)
+      }
+      if (code === 'auth/weak-password') {
+        throw new Error('Firebase rejected this password as too weak. Choose a stronger one.')
+      }
       throw new Error('Unable to create a login for this user. Try a different login ID.')
     }
 

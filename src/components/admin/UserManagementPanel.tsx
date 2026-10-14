@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { isStrongPassword, useERP } from '@/lib/erp/provider'
 import type { UserRecord } from '@/lib/erp/types'
 import { formatDateTime } from '@/lib/erp/utils'
+import { SYNTHETIC_EMAIL_DOMAIN } from '@/lib/firebase/config'
 
 const initialForm = {
   name: '',
@@ -266,6 +267,16 @@ export function UserManagementPanel() {
                         placeholder="e.g. rahim.ahmed"
                         required
                       />
+                      {!editingUser && form.loginId.trim() ? (
+                        <p className="text-xs text-muted-foreground">
+                          Signs in with:{' '}
+                          <span className="font-medium text-foreground">
+                            {form.loginId.trim().toLowerCase().includes('@')
+                              ? form.loginId.trim().toLowerCase()
+                              : `${form.loginId.trim().toLowerCase()}@${SYNTHETIC_EMAIL_DOMAIN}`}
+                          </span>
+                        </p>
+                      ) : null}
                     </div>
                     {editingUser ? (
                       <div className="space-y-2 rounded-xl bg-muted/40 p-3">

@@ -50,6 +50,22 @@ export const ALL_PERMISSION_IDS: string[] = MODULE_DEFINITIONS.flatMap(({ module
   actions.map((action) => `${module}:${action}`)
 )
 
+export const ACCOUNT_OFFICER_PRESET_VERSION = 2
+
+export const ACCOUNT_OFFICER_PERMISSION_IDS: string[] = [
+  'products:view',
+  'invoice-voucher:depot', 'invoice-voucher:dealer',
+  'orders:view', 'orders:create',
+  'finance:view', 'finance:create', 'finance:edit', 'finance:delete', 'finance:export',
+]
+
+export const ACCOUNT_OFFICER_PAGE_ACCESS: string[] = [
+  '/admin/rate-card',
+  '/admin/product-returns',
+  '/admin/finance',
+  '/admin/cash-maintenance',
+]
+
 export function toPermissionSet(ids: string[]): Record<string, true> {
   return Object.fromEntries(ids.map((id) => [id, true as const]))
 }
@@ -186,25 +202,23 @@ export function createDefaultERPData(): ERPData {
           'vendor:view', 'vendor:create', 'vendor:export',
         ]),
       },
-      // Section 63 / 2026-09-12 client request — the client's own
-      // "ব্যবহারিক রোল" pair. Account Officer sees the Depot/Dealer
-      // vouchers on the Invoice page but deliberately NOT the Company
-      // voucher (invoice-voucher:company omitted), plus Product Return,
-      // Expense, Vendor, Purchase, and Sales Reports.
+      // 2026-10-15 client request (replaces the 2026-09-12 preset) — Account
+      // Officer sees ONLY four pages: Invoice (Depot/Dealer vouchers — print
+      // and generate; Company voucher deliberately omitted), Product Return,
+      // Expenses, and Cash Maintenance, each with full access. pageAccess
+      // hides every other page that shares products:view / finance:view.
+      // The extra permissions are what the database rules need for those
+      // pages to save: orders:create lets an invoice/return move product
+      // stockQty, finance:* covers expenses + cashMaintenance. No
+      // finance:approve — entries still go to Super Admin for approval.
+      // Live roles get this via the self-heal in provider.tsx
+      // (ACCOUNT_OFFICER_PRESET_VERSION).
       account_officer: {
         id: 'account_officer',
         name: 'Account Officer',
-        description: 'Invoice (Depot/Dealer vouchers only), Product Return, Expense, Vendor, Purchase, and Sales Reports.',
-        permissions: toPermissionSet([
-          'dashboard:view',
-          'orders:view',
-          'products:view', 'products:create',
-          'invoice-voucher:depot', 'invoice-voucher:dealer',
-          'finance:view', 'finance:create', 'finance:export',
-          'purchase:view', 'purchase:create', 'purchase:export',
-          'vendor:view', 'vendor:create', 'vendor:export',
-          'reports:view', 'reports:export',
-        ]),
+        description: 'Invoice (Depot/Dealer vouchers only), Product Return, Expenses, and Cash Maintenance.',
+        permissions: toPermissionSet(ACCOUNT_OFFICER_PERMISSION_IDS),
+        pageAccess: [...ACCOUNT_OFFICER_PAGE_ACCESS],
       },
       // Only Vendor + Purchase input — both live on the same page
       // (/admin/purchase + /admin/vendors) so this one permission pair per

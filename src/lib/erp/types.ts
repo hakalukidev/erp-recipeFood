@@ -9,6 +9,17 @@ export type RoleRecord = {
   name: string
   description: string
   permissions: Record<string, true>
+  // Optional sidebar/page restriction (2026-10-15, Account Officer request).
+  // Module permissions are shared by several pages (products:view covers
+  // Product List + Invoice + Product Return; finance:view covers Expenses +
+  // Cash Maintenance + Loan Chart + Company Earnings), and the database
+  // rules need those permissions to read/write the data. When set, the role
+  // only sees the listed /admin/* page hrefs, on top of its permissions.
+  // Absent = no page restriction.
+  pageAccess?: string[]
+  // Bumped by the provider's role-preset self-heal so a seeded preset is
+  // applied to the live role once, not re-applied after an admin edits it.
+  presetVersion?: number
 }
 
 // ---- Section 63 (User Role & Permission) --------------------------------
@@ -20,6 +31,8 @@ export type RoleInput = {
   name: string
   description?: string
   permissions: string[]
+  // Empty/absent = no page restriction (see RoleRecord.pageAccess).
+  pageAccess?: string[]
 }
 
 export type UserRecord = {
