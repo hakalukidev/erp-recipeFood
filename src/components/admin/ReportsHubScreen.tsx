@@ -1,13 +1,14 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { CalendarDays, FileBarChart, HandCoins, ReceiptText, Search, ShoppingCart, Truck } from 'lucide-react'
+import { CalendarDays, FileBarChart, HandCoins, Printer, ReceiptText, Search, ShoppingCart, Truck } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { ExportMenu } from './ExportMenu'
 import { FundCashFlowReport } from './FundCashFlowReport'
 import { SalesReportsContent } from './SalesReportsScreen'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -123,53 +124,61 @@ function buildReportShellHtml(title: string, bodyHtml: string) {
 
 type ExpensePrintRow = { date: string; category: string; source: string; amount: number; note?: string }
 
-// Expense print grouped by category (client request, 2026-10-06): a
-// category summary first, then each category's own entries with a
-// subtotal, then the grand total.
-function buildExpenseByCategoryHtml(title: string, rows: ExpensePrintRow[]) {
+// Expense print grouped by category (client request, 2026-10-06) or by date
+// (2026-10-14 — "ক্যাটাগরি ওয়াইজ ও ডেট ওয়াইজ সব প্রিন্ট অপশন"): a group
+// summary first, then each group's own entries with a subtotal, then the
+// grand total. Categories are ordered by total (largest first), dates oldest first.
+function buildExpenseGroupedHtml(title: string, rows: ExpensePrintRow[], groupBy: 'category' | 'date') {
   const money = (value: number) => value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const byDate = groupBy === 'date'
+  const groupWord = byDate ? 'Date' : 'Category'
+  const keyOf = (row: ExpensePrintRow) => (byDate ? row.date.slice(0, 10) : row.category)
   const groups = new Map<string, ExpensePrintRow[]>()
-  for (const row of rows) groups.set(row.category, [...(groups.get(row.category) ?? []), row])
+  for (const row of rows) groups.set(keyOf(row), [...(groups.get(keyOf(row)) ?? []), row])
   const ordered = Array.from(groups.entries())
-    .map(([category, items]) => ({
-      category,
-      items: [...items].sort((a, b) => a.date.localeCompare(b.date)),
+    .map(([key, items]) => ({
+      label: byDate ? formatDate(key) : key,
+      key,
+      items: [...items].sort((a, b) => (byDate ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date))),
       total: items.reduce((sum, item) => sum + item.amount, 0),
     }))
-    .sort((a, b) => b.total - a.total)
+    .sort((a, b) => (byDate ? a.key.localeCompare(b.key) : b.total - a.total))
   const grandTotal = rows.reduce((sum, row) => sum + row.amount, 0)
+  // Inside a date group the useful column is the category, and vice versa.
+  const innerHeader = byDate ? 'Category' : 'Date'
+  const innerCell = (item: ExpensePrintRow) => (byDate ? item.category : formatDate(item.date))
 
   const summary = `
-    <p class="section-title">Category-wise summary</p>
+    <p class="section-title">${groupWord}-wise summary</p>
     <table class="doc">
-      <thead><tr><th>Category</th><th>Entries</th><th>Total</th></tr></thead>
+      <thead><tr><th>${groupWord}</th><th>Entries</th><th>Total</th></tr></thead>
       <tbody>${ordered
-        .map((group) => `<tr><td>${escapeHtml(group.category)}</td><td class="numeric">${group.items.length}</td><td class="numeric">${money(group.total)}</td></tr>`)
+        .map((group) => `<tr><td>${escapeHtml(group.label)}</td><td class="numeric">${group.items.length}</td><td class="numeric">${money(group.total)}</td></tr>`)
         .join('')}</tbody>
       <tfoot><tr><th>Total</th><th class="numeric">${rows.length}</th><th class="numeric">${money(grandTotal)}</th></tr></tfoot>
     </table>`
 
   const detail = `
-    <p class="section-title">Category-wise detail</p>
+    <p class="section-title">${groupWord}-wise detail</p>
     <table class="doc">
-      <thead><tr><th>Date</th><th>Source</th><th>Amount</th><th>Note</th></tr></thead>
+      <thead><tr><th>${innerHeader}</th><th>Source</th><th>Amount</th><th>Note</th></tr></thead>
       <tbody>${ordered
         .map(
           (group) =>
-            `<tr class="group"><td colspan="4">${escapeHtml(group.category)}</td></tr>` +
+            `<tr class="group"><td colspan="4">${escapeHtml(group.label)}</td></tr>` +
             group.items
               .map(
                 (item) =>
-                  `<tr><td>${escapeHtml(formatDate(item.date))}</td><td>${escapeHtml(item.source)}</td><td class="numeric">${money(item.amount)}</td><td>${escapeHtml(item.note ?? '')}</td></tr>`
+                  `<tr><td>${escapeHtml(innerCell(item))}</td><td>${escapeHtml(item.source)}</td><td class="numeric">${money(item.amount)}</td><td>${escapeHtml(item.note ?? '')}</td></tr>`
               )
               .join('') +
-            `<tr class="subtotal"><td colspan="2">Subtotal — ${escapeHtml(group.category)} (${group.items.length})</td><td class="numeric">${money(group.total)}</td><td></td></tr>`
+            `<tr class="subtotal"><td colspan="2">Subtotal — ${escapeHtml(group.label)} (${group.items.length})</td><td class="numeric">${money(group.total)}</td><td></td></tr>`
         )
         .join('')}</tbody>
       <tfoot><tr><th colspan="2">Grand total (${rows.length} entries)</th><th class="numeric">${money(grandTotal)}</th><th></th></tr></tfoot>
     </table>`
 
-  return buildReportShellHtml(title, summary + detail)
+  return buildReportShellHtml(`${title} (${groupWord}-wise)`, summary + detail)
 }
 
 function SectionHeader({
@@ -625,15 +634,22 @@ export function ReportsHubScreen() {
                     headers={expenseHeaders}
                     rows={expenseRows}
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={expenseRows.length === 0}
-                    onClick={() => openPrintWindow(buildExpenseByCategoryHtml(expenseReportTitle, filteredExpenses))}
-                  >
-                    Print
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" disabled={expenseRows.length === 0}>
+                        <Printer className="mr-2 h-4 w-4" />
+                        Print
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44">
+                      <DropdownMenuItem onClick={() => openPrintWindow(buildExpenseGroupedHtml(expenseReportTitle, filteredExpenses, 'category'))}>
+                        Category-wise
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openPrintWindow(buildExpenseGroupedHtml(expenseReportTitle, filteredExpenses, 'date'))}>
+                        Date-wise
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </CardHeader>
               <CardContent>
