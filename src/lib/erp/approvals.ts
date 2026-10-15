@@ -1,5 +1,7 @@
 import type {
   ERPData,
+  PendingEditCollection,
+  PendingEditRecord,
   RecordApprovalFields,
   RecordApprovalStatus,
   UserRecord,
@@ -304,4 +306,17 @@ export function buildApprovalQueue(data: ERPData | null): ApprovalQueueItem[] {
   }
 
   return items.sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+}
+
+// Latest edit proposal per record id for one collection (see
+// PendingEditRecord) — drives the "Edit pending"/"Edit rejected" tag on the
+// Expense and Cash Maintenance rows.
+export function latestPendingEditByRecord(data: ERPData | null, collection: PendingEditCollection) {
+  const latest = new Map<string, PendingEditRecord>()
+  Object.values(data?.pendingEdits ?? {}).forEach((edit) => {
+    if (edit.collection !== collection) return
+    const current = latest.get(edit.recordId)
+    if (!current || edit.submittedAt > current.submittedAt) latest.set(edit.recordId, edit)
+  })
+  return latest
 }

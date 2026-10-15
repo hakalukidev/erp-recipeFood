@@ -68,6 +68,8 @@ import type {
   JournalEntryRecord,
   LedgerAccount,
   LedgerEntryRecord,
+  PendingEditCollection,
+  PendingEditRecord,
   LoanAccountInput,
   LoanAccountRecord,
   LoanTransactionInput,
@@ -216,6 +218,9 @@ type ERPContextValue = {
   markNotificationRead: (notificationId: string) => Promise<void>
   markAllNotificationsRead: (notificationIds: string[]) => Promise<void>
   saveExpense: (input: ExpenseInput, expenseId?: string) => Promise<void>
+  // Approve applies a PendingEditRecord's proposal to its record; reject
+  // just closes it (reason required). finance:approve only.
+  reviewPendingEdit: (pendingEditId: string, status: 'approved' | 'rejected', note?: string) => Promise<void>
   updateExpenseApproval: (expenseId: string, approvalStatus: ExpenseApprovalStatus) => Promise<void>
   reviewRecordApproval: (
     collection: ApprovalCollection,
@@ -324,6 +329,7 @@ const ERP_TOP_LEVEL_KEYS = [
   'loanAccounts',
   'loanTransactions',
   'cashMaintenance',
+  'pendingEdits',
   'budgets',
   'salesTargets',
   'commissionRules',
@@ -1004,6 +1010,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     loanAccounts: source.loanAccounts ?? {},
     loanTransactions: source.loanTransactions ?? {},
     cashMaintenance: normalizeCashMaintenanceMap(source.cashMaintenance),
+    pendingEdits: source.pendingEdits ?? {},
     budgets: source.budgets ?? {},
     salesTargets: source.salesTargets ?? {},
     commissionRules: source.commissionRules ?? {},
@@ -3608,13 +3615,21 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   // Deliberately not posted to ledgerEntries/the Automatic Accounting Engine
   // — see the CashMaintenanceRecord comment in types.ts for why this stays a
   // standalone cash log alongside, not inside, the P&L expense chart.
-  async function saveCashMaintenance(input: CashMaintenanceInput, recordId?: string) {
+  // `applyingEdit` is only passed by reviewPendingEdit — the approved
+  // proposal is saved in the same write, and the record keeps its own
+  // authorization status instead of being re-submitted.
+  async function saveCashMaintenance(input: CashMaintenanceInput, recordId?: string, applyingEdit?: PendingEditRecord) {
     if (!data || !currentUser) {
       throw new Error('You need to log in before recording a cash entry.')
     }
 
     const existingRecord = recordId ? data.cashMaintenance[recordId] : null
-    assertApprovalUnlocked('cashMaintenance', existingRecord)
+    // No finance:edit (Account Officer) — the edit goes to Pending Edits
+    // and the record stays as it is until it's approved.
+    const isEditProposal = Boolean(existingRecord) && !applyingEdit && !hasPermissionCheck(data, currentUser, 'finance:edit')
+    if (!isEditProposal) {
+      assertApprovalUnlocked('cashMaintenance', existingRecord)
+    }
     const normalized = normalizeCashMaintenanceInput(input)
 
     if (!normalized.category) {
@@ -3636,6 +3651,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Amount must be greater than zero.')
     }
 
+    if (isEditProposal && existingRecord) {
+      await submitPendingEdit('cashMaintenance', existingRecord, normalized)
+      return existingRecord.id
+    }
+
     const db = getDatabaseOrThrow()
     const id = existingRecord?.id ?? createId('cash_maintenance')
     const now = new Date().toISOString()
@@ -3649,13 +3669,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       isDirectExpense: normalized.direction === 'out' && CASH_PNL_EXPENSE_CATEGORIES.includes(normalized.category),
       ...(linkedReturn ? { productReturnId: linkedReturn.id, productReturnNumber: linkedReturn.returnNumber } : {}),
       ...(isAdvanceSalary ? { employeeName: normalized.employeeName } : {}),
-      ...pendingApprovalFields(currentUser, now),
+      ...(applyingEdit && existingRecord ? keptApprovalFields(existingRecord) : pendingApprovalFields(currentUser, now)),
       createdBy: existingRecord?.createdBy ?? currentUser.id,
       createdByName: existingRecord?.createdByName ?? currentUser.name,
       createdAt: existingRecord?.createdAt ?? now,
     }
 
-    await update(ref(db, 'erp/cashMaintenance'), { [id]: record })
+    await update(ref(db, 'erp'), {
+      [`cashMaintenance/${id}`]: record,
+      ...(applyingEdit ? pendingEditReviewUpdates(applyingEdit, 'approved', '', now) : {}),
+    })
     await writeActivity(
       existingRecord ? 'cash_maintenance_updated' : 'cash_maintenance_created',
       'finance',
@@ -3674,11 +3697,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!record) {
       throw new Error('Cash maintenance entry not found.')
     }
+    if (!hasPermissionCheck(data, currentUser, 'finance:delete')) {
+      throw new Error('You do not have permission to delete cash entries.')
+    }
     assertApprovalUnlocked('cashMaintenance', record)
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
       [`cashMaintenance/${recordId}`]: null,
+      ...pendingEditDeletes('cashMaintenance', recordId),
     })
     await writeActivity('cash_maintenance_deleted', 'finance', `Deleted ${record.category} cash entry of ${record.amount}.`)
   }
@@ -4942,7 +4969,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await update(ref(db), updates)
   }
 
-  async function saveExpense(input: ExpenseInput, expenseId?: string) {
+  // `applyingEdit`: see saveCashMaintenance.
+  async function saveExpense(input: ExpenseInput, expenseId?: string, applyingEdit?: PendingEditRecord) {
     if (!data || !currentUser) {
       return
     }
@@ -5016,7 +5044,28 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createdAt: existingExpense?.createdAt ?? now,
     }
 
-    const updates: Record<string, unknown> = { [`expenses/${id}`]: expense }
+    // No finance:edit (Account Officer) — the edit goes to Pending Edits
+    // and the expense, its ledger lines and loan link stay as they are until
+    // it's approved. Stored with the resolved values so approving re-applies
+    // exactly what was reviewed.
+    if (existingExpense && !applyingEdit && !hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      await submitPendingEdit('expenses', existingExpense, {
+        category,
+        amount: input.amount,
+        note: expense.note,
+        date: expenseDate,
+        paymentMethod,
+        ...(employeeName ? { employeeName } : {}),
+        ...(advanceAdjusted > 0 ? { advanceAdjusted } : {}),
+        ...(loanAccount ? { loanAccountId: loanAccount.id } : {}),
+      })
+      return
+    }
+
+    const updates: Record<string, unknown> = {
+      [`expenses/${id}`]: expense,
+      ...(applyingEdit ? pendingEditReviewUpdates(applyingEdit, 'approved', '', now) : {}),
+    }
 
     // Reverse-then-repost, same pattern as editing a sales invoice — the
     // original ledger lines stay in the audit trail, just reversed.
@@ -5061,6 +5110,127 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // Section 37: re-check this category's budget(s) with the just-saved
     // amount folded in — data.expenses is last snapshot, not this write.
     await checkBudgetOverrun(data.budgets, { ...data.expenses, [id]: expense }, writeNotification, category, expenseDate)
+  }
+
+  // ---- Pending Edits (2026-10-15 client request) ----------------------------
+  // See PendingEditRecord in types.ts. One pending proposal per record — a
+  // new edit while one is still pending replaces it (same id); after an
+  // approve/reject the next edit starts a new one.
+  async function submitPendingEdit(
+    collection: PendingEditCollection,
+    before: ExpenseRecord | CashMaintenanceRecord,
+    input: ExpenseInput | CashMaintenanceInput
+  ) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before editing an entry.')
+    }
+
+    const existing = Object.values(data.pendingEdits ?? {}).find(
+      (edit) => edit.collection === collection && edit.recordId === before.id && edit.status === 'pending'
+    )
+    const id = existing?.id ?? createId('pending_edit')
+    const now = new Date().toISOString()
+    const record: PendingEditRecord = {
+      id,
+      collection,
+      recordId: before.id,
+      before,
+      input,
+      status: 'pending',
+      submittedBy: currentUser.id,
+      submittedByName: currentUser.name,
+      submittedAt: now,
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/pendingEdits'), { [id]: record })
+    await writeActivity(
+      'pending_edit_submitted',
+      'finance',
+      `Submitted an edit to ${collection === 'expenses' ? 'expense' : 'cash entry'} ${before.category} (${before.amount}) for approval.`
+    )
+  }
+
+  function pendingEditReviewUpdates(edit: PendingEditRecord, status: 'approved' | 'rejected', note: string, now: string) {
+    return {
+      [`pendingEdits/${edit.id}/status`]: status,
+      [`pendingEdits/${edit.id}/reviewedBy`]: currentUser?.id ?? '',
+      [`pendingEdits/${edit.id}/reviewedByName`]: currentUser?.name ?? '',
+      [`pendingEdits/${edit.id}/reviewedAt`]: now,
+      [`pendingEdits/${edit.id}/reviewNote`]: note,
+    }
+  }
+
+  // A deleted record takes its edit proposals with it.
+  function pendingEditDeletes(collection: PendingEditCollection, recordId: string) {
+    return Object.fromEntries(
+      Object.values(data?.pendingEdits ?? {})
+        .filter((edit) => edit.collection === collection && edit.recordId === recordId)
+        .map((edit) => [`pendingEdits/${edit.id}`, null])
+    )
+  }
+
+  // Applying an approved edit keeps the record's own authorization status.
+  function keptApprovalFields(record: RecordApprovalFields): RecordApprovalFields {
+    return Object.fromEntries(
+      (
+        ['approvalStatus', 'submittedBy', 'submittedByName', 'submittedAt', 'approvedBy', 'approvedByName', 'approvedAt', 'approvalNote'] as const
+      )
+        .filter((key) => record[key] !== undefined)
+        .map((key) => [key, record[key]])
+    )
+  }
+
+  async function reviewPendingEdit(pendingEditId: string, status: 'approved' | 'rejected', note?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before reviewing an edit.')
+    }
+    if (!hasPermissionCheck(data, currentUser, 'finance:approve')) {
+      throw new Error('You do not have permission to review edits.')
+    }
+
+    const edit = data.pendingEdits?.[pendingEditId]
+    if (!edit) {
+      throw new Error('Edit request not found.')
+    }
+    if (edit.status !== 'pending') {
+      throw new Error(`This edit is already ${edit.status}.`)
+    }
+    if (edit.submittedBy === currentUser.id && currentUser.roleId !== 'super_admin') {
+      throw new Error('You cannot review an edit you submitted yourself — another approver has to review it.')
+    }
+
+    const now = new Date().toISOString()
+    const label = edit.collection === 'expenses' ? 'expense' : 'cash entry'
+
+    if (status === 'rejected') {
+      const trimmedNote = note?.trim() ?? ''
+      if (!trimmedNote) {
+        throw new Error('Give a reason for rejecting this edit.')
+      }
+      const db = getDatabaseOrThrow()
+      await update(ref(db, 'erp'), pendingEditReviewUpdates(edit, 'rejected', trimmedNote, now))
+      await writeActivity('pending_edit_rejected', 'finance', `Rejected ${edit.submittedByName}'s edit to ${label} ${edit.before.category}.`)
+      return
+    }
+
+    // Applied through the normal save, so validation, ledger reverse-and-
+    // repost, loan links and budget checks all behave like a direct edit.
+    if (!hasPermissionCheck(data, currentUser, 'finance:edit')) {
+      throw new Error('Approving an edit also needs the finance edit permission.')
+    }
+    if (edit.collection === 'expenses') {
+      if (!data.expenses[edit.recordId]) {
+        throw new Error('This expense no longer exists — reject the edit instead.')
+      }
+      await saveExpense(edit.input as ExpenseInput, edit.recordId, edit)
+    } else {
+      if (!data.cashMaintenance[edit.recordId]) {
+        throw new Error('This cash entry no longer exists — reject the edit instead.')
+      }
+      await saveCashMaintenance(edit.input as CashMaintenanceInput, edit.recordId, edit)
+    }
+    await writeActivity('pending_edit_approved', 'finance', `Approved ${edit.submittedByName}'s edit to ${label} ${edit.before.category}.`)
   }
 
   // ---- Input & Authorization ---------------------------------------------
@@ -5745,10 +5915,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!expense) {
       throw new Error('Expense not found.')
     }
+    if (!hasPermissionCheck(data, currentUser, 'finance:delete')) {
+      throw new Error('You do not have permission to delete expenses.')
+    }
 
     const db = getDatabaseOrThrow()
     const now = new Date().toISOString()
-    const updates: Record<string, unknown> = { [`expenses/${expenseId}`]: null }
+    const updates: Record<string, unknown> = {
+      [`expenses/${expenseId}`]: null,
+      ...pendingEditDeletes('expenses', expenseId),
+    }
     const active = getActiveLedgerEntries(data.ledgerEntries, expenseId)
     Object.values(buildLedgerReversalEntries(active, now)).forEach((entry) => {
       updates[`ledgerEntries/${entry.id}`] = entry
@@ -7217,6 +7393,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveExpense,
       updateExpenseApproval,
       reviewRecordApproval,
+      reviewPendingEdit,
       saveInvestor,
       deleteInvestor,
       deleteExpense,

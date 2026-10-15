@@ -20,7 +20,7 @@ import {
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { CashCategoryStatement } from '@/components/admin/CashCategoryStatement'
-import { RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
+import { PendingEditTag, RecordApprovalTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -52,6 +52,7 @@ import {
   COMPANY_INVOICE_FOOTER_NOTE,
   COMPANY_NAME,
 } from '@/lib/erp/companyInfo'
+import { latestPendingEditByRecord } from '@/lib/erp/approvals'
 import { buildGroupedReportHtml, groupReportItems, type ReportGroupBy } from '@/lib/erp/groupedReportPrint'
 import { useERP } from '@/lib/erp/provider'
 import {
@@ -273,6 +274,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     deleteCashMaintenance,
     saveInvestor,
     deleteInvestor,
+    hasPermission,
   } = useERP()
 
   const currency = data?.settings.currency
@@ -847,6 +849,13 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
   const [cashForm, setCashForm] = useState<CashFormState>(newCashForm)
   const [cashSaving, setCashSaving] = useState(false)
   const [cashError, setCashError] = useState<string | null>(null)
+  const [cashNotice, setCashNotice] = useState<string | null>(null)
+  // Without finance:edit (Account Officer) a cash entry edit is sent to
+  // Pending Edits instead of changing the entry; without finance:delete
+  // there's no Delete button (both also enforced in provider.tsx + rules).
+  const canEditCashDirectly = hasPermission('finance:edit')
+  const canDeleteCash = hasPermission('finance:delete')
+  const cashPendingEdits = useMemo(() => latestPendingEditByRecord(data ?? null, 'cashMaintenance'), [data])
 
   const filteredCashEntries = useMemo(() => {
     return cashEntries.filter((entry) => isInCashPeriod(entry.date))
@@ -906,6 +915,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
     setEditingCashId(null)
     setCashForm(newCashForm())
     setCashError(null)
+    setCashNotice(null)
     setCashDialogOpen(true)
   }
 
@@ -921,6 +931,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
       employeeName: entry.employeeName ?? '',
     })
     setCashError(null)
+    setCashNotice(null)
     setCashDialogOpen(true)
   }
 
@@ -944,6 +955,11 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           employeeName: cashForm.category === CASH_CATEGORY_ADVANCE_SALARY ? cashForm.employeeName.trim() || undefined : undefined,
         },
         editingCashId ?? undefined
+      )
+      setCashNotice(
+        editingCashId && !canEditCashDirectly
+          ? 'Edit submitted for approval — the cash entry keeps its old values until it is approved.'
+          : null
       )
       setCashDialogOpen(false)
     } catch (reason) {
@@ -1855,6 +1871,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
           </CardHeader>
           <CardContent className="space-y-4">
             {cashError ? <p className="text-sm text-destructive">{cashError}</p> : null}
+            {cashNotice ? <p className="text-sm text-primary">{cashNotice}</p> : null}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
                 <span className="text-muted-foreground">Cash In (Cash Maintenance entries)</span>
@@ -1928,6 +1945,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                       <TableCell className="font-medium">
                         {entry.category}
                         <RecordApprovalTag record={entry} />
+                        <PendingEditTag edit={cashPendingEdits.get(entry.id)} />
                         {entry.direction === 'in' ? (
                           <Badge variant="outline" className="ml-2 rounded-full border-emerald-300 text-[10px] text-emerald-700 dark:text-emerald-300">
                             Cash In
@@ -1957,15 +1975,17 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditCash(entry)} aria-label="Edit cash entry">
                             <Pencil className="h-4 w-4" />
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9 text-destructive hover:text-destructive"
-                            onClick={() => handleDeleteCash(entry)}
-                            aria-label="Delete cash entry"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canDeleteCash ? (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9 text-destructive hover:text-destructive"
+                              onClick={() => handleDeleteCash(entry)}
+                              aria-label="Delete cash entry"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -2395,7 +2415,7 @@ export function LoansCashScreen({ view }: { view: LoansCashView }) {
               Cancel
             </Button>
             <Button onClick={handleSaveCash} disabled={cashSaving}>
-              {cashSaving ? 'Saving…' : 'Save entry'}
+              {cashSaving ? 'Saving…' : editingCashId && !canEditCashDirectly ? 'Submit edit for approval' : 'Save entry'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -50,13 +50,18 @@ export const ALL_PERMISSION_IDS: string[] = MODULE_DEFINITIONS.flatMap(({ module
   actions.map((action) => `${module}:${action}`)
 )
 
-export const ACCOUNT_OFFICER_PRESET_VERSION = 2
+export const ACCOUNT_OFFICER_PRESET_VERSION = 3
 
+// v3 (2026-10-15 client request): no finance:edit / finance:delete — an
+// Account Officer can't delete Expense or Cash Maintenance entries, and an
+// edit is saved as a pending edit for finance:approve to review instead of
+// changing the record (see PendingEditRecord in types.ts). The database
+// rules reject a direct edit/delete from this role.
 export const ACCOUNT_OFFICER_PERMISSION_IDS: string[] = [
   'products:view',
   'invoice-voucher:depot', 'invoice-voucher:dealer',
   'orders:view', 'orders:create',
-  'finance:view', 'finance:create', 'finance:edit', 'finance:delete', 'finance:export',
+  'finance:view', 'finance:create', 'finance:export',
 ]
 
 export const ACCOUNT_OFFICER_PAGE_ACCESS: string[] = [
@@ -205,11 +210,12 @@ export function createDefaultERPData(): ERPData {
       // 2026-10-15 client request (replaces the 2026-09-12 preset) — Account
       // Officer sees ONLY four pages: Invoice (Depot/Dealer vouchers — print
       // and generate; Company voucher deliberately omitted), Product Return,
-      // Expenses, and Cash Maintenance, each with full access. pageAccess
-      // hides every other page that shares products:view / finance:view.
-      // The extra permissions are what the database rules need for those
-      // pages to save: orders:create lets an invoice/return move product
-      // stockQty, finance:* covers expenses + cashMaintenance. No
+      // Expenses, and Cash Maintenance. pageAccess hides every other page
+      // that shares products:view / finance:view. The extra permissions are
+      // what the database rules need for those pages to save: orders:create
+      // lets an invoice/return move product stockQty, finance:view/create
+      // cover expenses + cashMaintenance (no edit/delete — edits go to
+      // Pending Edits, see ACCOUNT_OFFICER_PERMISSION_IDS). No
       // finance:approve — entries still go to Super Admin for approval.
       // Live roles get this via the self-heal in provider.tsx
       // (ACCOUNT_OFFICER_PRESET_VERSION).
@@ -716,6 +722,7 @@ export function createDefaultERPData(): ERPData {
     loanAccounts: {},
     loanTransactions: {},
     cashMaintenance: {},
+    pendingEdits: {},
     budgets: {},
     salesTargets: {},
     commissionRules: {},

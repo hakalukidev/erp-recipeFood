@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { CheckCircle2, ListChecks, Pencil, Plus, Printer, Search, Tags, Trash2, UserCheck, Wallet, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { PendingEditTag } from '@/components/admin/ApprovalStatusBadge'
 import { ExportMenu } from '@/components/admin/ExportMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,7 @@ import {
   EXPENSE_LOAN_REPAYMENT_CATEGORY,
   EXPENSE_SALARY_CATEGORY,
 } from '@/lib/erp/standardChartOfAccounts'
+import { latestPendingEditByRecord } from '@/lib/erp/approvals'
 import { buildGroupedReportHtml, groupReportItems, type ReportGroupBy } from '@/lib/erp/groupedReportPrint'
 import type { ExpenseInput, ExpenseRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
@@ -208,6 +210,11 @@ function SectionHeader({
 export default function ExpensesPage() {
   const { data, saveExpense, deleteExpense, updateExpenseApproval, saveExpenseCategoryLabels, hasPermission } = useERP()
   const canApproveExpenses = hasPermission('finance:approve')
+  // Without finance:edit (Account Officer) an edit is sent to Pending Edits
+  // instead of changing the expense; without finance:delete there's no
+  // Delete button (both also enforced in provider.tsx + database rules).
+  const canEditDirectly = hasPermission('finance:edit')
+  const canDeleteExpenses = hasPermission('finance:delete')
   // Renaming categories writes erp/settings — same users:edit gate as the
   // Settings page (see saveExpenseCategoryLabels).
   const canRenameCategories = hasPermission('users:edit')
@@ -235,6 +242,7 @@ export default function ExpensesPage() {
     [data?.expenses]
   )
   const currency = data?.settings.currency
+  const pendingEdits = useMemo(() => latestPendingEditByRecord(data ?? null, 'expenses'), [data])
   // Free-text employee name, not a Users/login lookup — see
   // ExpenseRecord.employeeName in types.ts. Suggestions are every distinct
   // name already used on a সেলারি entry or an Advance Salary cash entry,
@@ -488,7 +496,13 @@ export default function ExpensesPage() {
       }
       await saveExpense(input, editingExpenseId ?? undefined)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
-      setFeedback(editingExpenseId ? 'Expense updated.' : 'Expense recorded.')
+      setFeedback(
+        editingExpenseId
+          ? canEditDirectly
+            ? 'Expense updated.'
+            : 'Edit submitted for approval — the expense keeps its old values until it is approved.'
+          : 'Expense recorded.'
+      )
       setEditingExpenseId(null)
       // The "Expenses this period" list below is narrowed by this filter —
       // reset it so a newly recorded expense is never hidden by whatever
@@ -863,7 +877,7 @@ export default function ExpensesPage() {
                   <div className="flex items-center gap-2">
                     <Button type="submit" className="rounded-xl">
                       <Plus className="mr-2 h-4 w-4" />
-                      {editingExpenseId ? 'Update expense' : 'Save expense'}
+                      {editingExpenseId ? (canEditDirectly ? 'Update expense' : 'Submit edit for approval') : 'Save expense'}
                     </Button>
                     {editingExpenseId ? (
                       <Button type="button" variant="outline" className="rounded-xl" onClick={handleCancelEditExpense}>
@@ -899,7 +913,10 @@ export default function ExpensesPage() {
                       {filteredExpenses.map((expense) => (
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
-                          <TableCell className="font-medium">{labelOf(expense.category)}</TableCell>
+                          <TableCell className="font-medium">
+                            {labelOf(expense.category)}
+                            <PendingEditTag edit={pendingEdits.get(expense.id)} />
+                          </TableCell>
                           <TableCell>
                             {formatCurrency(expense.amount, currency)}
                             {expense.advanceAdjusted ? (
@@ -961,15 +978,17 @@ export default function ExpensesPage() {
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-9 w-9 text-destructive hover:text-destructive"
-                                onClick={() => void handleDeleteExpense(expense.id)}
-                                aria-label="Delete expense"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              {canDeleteExpenses ? (
+                                <Button
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-9 w-9 text-destructive hover:text-destructive"
+                                  onClick={() => void handleDeleteExpense(expense.id)}
+                                  aria-label="Delete expense"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              ) : null}
                             </div>
                           </TableCell>
                         </TableRow>

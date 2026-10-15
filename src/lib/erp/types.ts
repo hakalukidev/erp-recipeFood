@@ -1826,6 +1826,7 @@ export type ERPData = {
   loanAccounts: Record<string, LoanAccountRecord>
   loanTransactions: Record<string, LoanTransactionRecord>
   cashMaintenance: Record<string, CashMaintenanceRecord>
+  pendingEdits: Record<string, PendingEditRecord>
   budgets: Record<string, BudgetRecord>
   salesTargets: Record<string, SalesTargetRecord>
   commissionRules: Record<string, CommissionRuleRecord>
@@ -2008,4 +2009,32 @@ export type RecordApprovalFields = {
   approvedByName?: string
   approvedAt?: string
   approvalNote?: string
+}
+
+// ---- Pending Edits (2026-10-15 client request) ----------------------------
+// A role that can create Expense / Cash Maintenance entries but lacks
+// finance:edit (the Account Officer preset) doesn't edit a record in place —
+// its edit is saved here as a proposal and the original record keeps its old
+// values everywhere until someone with finance:approve approves it (which
+// re-runs saveExpense / saveCashMaintenance with `input`) or rejects it.
+// One pending proposal per record: a new edit replaces the pending one.
+// See submitPendingEdit / reviewPendingEdit in provider.tsx.
+export type PendingEditCollection = 'expenses' | 'cashMaintenance'
+
+export type PendingEditRecord = {
+  id: string
+  collection: PendingEditCollection
+  recordId: string
+  // The record as it was when the edit was submitted (old values).
+  before: ExpenseRecord | CashMaintenanceRecord
+  // What the submitter typed — re-applied through the normal save on approve.
+  input: ExpenseInput | CashMaintenanceInput
+  status: RecordApprovalStatus
+  submittedBy: string
+  submittedByName: string
+  submittedAt: string
+  reviewedBy?: string
+  reviewedByName?: string
+  reviewedAt?: string
+  reviewNote?: string
 }

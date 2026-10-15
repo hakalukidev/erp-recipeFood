@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, CalendarDays, CheckCircle2, ExternalLink, History, PencilLine, Search, ShieldCheck, XCircle } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowRight, CalendarDays, CheckCircle2, ExternalLink, FilePenLine, History, PencilLine, Search, ShieldCheck, XCircle } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { ApprovalStatusBadge } from '@/components/admin/ApprovalStatusBadge'
@@ -30,7 +30,16 @@ import {
   type ApprovalQueueItem,
 } from '@/lib/erp/approvals'
 import { useERP } from '@/lib/erp/provider'
-import type { RecordApprovalStatus } from '@/lib/erp/types'
+import { CASH_CATEGORY_ADVANCE_SALARY, CASH_CATEGORY_DAMAGE } from '@/lib/erp/standardChartOfAccounts'
+import type {
+  CashMaintenanceInput,
+  CashMaintenanceRecord,
+  ERPData,
+  ExpenseInput,
+  ExpenseRecord,
+  PendingEditRecord,
+  RecordApprovalStatus,
+} from '@/lib/erp/types'
 import { dhakaTodayIso, expenseCategoryLabel, formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -76,13 +85,63 @@ const STATUS_TABS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'all', label: 'All' },
 ]
 
+// Pending Edits (2026-10-15 client request): an Account Officer's edit to an
+// Expense / Cash Maintenance entry waits here as old → new values; the entry
+// itself keeps its old values until it's approved (see PendingEditRecord).
+type EditChange = { label: string; before: string; after: string }
+
+function describeEditChanges(edit: PendingEditRecord, data: ERPData, currency?: string): EditChange[] {
+  const money = (value?: number) => (value ? formatCurrency(value, currency) : '')
+  const day = (value?: string) => (value ? formatDate(value) : '')
+  const rows: EditChange[] = []
+  const field = (label: string, before: string | undefined, after: string | undefined) =>
+    rows.push({ label, before: before || '—', after: after || '—' })
+
+  if (edit.collection === 'expenses') {
+    // Old values = the expense as it is now (falls back to the snapshot if
+    // it has since been deleted).
+    const current = (data.expenses[edit.recordId] ?? edit.before) as ExpenseRecord
+    const input = edit.input as ExpenseInput
+    const loanName = (id?: string) => (id ? data.loanAccounts[id]?.memberName ?? id : '')
+    field('Category', expenseCategoryLabel(data, current.category), expenseCategoryLabel(data, input.category))
+    field('Amount', money(current.amount), money(input.amount))
+    field('Date', day(current.date), day(input.date))
+    field('Payment method', current.paymentMethod ?? 'cash', input.paymentMethod ?? 'cash')
+    field('Note', current.note, input.note)
+    field('Employee', current.employeeName, input.employeeName)
+    field('Advance adjusted', money(current.advanceAdjusted), money(input.advanceAdjusted))
+    field('Loan account', current.loanMemberName || loanName(current.loanAccountId), loanName(input.loanAccountId))
+  } else {
+    const current = (data.cashMaintenance[edit.recordId] ?? edit.before) as CashMaintenanceRecord
+    const input = edit.input as CashMaintenanceInput
+    const direction = (value?: string) => (value === 'in' ? 'Cash In' : 'Cash Out')
+    // Same field rules as saveCashMaintenance: employee only on an Advance
+    // Salary entry, product return only on a Damage entry.
+    const isOut = input.direction !== 'in'
+    const returnNumber = (id?: string) => (id ? data.productReturns[id]?.returnNumber ?? id : '')
+    field('Direction', direction(current.direction), direction(input.direction))
+    field('Category', current.category, input.category)
+    field('Amount', money(current.amount), money(input.amount))
+    field('Date', day(current.date), day(input.date))
+    field('Note', current.note, input.note)
+    field('Employee', current.employeeName, isOut && input.category === CASH_CATEGORY_ADVANCE_SALARY ? input.employeeName : '')
+    field(
+      'Product return',
+      current.productReturnNumber || returnNumber(current.productReturnId),
+      isOut && input.category === CASH_CATEGORY_DAMAGE ? returnNumber(input.productReturnId) : ''
+    )
+  }
+
+  return rows.filter((row) => row.before !== row.after)
+}
+
 const DEPARTMENT_LABELS: Record<ApprovalDepartment | 'expenses', string> = {
   ...APPROVAL_DEPARTMENT_LABELS,
   expenses: 'Finance',
 }
 
 export default function ApprovalsPage() {
-  const { data, currentUser, hasPermission, reviewRecordApproval, updateExpenseApproval } = useERP()
+  const { data, currentUser, hasPermission, reviewRecordApproval, reviewPendingEdit, updateExpenseApproval } = useERP()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending')
   const [departmentFilter, setDepartmentFilter] = useState<ApprovalDepartment | 'all'>('all')
   const [query, setQuery] = useState('')
@@ -247,6 +306,59 @@ export default function ApprovalsPage() {
     }
   }
 
+  // ---- Pending Edits ------------------------------------------------------
+  const canReviewEdits = hasPermission('finance:approve')
+  const pendingEditRows = useMemo(
+    () =>
+      data
+        ? Object.values(data.pendingEdits ?? {})
+            .filter((edit) => edit.status === 'pending')
+            .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+            .map((edit) => ({ edit, changes: describeEditChanges(edit, data, currency) }))
+        : [],
+    [currency, data]
+  )
+  const [rejectingEdit, setRejectingEdit] = useState<PendingEditRecord | null>(null)
+  const [editRejectNote, setEditRejectNote] = useState('')
+
+  function canReviewEdit(edit: PendingEditRecord) {
+    // Maker-checker, same as canReview (enforced again in reviewPendingEdit).
+    return canReviewEdits && (edit.submittedBy !== currentUser?.id || currentUser?.roleId === 'super_admin')
+  }
+
+  async function reviewEdit(edit: PendingEditRecord, status: 'approved' | 'rejected', note?: string) {
+    const key = `pendingEdits:${edit.id}`
+    setBusyKey(key)
+    setFeedback(null)
+    try {
+      await reviewPendingEdit(edit.id, status, note)
+      setFeedback(
+        `${edit.collection === 'expenses' ? 'Expense' : 'Cash entry'} edit by ${edit.submittedByName} ${
+          status === 'approved' ? 'approved and applied' : 'rejected — the entry is unchanged'
+        }.`
+      )
+      return true
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to review this edit.')
+      return false
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  async function confirmRejectEdit() {
+    if (!rejectingEdit) return
+    if (!editRejectNote.trim()) {
+      setFeedback('Give a reason for rejecting this edit.')
+      return
+    }
+    const done = await reviewEdit(rejectingEdit, 'rejected', editRejectNote)
+    if (done) {
+      setRejectingEdit(null)
+      setEditRejectNote('')
+    }
+  }
+
   const STATUS_LABEL: Record<RecordApprovalStatus, string> = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' }
 
   const exportHeaders = ['Date', 'Submitted', 'Department', 'Type', 'Reference', 'Party', 'Amount', 'Entered by', 'Status', 'Authorized by', 'Note']
@@ -335,6 +447,118 @@ export default function ApprovalsPage() {
         {feedback ? (
           <Card className="border-border/70 bg-primary/5 shadow-sm">
             <CardContent className="p-4 text-sm text-primary">{feedback}</CardContent>
+          </Card>
+        ) : null}
+
+        {canReviewEdits ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FilePenLine className="h-5 w-5 text-primary" />
+                Edit Requests
+                <span className="text-sm font-normal text-muted-foreground">({pendingEditRows.length})</span>
+              </CardTitle>
+              <CardDescription>
+                Edits to Expense and Cash Maintenance entries submitted without edit permission. The entry keeps its old values
+                everywhere until the edit is approved; rejecting leaves it unchanged.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto rounded-2xl border border-border/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead>Submitted</TableHead>
+                      <TableHead>Entry</TableHead>
+                      <TableHead>Changes (old → new)</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingEditRows.map(({ edit, changes }) => {
+                      const key = `pendingEdits:${edit.id}`
+                      const isExpense = edit.collection === 'expenses'
+                      const recordExists = isExpense ? Boolean(data?.expenses[edit.recordId]) : Boolean(data?.cashMaintenance[edit.recordId])
+                      return (
+                        <TableRow key={key}>
+                          <TableCell className="whitespace-nowrap">
+                            <p>{edit.submittedByName || '—'}</p>
+                            <p className="text-xs text-muted-foreground">{formatDateTime(edit.submittedAt)}</p>
+                          </TableCell>
+                          <TableCell className="min-w-44">
+                            <p className="font-medium">{isExpense ? 'Expense' : 'Cash Entry'}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {isExpense && data ? expenseCategoryLabel(data, edit.before.category) : edit.before.category} ·{' '}
+                              {formatDate(edit.before.date)}
+                            </p>
+                            {!recordExists ? <p className="mt-1 text-xs text-destructive">Entry has since been deleted</p> : null}
+                          </TableCell>
+                          <TableCell className="min-w-72">
+                            {changes.length ? (
+                              <div className="space-y-1 text-sm">
+                                {changes.map((change) => (
+                                  <div key={change.label} className="flex flex-wrap items-center gap-x-2">
+                                    <span className="text-xs font-medium text-muted-foreground">{change.label}:</span>
+                                    <span className="text-destructive line-through">{change.before}</span>
+                                    <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                                    <span className="font-medium text-emerald-700 dark:text-emerald-300">{change.after}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-sm text-muted-foreground">No changes from the current values</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              {canReviewEdit(edit) ? (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9 text-emerald-600 hover:text-emerald-600"
+                                    disabled={busyKey === key || !recordExists}
+                                    onClick={() => void reviewEdit(edit, 'approved')}
+                                    aria-label="Approve edit"
+                                  >
+                                    <CheckCircle2 className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9 text-destructive hover:text-destructive"
+                                    disabled={busyKey === key}
+                                    onClick={() => {
+                                      setEditRejectNote('')
+                                      setRejectingEdit(edit)
+                                    }}
+                                    aria-label="Reject edit"
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              ) : null}
+                              <Button variant="outline" size="icon" className="h-9 w-9" asChild>
+                                <Link href={isExpense ? '/admin/finance' : '/admin/cash-maintenance'} aria-label="Open entry page">
+                                  <ExternalLink className="h-4 w-4" />
+                                </Link>
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                    {pendingEditRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">
+                          No edits waiting for approval.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
           </Card>
         ) : null}
 
@@ -581,6 +805,36 @@ export default function ApprovalsPage() {
               onClick={() => void confirmChange()}
             >
               {changing?.status === 'rejected' ? 'Reject' : changing?.status === 'approved' ? 'Approve' : 'Send back to pending'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={rejectingEdit !== null} onOpenChange={(open) => (open ? null : setRejectingEdit(null))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject edit — {rejectingEdit?.collection === 'expenses' ? 'Expense' : 'Cash Entry'}</DialogTitle>
+            <DialogDescription>
+              The proposed changes are discarded and the entry keeps its current values. {rejectingEdit?.submittedByName || 'The submitter'} can
+              submit a new edit afterwards.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={editRejectNote}
+            onChange={(event) => setEditRejectNote(event.target.value)}
+            placeholder="Reason for rejection (required)"
+            rows={3}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectingEdit(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={rejectingEdit !== null && busyKey === `pendingEdits:${rejectingEdit.id}`}
+              onClick={() => void confirmRejectEdit()}
+            >
+              Reject
             </Button>
           </DialogFooter>
         </DialogContent>

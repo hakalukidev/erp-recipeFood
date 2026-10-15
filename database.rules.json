@@ -82,6 +82,12 @@
           }
         }
       },
+      "pendingEdits": {
+        ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
+        "$id": {
+          ".write": "((newData.exists() && newData.child('status').val() === 'pending' && newData.child('submittedBy').val() === auth.uid && (!data.exists() || data.child('status').val() === 'pending') && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:create').val() === true)\n             || (data.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:approve').val() === true)\n             || (data.exists() && !newData.exists() && root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:delete').val() === true))"
+        }
+      },
       "investors": {
         ".read": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('finance:view').val() === true",
         "$id": {
