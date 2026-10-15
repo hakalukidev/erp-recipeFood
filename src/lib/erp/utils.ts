@@ -9,6 +9,7 @@ import type {
   LedgerAccount,
   OrderRecord,
   ProductRecord,
+  ProductReturnRecord,
   PurchaseMaterialRecord,
   SaleType,
   UserRecord,
@@ -77,6 +78,33 @@ export function saleTypeLabel(saleType: SaleType | undefined, dealerCategories: 
 // (Stock it moved stays moved until the entry is edited or deleted.)
 export function isCountedEntry(entry: { approvalStatus?: string } | null | undefined) {
   return entry?.approvalStatus !== 'rejected'
+}
+
+// Product returns credited against one invoice (ProductReturnRecord.rateCardId
+// + dueAdjustment), priced three ways for the three vouchers: dealer = the
+// credit off the dealer's due (Dealer Rate), depot = the same goods at Depot
+// P R (depotRate), company = at Raw Rate (the packet/box is lost on a damaged
+// return, and Packet Cost = manufRate − rawRate). A partial adjustment scales
+// depot/company by the same ratio. Display only — productReturns stays the
+// single source; nothing here is saved onto the RateCardRecord, and Company
+// Earnings / Sales Report don't read it.
+export type InvoiceReturnBreakdown = { count: number; dealer: number; depot: number; company: number }
+
+export function getInvoiceReturnBreakdown(
+  rateCardId: string,
+  productReturns?: Record<string, ProductReturnRecord> | null
+): InvoiceReturnBreakdown {
+  const breakdown: InvoiceReturnBreakdown = { count: 0, dealer: 0, depot: 0, company: 0 }
+  for (const entry of toArray(productReturns)) {
+    const adjustment = entry.dueAdjustment ?? 0
+    if (entry.rateCardId !== rateCardId || !isCountedEntry(entry) || adjustment <= 0) continue
+    const ratio = entry.dealerRateTotal > 0 ? Math.min(adjustment / entry.dealerRateTotal, 1) : 1
+    breakdown.count += 1
+    breakdown.dealer += adjustment
+    breakdown.depot += (entry.depotRateTotal ?? 0) * ratio
+    breakdown.company += (entry.rawRateTotal ?? 0) * ratio
+  }
+  return breakdown
 }
 
 export function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[]) {

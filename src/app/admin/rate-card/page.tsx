@@ -63,6 +63,7 @@ import {
   createId,
   dhakaTodayIso,
   formatDate,
+  getInvoiceReturnBreakdown,
   isCommissionSaleType,
   isCountedEntry,
   isTradeSalesType,
@@ -71,6 +72,7 @@ import {
   saleTypeLabel,
   sortByCreatedAtDesc,
   toArray,
+  type InvoiceReturnBreakdown,
 } from '@/lib/erp/utils'
 
 // Fallback saleType when there's no dealer category to default to yet (e.g.
@@ -239,7 +241,24 @@ function computeTotals(items: LineItemForm[]) {
 }
 
 // Company (internal) voucher — every rate column plus the margin box.
-function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean, dealer?: DealerRecord) {
+function buildRateCardHtml(
+  rateCard: RateCardRecord,
+  isCommission: boolean,
+  dealer?: DealerRecord,
+  returnBreakdown?: InvoiceReturnBreakdown
+) {
+  // Linked product returns (getInvoiceReturnBreakdown — display only, the
+  // stored usableMoney is untouched): the company takes the goods back at
+  // Depot P R but only recovers their value without the packet (Raw Rate),
+  // so the margin it keeps drops by the difference.
+  const hasReturn = Boolean(returnBreakdown && returnBreakdown.count > 0)
+  const returnRows = hasReturn && returnBreakdown
+    ? `
+      <tr><td>Return at Depot P R:</td><td class="numeric">${formatAmount(returnBreakdown.depot)}</td><td></td></tr>
+      <tr><td>Return Value w/o Packet (Raw):</td><td class="numeric">${formatAmount(returnBreakdown.company)}</td><td></td></tr>
+      <tr><td>Usable money after return:</td><td class="numeric hl" colspan="2">${formatAmount(rateCard.usableMoney - (returnBreakdown.depot - returnBreakdown.company))}</td></tr>
+    `
+    : ''
   const columns: Array<'raw' | 'manuf' | 'depot' | 'dealer'> = ['raw', 'manuf', 'depot', 'dealer']
 
   const summaryRows = `
@@ -250,6 +269,7 @@ function buildRateCardHtml(rateCard: RateCardRecord, isCommission: boolean, deal
       <tr><td>Usable money:</td><td class="numeric hl">${formatAmount(rateCard.usableMoney)}</td><td class="numeric hl">${rateCard.usableMoneyPercent.toFixed(2)}%</td></tr>
       <tr><td>Usable u Depot:</td><td class="numeric hl">${rateCard.usableUDepotPercent.toFixed(2)}%</td><td class="numeric hl">${formatAmount(rateCard.usableUDepot)}</td></tr>
       <tr><td>Pouch Cart Am:</td><td class="numeric hl" colspan="2">${formatAmount(rateCard.pouchCartonAmount)}</td></tr>
+      ${returnRows}
     `
 
   const rateValue = (item: RateCardLineItem, column: 'raw' | 'manuf' | 'depot' | 'dealer') =>
@@ -538,13 +558,32 @@ function buildDealerInvoiceHtml(
   `
 }
 
+// Depot Net Profit = (dealerRateTotal − return at Dealer Rate) −
+// (depotRateTotal − return at Depot P R). Shared by the Depot voucher and
+// the invoice list column.
+function depotNetProfitAfterReturn(rateCard: RateCardRecord, returnBreakdown?: InvoiceReturnBreakdown) {
+  const dealerReturn = returnBreakdown?.dealer ?? 0
+  const depotReturn = returnBreakdown?.depot ?? 0
+  return rateCard.dealerRateTotal - dealerReturn - (rateCard.depotRateTotal - depotReturn)
+}
+
 // Company → Depot invoice: shows Depot P P (= depotRate, what the depot pays
 // the company) and Depot S P (= dealerRate, what the depot resells to its
 // dealer at — the same figure the Dealer voucher calls "DP"). Depot Net
 // Profit (the depot's own per-invoice commission) is Depot S P total −
 // Depot P P total — derived here, not stored.
-function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, depot?: DepotRecord, dealer?: DealerRecord) {
-  const depotNetProfit = rateCard.dealerRateTotal - rateCard.depotRateTotal
+function buildDepotInvoiceHtml(
+  rateCard: RateCardRecord,
+  isCommission: boolean,
+  depot?: DepotRecord,
+  dealer?: DealerRecord,
+  returnBreakdown?: InvoiceReturnBreakdown
+) {
+  // Linked product returns come off both sides: the depot's sales at Dealer
+  // Rate and its purchase at Depot P R (getInvoiceReturnBreakdown — display
+  // only, the stored totals are untouched).
+  const hasReturn = Boolean(returnBreakdown && returnBreakdown.count > 0)
+  const depotNetProfit = depotNetProfitAfterReturn(rateCard, returnBreakdown)
 
   const rows = rateCard.items
     .map(
@@ -593,7 +632,9 @@ function buildDepotInvoiceHtml(rateCard: RateCardRecord, isCommission: boolean, 
             <tr><td>Order No:</td><td>${escapeHtml(rateCard.invoiceNo)}</td></tr>
             <tr><td>Depot Sales Price:</td><td class="numeric hl">${formatAmount(rateCard.dealerRateTotal)}</td></tr>
             <tr><td>Depot Purchase Price:</td><td class="numeric">${formatAmount(rateCard.depotRateTotal)}</td></tr>
-            <tr><td>Depot Net Profit:</td><td class="numeric hl">${formatAmount(depotNetProfit)}</td></tr>
+            ${hasReturn && returnBreakdown ? `<tr><td>Less: Return at Dealer Rate:</td><td class="numeric">${formatAmount(returnBreakdown.dealer)}</td></tr>
+            <tr><td>Less: Return at Depot P R:</td><td class="numeric">${formatAmount(returnBreakdown.depot)}</td></tr>` : ''}
+            <tr><td>${hasReturn ? 'Depot Net Profit (after return):' : 'Depot Net Profit:'}</td><td class="numeric hl">${formatAmount(depotNetProfit)}</td></tr>
           </table>
         </div>
 
@@ -983,7 +1024,14 @@ export default function RateCardPage() {
   }, [monthRateCards])
 
   const totals = useMemo(() => computeTotals(form.items), [form.items])
-  const depotNetProfit = totals.dealerRateTotal - totals.depotRateTotal
+  // Returns linked to the invoice being edited come off both sides, same
+  // formula as the Depot voucher / list column (depotNetProfitAfterReturn).
+  const editingReturnBreakdown = useMemo(
+    () => (editingId ? getInvoiceReturnBreakdown(editingId, data?.productReturns) : null),
+    [editingId, data?.productReturns]
+  )
+  const depotNetProfit =
+    totals.dealerRateTotal - (editingReturnBreakdown?.dealer ?? 0) - (totals.depotRateTotal - (editingReturnBreakdown?.depot ?? 0))
   // Damage returns credited against the invoice being edited (spec §15) —
   // stay credited across the edit, so the Due preview subtracts them too.
   const editingReturnAdjustment = editingId ? data?.rateCards?.[editingId]?.returnAdjustment ?? 0 : 0
@@ -1335,6 +1383,7 @@ export default function RateCardPage() {
                   {filteredRateCards.map((card) => {
                     const isCommission = isCommissionSaleType(card.saleType, dealerCategories)
                     const isTradeSales = isTradeSalesType(card.saleType, dealerCategories)
+                    const returnBreakdown = getInvoiceReturnBreakdown(card.id, data?.productReturns)
                     return (
                     <TableRow key={card.id}>
                       <TableCell className="font-medium">{card.invoiceNo}<RecordApprovalTag record={card} /></TableCell>
@@ -1346,7 +1395,12 @@ export default function RateCardPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">{formatAmount(card.dealerRateTotal)}</TableCell>
-                      <TableCell className="text-right">{formatAmount(card.dealerRateTotal - card.depotRateTotal)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatAmount(depotNetProfitAfterReturn(card, returnBreakdown))}
+                        {returnBreakdown.count > 0 ? (
+                          <p className="text-[11px] text-muted-foreground">after return</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right text-emerald-600">{formatAmount(card.paid ?? 0)}</TableCell>
                       <TableCell className="text-right text-destructive">
                         {formatAmount(card.due ?? card.dealerRateTotal)}
@@ -1373,12 +1427,12 @@ export default function RateCardPage() {
                               <Wallet className="mr-2 h-4 w-4" /> Collection history
                             </DropdownMenuItem>
                             {hasPermission('invoice-voucher:company') ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId)))}>
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildRateCardHtml(card, isCommission, dealerForId(card.dealerId), returnBreakdown))}>
                                 <Printer className="mr-2 h-4 w-4" /> Print Company voucher
                               </DropdownMenuItem>
                             ) : null}
                             {hasPermission('invoice-voucher:depot') ? (
-                              <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId)))}>
+                              <DropdownMenuItem onClick={() => openPrintWindow(buildDepotInvoiceHtml(card, isCommission, depotForDealerId(card.dealerId), dealerForId(card.dealerId), returnBreakdown))}>
                                 <Printer className="mr-2 h-4 w-4" /> Print Depot voucher
                               </DropdownMenuItem>
                             ) : null}
@@ -1833,6 +1887,9 @@ export default function RateCardPage() {
                     <p className="text-lg font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                       {formatAmount(depotNetProfit)}
                     </p>
+                    {editingReturnBreakdown && editingReturnBreakdown.count > 0 ? (
+                      <p className="text-[11px] text-muted-foreground">after return</p>
+                    ) : null}
                   </div>
                 </div>
               </div>
