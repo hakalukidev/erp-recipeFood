@@ -1,9 +1,12 @@
 ﻿import { getApp, getApps, initializeApp } from 'firebase/app'
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   getAuth,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
   signOut,
+  updatePassword,
 } from 'firebase/auth'
 import { getDatabase } from 'firebase/database'
 import { getStorage } from 'firebase/storage'
@@ -84,4 +87,17 @@ export function sendUserPasswordReset(email: string) {
   }
 
   return sendPasswordResetEmail(auth, email)
+}
+
+// Lets the signed-in user change their own password. Firebase requires a
+// recent login for updatePassword, so we re-authenticate with the current
+// password first — which also proves the person at the keyboard knows it.
+export async function changeOwnPassword(currentPassword: string, newPassword: string) {
+  const user = auth?.currentUser
+  if (!user || !user.email) {
+    throw new Error('You need to log in before changing your password.')
+  }
+
+  await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, currentPassword))
+  await updatePassword(user, newPassword)
 }

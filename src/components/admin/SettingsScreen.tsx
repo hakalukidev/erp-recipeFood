@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 
 import { AdminShell } from './AdminShell'
+import { ChangePasswordForm } from './ChangePasswordForm'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -265,6 +266,16 @@ export function SettingsScreen() {
             </CardContent>
           </Card>
         ) : null}
+
+        <Card className="border-border/70 shadow-sm">
+          <CardHeader>
+            <CardTitle>Change password</CardTitle>
+            <CardDescription>Update the password you use to log in. You&apos;ll need your current password.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ChangePasswordForm />
+          </CardContent>
+        </Card>
       </div>
     </AdminShell>
   )

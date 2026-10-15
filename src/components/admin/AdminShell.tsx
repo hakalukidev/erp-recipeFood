@@ -15,6 +15,7 @@ import {
   FileBarChart,
   HandCoins,
   Handshake,
+  KeyRound,
   LayoutDashboard,
   Library,
   Lock,
@@ -37,6 +38,8 @@ import {
 } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
+import { ChangePasswordForm } from '@/components/admin/ChangePasswordForm'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildApprovalQueue } from '@/lib/erp/approvals'
 import { Button } from '@/components/ui/button'
 import {
@@ -754,6 +757,7 @@ function GlobalSearch() {
 
 export function AdminShell({ active, children, fullWidth = false }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('admin-sidebar-collapsed') === '1'
@@ -866,6 +870,16 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
                     </div>
                   </div>
 
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground"
+                    onClick={() => setPasswordDialogOpen(true)}
+                    title="Change password"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                  </Button>
+
                   <Button variant="ghost" size="icon" className="text-muted-foreground" onClick={logout} title="Logout">
                     <LogOut className="h-4 w-4" />
                   </Button>
@@ -873,6 +887,19 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
               </div>
             </div>
           </header>
+
+          {/* Open to every role (pageAccess/permissions don't apply) — a user
+              may always change their own password. Unmounting on close
+              clears the typed passwords. */}
+          <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Change password</DialogTitle>
+                <DialogDescription>Update the password you use to log in. You&apos;ll need your current password.</DialogDescription>
+              </DialogHeader>
+              {passwordDialogOpen ? <ChangePasswordForm stacked /> : null}
+            </DialogContent>
+          </Dialog>
 
           <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             <div className={cn('mx-auto w-full', fullWidth ? 'max-w-full' : 'max-w-7xl')}>

@@ -154,6 +154,7 @@ import {
 } from '@/lib/erp/utils'
 import {
   auth,
+  changeOwnPassword,
   createManagedUser,
   database,
   sendUserPasswordReset,
@@ -175,6 +176,7 @@ type ERPContextValue = {
   updateUser: (userId: string, input: UserInput) => Promise<void>
   deleteUser: (userId: string) => Promise<void>
   sendPasswordReset: (email: string) => Promise<void>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   hasPermission: (permission: string) => boolean
   saveRole: (input: RoleInput, roleId?: string) => Promise<string>
   deleteRole: (roleId: string) => Promise<void>
@@ -4952,6 +4954,38 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await sendUserPasswordReset(email)
   }
 
+  async function changePassword(currentPassword: string, newPassword: string) {
+    if (!currentUser) {
+      throw new Error('You need to log in before changing your password.')
+    }
+
+    if (!isStrongPassword(newPassword)) {
+      throw new Error('Password must be at least 8 characters and contain both letters and numbers.')
+    }
+
+    if (newPassword === currentPassword) {
+      throw new Error('New password must be different from the current password.')
+    }
+
+    try {
+      await changeOwnPassword(currentPassword, newPassword)
+    } catch (reason) {
+      const code = (reason as { code?: string })?.code
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') {
+        throw new Error('Current password is incorrect.')
+      }
+      if (code === 'auth/too-many-requests') {
+        throw new Error('Too many attempts. Please wait a few minutes and try again.')
+      }
+      if (code === 'auth/weak-password') {
+        throw new Error('That password is too weak. Choose a stronger one.')
+      }
+      throw reason
+    }
+
+    await writeActivity('password_changed', 'security', `${currentUser.name} changed their password.`)
+  }
+
   async function markNotificationRead(notificationId: string) {
     const db = getDatabaseOrThrow()
     await update(ref(db, `erp/notifications/${notificationId}`), { read: true })
@@ -7355,6 +7389,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updateUser,
       deleteUser,
       sendPasswordReset,
+      changePassword,
       hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
       saveRole,
       deleteRole,
