@@ -37,6 +37,32 @@ function formatAmount(value: number) {
   return value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// Product names are typed inconsistently ("মরিচগুঁড়া5 কেজি" vs "মরিচ গুঁড়া",
+// composed vs decomposed ড়, missing ঁ), so the product filter compares a
+// loosened form: NFC, no whitespace/hyphens/chandrabindu, lowercase.
+function looseProductText(value: string) {
+  return value.normalize('NFC').toLowerCase().replace(/[\s\-\u0981]+/g, '')
+}
+
+// Every word of the search must appear somewhere in the name, in any order —
+// "মরিচ গুঁড়া" therefore matches both "মরিচগুঁড়া1 কেজি" and "গুঁড়ামরিচ5 কেজি".
+function matchesProductQuery(productName: string, query: string) {
+  const tokens = query.split(/\s+/).map(looseProductText).filter(Boolean)
+  if (tokens.length === 0) return true
+  const name = looseProductText(productName)
+  return tokens.every((token) => name.includes(token))
+}
+
+// Product family = the name with its pack size stripped ("মরিচগুঁড়া5 কেজি" →
+// "মরিচগুঁড়া"), so every pack size of one product can be picked at once.
+function productFamilyLabel(productName: string) {
+  const stripped = productName
+    .trim()
+    .replace(/[\s\-]*[\d০-৯.]+\s*(কেজি|গ্রাম|মিলি|লিটার|টাকা|পিস|kg|gm|g|ml|ltr|l|pcs)?\s*$/i, '')
+    .replace(/[\s\-]+$/, '')
+  return stripped || productName.trim()
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -165,6 +191,7 @@ export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }:
 
   const [dealerQuery, setDealerQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
+  const [productFamily, setProductFamily] = useState('all')
   const [categoryQuery, setCategoryQuery] = useState('')
 
   // Individual invoices behind the aggregated "Unclassified" figure above —
@@ -227,11 +254,46 @@ export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }:
     return summary.dealers.filter((row) => row.dealerName.toLowerCase().includes(normalized))
   }, [summary.dealers, dealerQuery])
 
-  const filteredProducts = useMemo(() => {
-    const normalized = productQuery.trim().toLowerCase()
-    if (!normalized) return summary.products
-    return summary.products.filter((row) => row.productName.toLowerCase().includes(normalized))
-  }, [summary.products, productQuery])
+  const productFamilies = useMemo(() => {
+    const families = new Map<string, string>()
+    for (const row of summary.products) {
+      const label = productFamilyLabel(row.productName)
+      const key = looseProductText(label)
+      if (!families.has(key)) families.set(key, label)
+    }
+    return [...families.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label, 'bn'))
+  }, [summary.products])
+
+  const filteredProducts = useMemo(
+    () =>
+      summary.products.filter(
+        (row) =>
+          (productFamily === 'all' || looseProductText(productFamilyLabel(row.productName)) === productFamily) &&
+          matchesProductQuery(row.productName, productQuery)
+      ),
+    [summary.products, productQuery, productFamily]
+  )
+
+  const filteredProductTotals = useMemo(
+    () =>
+      filteredProducts.reduce(
+        (sum, row) => ({
+          qty: sum.qty + row.qty,
+          totalAmount: sum.totalAmount + row.totalAmount,
+          returnAmount: sum.returnAmount + row.returnAmount,
+          netAmount: sum.netAmount + row.netAmount,
+        }),
+        { qty: 0, totalAmount: 0, returnAmount: 0, netAmount: 0 }
+      ),
+    [filteredProducts]
+  )
+
+  const productFilterLabel = [
+    productFamily !== 'all' ? productFamilies.find((family) => family.key === productFamily)?.label : '',
+    productQuery.trim(),
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   const filteredCategories = useMemo(() => {
     const normalized = categoryQuery.trim().toLowerCase()
@@ -445,7 +507,20 @@ export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }:
               <CardTitle>Product-wise sales report</CardTitle>
               <CardDescription>Total quantity and amount sold per product in the selected period.</CardDescription>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
+              <Select value={productFamily} onValueChange={setProductFamily}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="All products" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All products</SelectItem>
+                  {productFamilies.map((family) => (
+                    <SelectItem key={family.key} value={family.key}>
+                      {family.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -457,9 +532,20 @@ export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }:
               </div>
               <ExportMenu
                 filenameBase="product-sales-report"
-                title={`Product-wise Sales Report (${periodLabel})`}
+                title={`Product-wise Sales Report (${periodLabel})${productFilterLabel ? ` — ${productFilterLabel}` : ''}`}
                 headers={['Product', 'Quantity sold (pcs)', 'Total sale amount', 'Return amount', 'Net sale amount']}
-                rows={filteredProducts.map((row) => [row.productName, row.qty, row.totalAmount.toFixed(2), row.returnAmount.toFixed(2), row.netAmount.toFixed(2)])}
+                rows={[
+                  ...filteredProducts.map((row) => [row.productName, row.qty, row.totalAmount.toFixed(2), row.returnAmount.toFixed(2), row.netAmount.toFixed(2)]),
+                  ...(filteredProducts.length > 0
+                    ? [[
+                        'Total',
+                        filteredProductTotals.qty,
+                        filteredProductTotals.totalAmount.toFixed(2),
+                        filteredProductTotals.returnAmount.toFixed(2),
+                        filteredProductTotals.netAmount.toFixed(2),
+                      ]]
+                    : []),
+                ]}
               />
             </div>
           </CardHeader>
@@ -492,7 +578,15 @@ export function SalesReportsContent({ from: fromDate, to: toDate, periodLabel }:
                         {summary.products.length === 0 ? 'No invoiced sales in this period.' : 'No product matches this search.'}
                       </TableCell>
                     </TableRow>
-                  ) : null}
+                  ) : (
+                    <TableRow className="border-t-2 bg-muted/40 font-semibold">
+                      <TableCell>Total{productFilterLabel ? ` (${productFilterLabel})` : ''}</TableCell>
+                      <TableCell className="text-right">{filteredProductTotals.qty.toLocaleString('en-BD')}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(filteredProductTotals.totalAmount, currency)}</TableCell>
+                      <TableCell className="text-right text-rose-600">{filteredProductTotals.returnAmount ? formatCurrency(filteredProductTotals.returnAmount, currency) : '—'}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(filteredProductTotals.netAmount, currency)}</TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </div>
