@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
-import { ChevronLeft, ChevronRight, Eye, EyeOff, LockKeyhole, LogOut, Unlock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Eye, EyeOff, Lock, LockKeyhole, LogOut, RotateCcw, Unlock } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -10,11 +10,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   BILLING_START_MONTH,
-  LOCK_DAY,
+  MAX_LOCK_DAY,
   MONTHLY_RENT,
   formatMonth,
   revokeMonth,
+  setLockDay,
+  setLockMode,
   toMonthKey,
+  type BillingLog,
+  type LockMode,
   unlockMonths,
   useBillingLogs,
   useBillingStatus,
@@ -25,25 +29,44 @@ import {
 import { getBillingApp } from '@/lib/firebase/config'
 import { cn } from '@/lib/utils'
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
 function formatTime(ms: number) {
   return new Date(ms).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', dateStyle: 'medium', timeStyle: 'short' })
 }
 
+const MODE_LABELS: Record<LockMode, string> = {
+  auto: 'Auto',
+  lock: 'Locked manually',
+  unlock: 'Unlocked manually',
+}
+
+function logLabel(log: BillingLog) {
+  if (log.action === 'unlock') return 'Unlock'
+  if (log.action === 'revoke') return 'Re-lock'
+  if (log.action === 'lock-day') return `Lock day → ${log.lockDay}`
+  return log.mode === 'lock' ? 'Lock now' : log.mode === 'unlock' ? 'Unlock now' : 'Auto mode'
+}
+
 export default function UnlockPage() {
-  const billing = useMemo(() => getBillingApp(), [])
+  // Resolved after mount: Firebase only exists in the browser, so reading it
+  // during render would make the server and client HTML differ.
+  const [billing, setBilling] = useState<ReturnType<typeof getBillingApp>>(null)
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
-    if (!billing) {
+    const instance = getBillingApp()
+    setBilling(instance)
+    if (!instance) {
       setAuthReady(true)
       return
     }
-    return onAuthStateChanged(billing.auth, (next) => {
+    return onAuthStateChanged(instance.auth, (next) => {
       setUser(next)
       setAuthReady(true)
     })
-  }, [billing])
+  }, [])
 
   return (
     <main className="min-h-screen bg-background">
@@ -68,10 +91,10 @@ export default function UnlockPage() {
         </div>
       </header>
 
-      {!billing ? (
-        <p className="p-10 text-center text-sm text-muted-foreground">Firebase is not configured.</p>
-      ) : !authReady ? (
+      {!authReady ? (
         <p className="p-10 text-center text-sm text-muted-foreground">Loading...</p>
+      ) : !billing ? (
+        <p className="p-10 text-center text-sm text-muted-foreground">Firebase is not configured.</p>
       ) : user ? (
         <BillingConsole user={user} />
       ) : (
@@ -116,7 +139,7 @@ function TeamLogin() {
             Monthly billing &amp; ERP unlock.
           </h1>
           <p className="max-w-md text-base leading-7 text-muted-foreground">
-            The ERP locks on day {LOCK_DAY} of every unpaid month. Record the client&apos;s payment here — one or many
+            The ERP locks on the set lock day of every unpaid month, and can be locked or unlocked manually at any time. Record the client&apos;s payment here — one or many
             months at once — to keep it unlocked.
           </p>
           <ul className="max-w-md space-y-2 text-sm text-muted-foreground">
@@ -196,9 +219,31 @@ function BillingConsole({ user }: { user: User }) {
   const [payerNumber, setPayerNumber] = useState('')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [lockDayInput, setLockDayInput] = useState('')
+  const [savingSettings, setSavingSettings] = useState(false)
 
+  const { lockDay, mode } = status.settings
   const paid = months ?? {}
-  const paidList = Object.values(paid).sort((a, b) => b.month.localeCompare(a.month))
+  const [filterYear, setFilterYear] = useState('')
+  const [filterMonth, setFilterMonth] = useState('')
+  const filterActive = Boolean(filterYear || filterMonth)
+  const matchesFilter = (key: string) => {
+    const [y, m] = key.split('-')
+    return (!filterYear || y === filterYear) && (!filterMonth || m === filterMonth)
+  }
+  const filterLabel = filterYear && filterMonth
+    ? formatMonth(`${filterYear}-${filterMonth}`)
+    : filterMonth
+      ? `${MONTH_NAMES[Number(filterMonth) - 1]} (any year)`
+      : filterYear
+  const filterYears = Array.from(
+    new Set([today.year, ...Object.keys(paid).map((key) => Number(key.slice(0, 4))), ...logs.flatMap((log) => log.months.map((key) => Number(key.slice(0, 4))))])
+  ).sort((a, b) => b - a)
+  const totalReceived = Object.values(paid).reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+  const paidList = Object.values(paid)
+    .filter((item) => matchesFilter(item.month))
+    .sort((a, b) => b.month.localeCompare(a.month))
+  const filteredLogs = filterActive ? logs.filter((log) => log.months.some(matchesFilter)) : logs
 
   function toggle(key: string) {
     setSelected((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key].sort()))
@@ -241,6 +286,48 @@ function BillingConsole({ user }: { user: User }) {
     }
   }
 
+  async function handleMode(next: LockMode) {
+    if (next === mode) return
+    let note: string | undefined
+    if (next !== 'auto') {
+      const reason = window.prompt(
+        next === 'lock'
+          ? 'Lock the ERP now, even if paid? Enter a reason (optional):'
+          : 'Keep the ERP unlocked even if months are unpaid? Enter a reason (optional):'
+      )
+      if (reason === null) return
+      note = reason.trim()
+    }
+    setSavingSettings(true)
+    try {
+      await setLockMode(database, { mode: next, note, by })
+      toast.success(next === 'auto' ? 'Back to automatic lock.' : next === 'lock' ? 'ERP locked.' : 'ERP unlocked.')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Update failed.')
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
+  async function handleLockDay(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const next = Number(lockDayInput)
+    if (!Number.isInteger(next) || next < 1 || next > MAX_LOCK_DAY) {
+      return toast.error(`Lock day must be between 1 and ${MAX_LOCK_DAY}.`)
+    }
+    if (next === lockDay) return setLockDayInput('')
+    setSavingSettings(true)
+    try {
+      await setLockDay(database, { lockDay: next, by })
+      toast.success(`ERP now locks on day ${next} if unpaid.`)
+      setLockDayInput('')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Update failed.')
+    } finally {
+      setSavingSettings(false)
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 sm:px-8">
       {error ? (
@@ -249,15 +336,91 @@ function BillingConsole({ user }: { user: User }) {
         </p>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="ERP status" value={!status.ready ? '...' : status.locked ? 'Locked' : 'Unlocked'} tone={status.locked ? 'bad' : 'good'} />
-        <StatCard label="Today (Dhaka)" value={`${today.day} ${formatMonth(today.monthKey)}`} hint={`Locks on day ${LOCK_DAY} if unpaid`} />
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="ERP status"
+          value={!status.ready ? '...' : status.locked ? 'Locked' : 'Unlocked'}
+          hint={status.ready ? MODE_LABELS[mode] : undefined}
+          tone={status.locked ? 'bad' : 'good'}
+        />
+        <StatCard label="Today (Dhaka)" value={`${today.day} ${formatMonth(today.monthKey)}`} hint={`Locks on day ${lockDay} if unpaid`} />
         <StatCard
           label="Due now"
           value={status.unpaidMonths.length ? `${MONTHLY_RENT * status.unpaidMonths.length} tk` : '0 tk'}
           hint={status.unpaidMonths.length ? status.unpaidMonths.map(formatMonth).join(', ') : 'Nothing overdue'}
           tone={status.unpaidMonths.length ? 'bad' : undefined}
         />
+        <StatCard
+          label="Total received"
+          value={`${totalReceived} tk`}
+          hint={`${Object.keys(paid).length} paid month${Object.keys(paid).length === 1 ? '' : 's'} · all time`}
+          tone="good"
+        />
+      </section>
+
+      <section className="grid gap-6 rounded-lg border border-border bg-card p-5 lg:grid-cols-2">
+        <div className="space-y-3">
+          <div>
+            <h2 className="font-semibold">Lock control</h2>
+            <p className="text-xs text-muted-foreground">
+              Auto locks only when a month is unpaid. Lock now / Unlock now override payments until set back to Auto.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={mode === 'lock' ? 'destructive' : 'outline'}
+              disabled={savingSettings || !status.ready}
+              onClick={() => handleMode('lock')}
+            >
+              <Lock className="h-4 w-4" />
+              Lock now
+            </Button>
+            <Button
+              variant={mode === 'unlock' ? 'default' : 'outline'}
+              disabled={savingSettings || !status.ready}
+              onClick={() => handleMode('unlock')}
+            >
+              <Unlock className="h-4 w-4" />
+              Unlock now
+            </Button>
+            <Button
+              variant={mode === 'auto' ? 'secondary' : 'ghost'}
+              disabled={savingSettings || !status.ready}
+              onClick={() => handleMode('auto')}
+            >
+              <RotateCcw className="h-4 w-4" />
+              Auto
+            </Button>
+          </div>
+          {mode === 'unlock' && status.unpaidMonths.length ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Unpaid months are being ignored. Switch back to Auto to lock on non-payment.
+            </p>
+          ) : null}
+        </div>
+
+        <form onSubmit={handleLockDay} className="space-y-3">
+          <div>
+            <h2 className="font-semibold">Lock day</h2>
+            <p className="text-xs text-muted-foreground">
+              Day of the month (1–{MAX_LOCK_DAY}) the ERP locks if that month is unpaid. Currently day {lockDay}.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={MAX_LOCK_DAY}
+              placeholder={String(lockDay)}
+              value={lockDayInput}
+              onChange={(e) => setLockDayInput(e.target.value)}
+              className="w-28"
+            />
+            <Button type="submit" variant="outline" disabled={savingSettings || !status.ready || !lockDayInput}>
+              Save
+            </Button>
+          </div>
+        </form>
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
@@ -351,8 +514,51 @@ function BillingConsole({ user }: { user: User }) {
         </form>
       </section>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">Filter</span>
+        <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <option value="">All months</option>
+          {MONTH_NAMES.map((name, index) => (
+            <option key={name} value={String(index + 1).padStart(2, '0')}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+          <option value="">All years</option>
+          {filterYears.map((y) => (
+            <option key={y} value={String(y)}>
+              {y}
+            </option>
+          ))}
+        </select>
+        {filterActive ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFilterMonth('')
+              setFilterYear('')
+            }}
+          >
+            Clear
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">Showing all months</span>
+        )}
+      </div>
+
       <section className="rounded-lg border border-border bg-card p-5">
-        <h2 className="mb-3 font-semibold">Paid months</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold">Paid months</h2>
+          <p className="text-sm text-muted-foreground">
+            Total received:{' '}
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {paidList.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)} tk
+            </span>{' '}
+            ({paidList.length} month{paidList.length === 1 ? '' : 's'})
+          </p>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-sm">
             <thead className="text-left text-xs text-muted-foreground">
@@ -369,7 +575,7 @@ function BillingConsole({ user }: { user: User }) {
               {paidList.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-6 text-center text-muted-foreground">
-                    No paid months yet.
+                    {filterActive ? `No payment for ${filterLabel}.` : 'No paid months yet.'}
                   </td>
                 </tr>
               ) : (
@@ -410,29 +616,31 @@ function BillingConsole({ user }: { user: User }) {
               </tr>
             </thead>
             <tbody>
-              {logs.length === 0 ? (
+              {filteredLogs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-6 text-center text-muted-foreground">
-                    No activity yet.
+                    {filterActive ? `No activity for ${filterLabel}.` : 'No activity yet.'}
                   </td>
                 </tr>
               ) : (
-                logs.map((log) => (
+                filteredLogs.map((log) => (
                   <tr key={log.id} className="border-b border-border/60 align-top last:border-0">
                     <td className="py-2 pr-3 text-xs text-muted-foreground">{formatTime(log.at)}</td>
                     <td className="py-2 pr-3">
                       <span
                         className={cn(
                           'rounded px-1.5 py-0.5 text-xs font-medium',
-                          log.action === 'unlock'
+                          log.action === 'unlock' || (log.action === 'mode' && log.mode === 'unlock')
                             ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                            : 'bg-red-500/10 text-red-700 dark:text-red-400'
+                            : log.action === 'revoke' || (log.action === 'mode' && log.mode === 'lock')
+                              ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                              : 'bg-muted text-muted-foreground'
                         )}
                       >
-                        {log.action === 'unlock' ? 'Unlock' : 'Re-lock'}
+                        {logLabel(log)}
                       </span>
                     </td>
-                    <td className="py-2 pr-3">{log.months.map(formatMonth).join(', ')}</td>
+                    <td className="py-2 pr-3">{log.months.length ? log.months.map(formatMonth).join(', ') : '—'}</td>
                     <td className="py-2 pr-3 text-xs">
                       {log.txnId ? (
                         <>

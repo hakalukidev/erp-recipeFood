@@ -42,7 +42,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { ChangePasswordForm } from '@/components/admin/ChangePasswordForm'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildApprovalQueue } from '@/lib/erp/approvals'
-import { formatMonth, LOCK_DAY, MONTHLY_RENT, useBillingStatus } from '@/lib/erp/billing'
+import { formatMonth, MONTHLY_RENT, useBillingStatus } from '@/lib/erp/billing'
 import { database } from '@/lib/firebase/config'
 import { Button } from '@/components/ui/button'
 import {
@@ -759,32 +759,37 @@ function GlobalSearch() {
 }
 
 function BillingLockScreen({ unpaidMonths, onLogout }: { unpaidMonths: string[]; onLogout: () => void }) {
+  // Locked manually by the Hakaluki team with nothing unpaid.
+  const manual = unpaidMonths.length === 0
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-md rounded-xl border-2 border-red-500/40 bg-card p-8 text-center shadow-lg">
         <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10">
           <Lock className="h-7 w-7 text-red-600 dark:text-red-400" />
         </span>
-        <h1 className="mt-4 text-xl font-semibold">ERP Locked — Monthly bill is due</h1>
+        <h1 className="mt-4 text-xl font-semibold">{manual ? 'ERP Locked' : 'ERP Locked — Monthly bill is due'}</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Please contact the Hakaluki team and pay the monthly rent of {MONTHLY_RENT}tk, then send the Txn ID and payment
-          number. The ERP unlocks as soon as the payment is confirmed.
+          {manual
+            ? 'The ERP has been locked by the Hakaluki team. Please contact them to unlock it.'
+            : `Please contact the Hakaluki team and pay the monthly rent of ${MONTHLY_RENT}tk, then send the Txn ID and payment number. The ERP unlocks as soon as the payment is confirmed.`}
         </p>
-        <div className="mt-5 rounded-lg bg-muted p-4 text-left text-sm">
-          <p className="text-xs text-muted-foreground">Unpaid</p>
-          <ul className="mt-1 space-y-1">
-            {unpaidMonths.map((month) => (
-              <li key={month} className="flex justify-between">
-                <span>{formatMonth(month)}</span>
-                <span>{MONTHLY_RENT} tk</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
-            <span>Total due</span>
-            <span>{MONTHLY_RENT * unpaidMonths.length} tk</span>
-          </p>
-        </div>
+        {manual ? null : (
+          <div className="mt-5 rounded-lg bg-muted p-4 text-left text-sm">
+            <p className="text-xs text-muted-foreground">Unpaid</p>
+            <ul className="mt-1 space-y-1">
+              {unpaidMonths.map((month) => (
+                <li key={month} className="flex justify-between">
+                  <span>{formatMonth(month)}</span>
+                  <span>{MONTHLY_RENT} tk</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
+              <span>Total due</span>
+              <span>{MONTHLY_RENT * unpaidMonths.length} tk</span>
+            </p>
+          </div>
+        )}
         <p className="mt-4 text-xs text-muted-foreground">
           Contact:{' '}
           <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
@@ -962,7 +967,7 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
                     {billing.warning.daysLeft} day{billing.warning.daysLeft > 1 ? 's' : ''} to lock
                   </span>{' '}
                   — Due payment for this month ({formatMonth(billing.warning.monthKey)}). Please pay {MONTHLY_RENT}tk before
-                  the {LOCK_DAY}th to keep the ERP unlocked.
+                  day {billing.settings.lockDay} to keep the ERP unlocked.
                 </p>
               </div>
             ) : null}
