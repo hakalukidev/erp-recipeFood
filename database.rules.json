@@ -262,6 +262,10 @@
         ".read": "auth != null",
         ".write": "root.child('erp/roles').child(root.child('erp/users').child(auth.uid).child('roleId').val()).child('permissions').child('users:edit').val() === true"
       },
+      "billing": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.token.email === 'team@hakaluki.dev'"
+      },
       "meta": {
         ".read": "auth != null"
       }

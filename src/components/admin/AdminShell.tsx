@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   BadgePercent,
   Bell,
   Boxes,
@@ -41,6 +42,8 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { ChangePasswordForm } from '@/components/admin/ChangePasswordForm'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildApprovalQueue } from '@/lib/erp/approvals'
+import { formatMonth, LOCK_DAY, MONTHLY_RENT, useBillingStatus } from '@/lib/erp/billing'
+import { database } from '@/lib/firebase/config'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -755,6 +758,48 @@ function GlobalSearch() {
   )
 }
 
+function BillingLockScreen({ unpaidMonths, onLogout }: { unpaidMonths: string[]; onLogout: () => void }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md rounded-xl border-2 border-red-500/40 bg-card p-8 text-center shadow-lg">
+        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10">
+          <Lock className="h-7 w-7 text-red-600 dark:text-red-400" />
+        </span>
+        <h1 className="mt-4 text-xl font-semibold">ERP Locked — Monthly bill is due</h1>
+        <p className="mt-3 text-sm leading-6 text-muted-foreground">
+          Please contact the Hakaluki team and pay the monthly rent of {MONTHLY_RENT}tk, then send the Txn ID and payment
+          number. The ERP unlocks as soon as the payment is confirmed.
+        </p>
+        <div className="mt-5 rounded-lg bg-muted p-4 text-left text-sm">
+          <p className="text-xs text-muted-foreground">Unpaid</p>
+          <ul className="mt-1 space-y-1">
+            {unpaidMonths.map((month) => (
+              <li key={month} className="flex justify-between">
+                <span>{formatMonth(month)}</span>
+                <span>{MONTHLY_RENT} tk</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 flex justify-between border-t border-border pt-2 font-semibold">
+            <span>Total due</span>
+            <span>{MONTHLY_RENT * unpaidMonths.length} tk</span>
+          </p>
+        </div>
+        <p className="mt-4 text-xs text-muted-foreground">
+          Contact:{' '}
+          <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+            hakaluki.dev
+          </a>
+        </p>
+        <Button variant="outline" className="mt-5" onClick={onLogout}>
+          <LogOut className="h-4 w-4" />
+          Logout
+        </Button>
+      </div>
+    </main>
+  )
+}
+
 export function AdminShell({ active, children, fullWidth = false }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
@@ -765,6 +810,9 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
   const { currentUser, data, logout, loading } = useERP()
   const router = useRouter()
   const canOpenPage = useCanOpenPage()
+  // Subscribed only once signed in — the billing read needs auth, and a
+  // denied listener isn't retried.
+  const billing = useBillingStatus(currentUser ? database : null)
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -806,6 +854,10 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
 
   if (!currentUser) {
     return <LoginScreen />
+  }
+
+  if (billing.locked) {
+    return <BillingLockScreen unpaidMonths={billing.unpaidMonths} onLogout={logout} />
   }
 
   return (
@@ -902,6 +954,18 @@ export function AdminShell({ active, children, fullWidth = false }: AdminShellPr
           </Dialog>
 
           <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+            {billing.warning ? (
+              <div className="mx-auto mb-6 flex max-w-2xl items-start gap-3 rounded-lg border-2 border-yellow-400 bg-yellow-50 px-4 py-3 text-sm text-yellow-900 dark:border-yellow-500/70 dark:bg-yellow-500/10 dark:text-yellow-200">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-yellow-500" />
+                <p>
+                  <span className="font-semibold">
+                    {billing.warning.daysLeft} day{billing.warning.daysLeft > 1 ? 's' : ''} to lock
+                  </span>{' '}
+                  — Due payment for this month ({formatMonth(billing.warning.monthKey)}). Please pay {MONTHLY_RENT}tk before
+                  the {LOCK_DAY}th to keep the ERP unlocked.
+                </p>
+              </div>
+            ) : null}
             <div className={cn('mx-auto w-full', fullWidth ? 'max-w-full' : 'max-w-7xl')}>
               {canViewCurrentPage ? (
                 children

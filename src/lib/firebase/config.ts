@@ -1,14 +1,17 @@
 ﻿import { getApp, getApps, initializeApp } from 'firebase/app'
 import {
+  type Auth,
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
   EmailAuthProvider,
   getAuth,
+  initializeAuth,
   reauthenticateWithCredential,
   sendPasswordResetEmail,
   signOut,
   updatePassword,
 } from 'firebase/auth'
-import { getDatabase } from 'firebase/database'
+import { type Database, getDatabase } from 'firebase/database'
 import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
@@ -62,6 +65,24 @@ function getSecondaryAuth() {
     secondaryAuth = getAuth(secondaryApp)
   }
   return secondaryAuth
+}
+
+// A third App instance for the Hakaluki team's /unlock page, so signing in
+// there doesn't replace (or get replaced by) an ERP user's session in the
+// same browser. Session persistence: the team login ends with the tab.
+let billingApp: { auth: Auth; database: Database } | null = null
+
+export function getBillingApp() {
+  if (!app) return null
+  if (!billingApp) {
+    const existing = getApps().find((candidate) => candidate.name === 'HakalukiBilling')
+    const instance = existing ?? initializeApp(firebaseConfig, 'HakalukiBilling')
+    billingApp = {
+      auth: existing ? getAuth(instance) : initializeAuth(instance, { persistence: browserSessionPersistence }),
+      database: getDatabase(instance),
+    }
+  }
+  return billingApp
 }
 
 // Creates a real Firebase Auth account for a new staff member and returns
