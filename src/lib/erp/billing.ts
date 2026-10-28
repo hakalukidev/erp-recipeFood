@@ -31,13 +31,16 @@ export type PaidMonth = {
   note?: string
 }
 
-// 'auto' follows paid months; 'lock' / 'unlock' force the ERP locked or
-// unlocked regardless of payments until set back to 'auto'.
+// Auto lock on unpaid months is always on. 'lock' forces the ERP locked until
+// 'Unlock now'. 'unlock' is a grace period: unpaid months are ignored until
+// the lock day of `unlockUntil`, then auto lock takes over again. 'auto' is
+// the plain state (no override).
 export type LockMode = 'auto' | 'lock' | 'unlock'
 
 export type BillingSettings = {
   lockDay: number
   mode: LockMode
+  unlockUntil?: string
 }
 
 export const DEFAULT_BILLING_SETTINGS: BillingSettings = { lockDay: LOCK_DAY, mode: 'auto' }
@@ -47,6 +50,7 @@ export type BillingLog = {
   action: 'unlock' | 'revoke' | 'mode' | 'lock-day'
   months: string[]
   mode?: LockMode
+  unlockUntil?: string
   lockDay?: number
   txnId?: string
   payerNumber?: string
@@ -95,6 +99,11 @@ export function zonedDate(ms: number, timeZone = BILLING_TIMEZONE): ZonedDate {
   const year = get('year')
   const month = get('month')
   return { year, month, day: get('day'), monthKey: toMonthKey(year, month) }
+}
+
+// Month whose lock day comes next — where an 'Unlock now' grace period ends.
+export function nextLockMonth(today: ZonedDate, lockDay = LOCK_DAY) {
+  return today.day < lockDay ? today.monthKey : addMonths(today.monthKey, 1)
 }
 
 // Months that must be paid by `today`: every month from BILLING_START_MONTH up
@@ -154,6 +163,7 @@ function normalizeSettings(value: Partial<BillingSettings> | null): BillingSetti
   return {
     lockDay: lockDay >= 1 && lockDay <= MAX_LOCK_DAY ? lockDay : LOCK_DAY,
     mode,
+    ...(typeof value?.unlockUntil === 'string' ? { unlockUntil: value.unlockUntil } : {}),
   }
 }
 
@@ -195,6 +205,9 @@ export type BillingStatus = {
   locked: boolean
   unpaidMonths: string[]
   settings: BillingSettings
+  // Set while an 'Unlock now' grace period is running: the month whose lock
+  // day ends it.
+  graceUntil: string | null
   // Set while the current month is unpaid and the lock is WARNING_DAYS or
   // fewer days away.
   warning: { monthKey: string; daysLeft: number } | null
@@ -210,16 +223,22 @@ export function useBillingStatus(database: Database | null, timeZone?: string): 
   return useMemo(() => {
     const settings = loadedSettings ?? DEFAULT_BILLING_SETTINGS
     if (!database || !months || !loadedSettings) {
-      return { ready: false, locked: false, unpaidMonths: [], settings, warning: null }
+      return { ready: false, locked: false, unpaidMonths: [], settings, graceUntil: null, warning: null }
     }
 
     const today = zonedDate(now, timeZone)
     const unpaidMonths = dueMonths(today, settings.lockDay).filter((key) => !months[key])
-    const locked = settings.mode === 'lock' || (settings.mode === 'auto' && unpaidMonths.length > 0)
+    const until = settings.unlockUntil
+    const graceUntil =
+      settings.mode === 'unlock' && until && (today.monthKey < until || (today.monthKey === until && today.day < settings.lockDay))
+        ? until
+        : null
+    const locked = settings.mode === 'lock' || (!graceUntil && unpaidMonths.length > 0)
     const daysLeft = settings.lockDay - today.day
+    // Warn before the next lock day unless a grace period already covers it.
     const warning =
-      settings.mode === 'auto'
-      && unpaidMonths.length === 0
+      !locked
+      && !(graceUntil && graceUntil > today.monthKey)
       && today.monthKey >= BILLING_START_MONTH
       && !months[today.monthKey]
       && daysLeft > 0
@@ -227,7 +246,7 @@ export function useBillingStatus(database: Database | null, timeZone?: string): 
         ? { monthKey: today.monthKey, daysLeft }
         : null
 
-    return { ready: true, locked, unpaidMonths, settings, warning }
+    return { ready: true, locked, unpaidMonths, settings, graceUntil, warning }
   }, [database, months, loadedSettings, now, timeZone])
 }
 
@@ -276,14 +295,21 @@ export async function revokeMonth(database: Database, input: { month: string; no
   })
 }
 
-export async function setLockMode(database: Database, input: { mode: LockMode; note?: string; by: string }) {
+// 'unlock' needs `unlockUntil` (see nextLockMonth); 'lock' clears it.
+export async function setLockMode(
+  database: Database,
+  input: { mode: 'lock' | 'unlock'; unlockUntil?: string; note?: string; by: string }
+) {
+  const unlockUntil = input.mode === 'unlock' ? input.unlockUntil ?? null : null
   const logId = push(ref(database, `${BILLING_PATH}/logs`)).key
   await update(ref(database, BILLING_PATH), {
     'settings/mode': input.mode,
+    'settings/unlockUntil': unlockUntil,
     [`logs/${logId}`]: {
       action: 'mode',
       months: [],
       mode: input.mode,
+      ...(unlockUntil ? { unlockUntil } : {}),
       ...(input.note ? { note: input.note } : {}),
       at: Date.now(),
       by: input.by,

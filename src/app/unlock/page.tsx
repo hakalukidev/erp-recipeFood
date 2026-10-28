@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
-import { ChevronLeft, ChevronRight, Eye, EyeOff, Lock, LockKeyhole, LogOut, RotateCcw, Unlock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Eye, EyeOff, Lock, LockKeyhole, LogOut, Unlock } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -15,10 +15,10 @@ import {
   formatMonth,
   revokeMonth,
   setLockDay,
+  nextLockMonth,
   setLockMode,
   toMonthKey,
   type BillingLog,
-  type LockMode,
   unlockMonths,
   useBillingLogs,
   useBillingStatus,
@@ -35,17 +35,13 @@ function formatTime(ms: number) {
   return new Date(ms).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', dateStyle: 'medium', timeStyle: 'short' })
 }
 
-const MODE_LABELS: Record<LockMode, string> = {
-  auto: 'Auto',
-  lock: 'Locked manually',
-  unlock: 'Unlocked manually',
-}
-
 function logLabel(log: BillingLog) {
   if (log.action === 'unlock') return 'Unlock'
   if (log.action === 'revoke') return 'Re-lock'
   if (log.action === 'lock-day') return `Lock day → ${log.lockDay}`
-  return log.mode === 'lock' ? 'Lock now' : log.mode === 'unlock' ? 'Unlock now' : 'Auto mode'
+  if (log.mode === 'lock') return 'Lock now'
+  if (log.mode === 'unlock') return log.unlockUntil ? `Unlock now (until ${formatMonth(log.unlockUntil)})` : 'Unlock now'
+  return 'Auto mode'
 }
 
 export default function UnlockPage() {
@@ -286,22 +282,18 @@ function BillingConsole({ user }: { user: User }) {
     }
   }
 
-  async function handleMode(next: LockMode) {
-    if (next === mode) return
-    let note: string | undefined
-    if (next !== 'auto') {
-      const reason = window.prompt(
-        next === 'lock'
-          ? 'Lock the ERP now, even if paid? Enter a reason (optional):'
-          : 'Keep the ERP unlocked even if months are unpaid? Enter a reason (optional):'
-      )
-      if (reason === null) return
-      note = reason.trim()
-    }
+  async function handleMode(next: 'lock' | 'unlock') {
+    const unlockUntil = nextLockMonth(today, lockDay)
+    const reason = window.prompt(
+      next === 'lock'
+        ? 'Lock the ERP now, even if paid? It stays locked until "Unlock now". Enter a reason (optional):'
+        : `Unlock the ERP now? Auto lock resumes on day ${lockDay} of ${formatMonth(unlockUntil)} if months are still unpaid. Enter a reason (optional):`
+    )
+    if (reason === null) return
     setSavingSettings(true)
     try {
-      await setLockMode(database, { mode: next, note, by })
-      toast.success(next === 'auto' ? 'Back to automatic lock.' : next === 'lock' ? 'ERP locked.' : 'ERP unlocked.')
+      await setLockMode(database, { mode: next, unlockUntil, note: reason.trim(), by })
+      toast.success(next === 'lock' ? 'ERP locked.' : 'ERP unlocked.')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Update failed.')
     } finally {
@@ -340,7 +332,15 @@ function BillingConsole({ user }: { user: User }) {
         <StatCard
           label="ERP status"
           value={!status.ready ? '...' : status.locked ? 'Locked' : 'Unlocked'}
-          hint={status.ready ? MODE_LABELS[mode] : undefined}
+          hint={
+            !status.ready
+              ? undefined
+              : mode === 'lock'
+                ? 'Locked manually'
+                : status.graceUntil
+                  ? `Unlocked manually until day ${lockDay}, ${formatMonth(status.graceUntil)}`
+                  : 'Auto lock on'
+          }
           tone={status.locked ? 'bad' : 'good'}
         />
         <StatCard label="Today (Dhaka)" value={`${today.day} ${formatMonth(today.monthKey)}`} hint={`Locks on day ${lockDay} if unpaid`} />
@@ -363,38 +363,32 @@ function BillingConsole({ user }: { user: User }) {
           <div>
             <h2 className="font-semibold">Lock control</h2>
             <p className="text-xs text-muted-foreground">
-              Auto locks only when a month is unpaid. Lock now / Unlock now override payments until set back to Auto.
+              Auto lock is always on: the ERP locks on day {lockDay} if a month is unpaid. Lock now keeps it locked until
+              Unlock now. Unlock now opens it until the next lock day, then auto lock checks payments again.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               variant={mode === 'lock' ? 'destructive' : 'outline'}
-              disabled={savingSettings || !status.ready}
+              disabled={savingSettings}
               onClick={() => handleMode('lock')}
             >
               <Lock className="h-4 w-4" />
               Lock now
             </Button>
             <Button
-              variant={mode === 'unlock' ? 'default' : 'outline'}
-              disabled={savingSettings || !status.ready}
+              variant={status.graceUntil ? 'default' : 'outline'}
+              disabled={savingSettings}
               onClick={() => handleMode('unlock')}
             >
               <Unlock className="h-4 w-4" />
               Unlock now
             </Button>
-            <Button
-              variant={mode === 'auto' ? 'secondary' : 'ghost'}
-              disabled={savingSettings || !status.ready}
-              onClick={() => handleMode('auto')}
-            >
-              <RotateCcw className="h-4 w-4" />
-              Auto
-            </Button>
           </div>
-          {mode === 'unlock' && status.unpaidMonths.length ? (
+          {status.graceUntil && status.unpaidMonths.length ? (
             <p className="text-xs text-amber-600 dark:text-amber-400">
-              Unpaid months are being ignored. Switch back to Auto to lock on non-payment.
+              Unpaid: {status.unpaidMonths.map(formatMonth).join(', ')}. The ERP locks again on day {lockDay} of{' '}
+              {formatMonth(status.graceUntil)} unless paid.
             </p>
           ) : null}
         </div>

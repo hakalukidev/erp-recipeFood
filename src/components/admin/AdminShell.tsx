@@ -767,10 +767,10 @@ function BillingLockScreen({ unpaidMonths, onLogout }: { unpaidMonths: string[];
         <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-500/10">
           <Lock className="h-7 w-7 text-red-600 dark:text-red-400" />
         </span>
-        <h1 className="mt-4 text-xl font-semibold">{manual ? 'ERP Locked' : 'ERP Locked — Monthly bill is due'}</h1>
+        <h1 className="mt-4 text-xl font-semibold">{manual ? 'ERP Locked — Payment may be due' : 'ERP Locked — Monthly bill is due'}</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
           {manual
-            ? 'The ERP has been locked by the Hakaluki team. Please contact them to unlock it.'
+            ? `The ERP has been locked automatically. Your monthly payment (${MONTHLY_RENT}tk) may be due. Please contact the Hakaluki team, pay the monthly rent, then send the Txn ID and payment number to unlock.`
             : `Please contact the Hakaluki team and pay the monthly rent of ${MONTHLY_RENT}tk, then send the Txn ID and payment number. The ERP unlocks as soon as the payment is confirmed.`}
         </p>
         {manual ? null : (
