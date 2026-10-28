@@ -16,6 +16,7 @@ import {
   revokeMonth,
   setLockDay,
   nextLockMonth,
+  nextPaymentMonth,
   setLockMode,
   toMonthKey,
   type BillingLog,
@@ -36,7 +37,7 @@ function formatTime(ms: number) {
 }
 
 function logLabel(log: BillingLog) {
-  if (log.action === 'unlock') return 'Unlock'
+  if (log.action === 'unlock') return log.free ? 'Free unlock' : 'Unlock'
   if (log.action === 'revoke') return 'Re-lock'
   if (log.action === 'lock-day') return `Lock day → ${log.lockDay}`
   if (log.mode === 'lock') return 'Lock now'
@@ -214,12 +215,15 @@ function BillingConsole({ user }: { user: User }) {
   const [txnId, setTxnId] = useState('')
   const [payerNumber, setPayerNumber] = useState('')
   const [note, setNote] = useState('')
+  const [free, setFree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [lockDayInput, setLockDayInput] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
 
   const { lockDay, mode } = status.settings
   const paid = months ?? {}
+  const nextPayment = nextPaymentMonth(today, lockDay, paid)
+  const overdueSince = status.unpaidMonths[0]
   const [filterYear, setFilterYear] = useState('')
   const [filterMonth, setFilterMonth] = useState('')
   const filterActive = Boolean(filterYear || filterMonth)
@@ -250,20 +254,23 @@ function BillingConsole({ user }: { user: User }) {
     const cleanTxn = txnId.trim()
     const cleanNumber = payerNumber.trim()
     if (selected.length === 0) return toast.error('Select at least one month.')
-    if (!cleanTxn) return toast.error('Enter the Txn ID.')
-    if (!/^[0-9+\-\s]{6,20}$/.test(cleanNumber)) return toast.error('Enter a valid payer number.')
-    if (Object.values(paid).some((item) => item.txnId.toLowerCase() === cleanTxn.toLowerCase())) {
-      return toast.error('This Txn ID is already used for a paid month.')
+    if (!free) {
+      if (!cleanTxn) return toast.error('Enter the Txn ID.')
+      if (!/^[0-9+\-\s]{6,20}$/.test(cleanNumber)) return toast.error('Enter a valid payer number.')
+      if (Object.values(paid).some((item) => item.txnId?.toLowerCase() === cleanTxn.toLowerCase())) {
+        return toast.error('This Txn ID is already used for a paid month.')
+      }
     }
 
     setSubmitting(true)
     try {
-      await unlockMonths(database, { months: selected, txnId: cleanTxn, payerNumber: cleanNumber, note: note.trim(), by })
-      toast.success(`Unlocked ${selected.length} month${selected.length > 1 ? 's' : ''}.`)
+      await unlockMonths(database, { months: selected, txnId: cleanTxn, payerNumber: cleanNumber, note: note.trim(), by, free })
+      toast.success(`Unlocked ${selected.length} ${free ? 'free ' : ''}month${selected.length > 1 ? 's' : ''}.`)
       setSelected([])
       setTxnId('')
       setPayerNumber('')
       setNote('')
+      setFree(false)
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : 'Unlock failed.')
     } finally {
@@ -328,7 +335,7 @@ function BillingConsole({ user }: { user: User }) {
         </p>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           label="ERP status"
           value={!status.ready ? '...' : status.locked ? 'Locked' : 'Unlocked'}
@@ -344,6 +351,24 @@ function BillingConsole({ user }: { user: User }) {
           tone={status.locked ? 'bad' : 'good'}
         />
         <StatCard label="Today (Dhaka)" value={`${today.day} ${formatMonth(today.monthKey)}`} hint={`Locks on day ${lockDay} if unpaid`} />
+        <StatCard
+          label="Next payment"
+          value={
+            !status.ready
+              ? '...'
+              : overdueSince
+                ? 'Overdue'
+                : `${lockDay} ${formatMonth(nextPayment)}`
+          }
+          hint={
+            !status.ready
+              ? undefined
+              : overdueSince
+                ? `Since day ${lockDay}, ${formatMonth(overdueSince)}`
+                : `${MONTHLY_RENT} tk for ${formatMonth(nextPayment)}`
+          }
+          tone={overdueSince ? 'bad' : undefined}
+        />
         <StatCard
           label="Due now"
           value={status.unpaidMonths.length ? `${MONTHLY_RENT * status.unpaidMonths.length} tk` : '0 tk'}
@@ -492,18 +517,30 @@ function BillingConsole({ user }: { user: User }) {
               <span className="text-muted-foreground">No months selected</span>
             )}
           </div>
-          <Input placeholder="Txn ID" value={txnId} onChange={(e) => setTxnId(e.target.value)} />
-          <Input placeholder="Payer number (e.g. 01XXXXXXXXX)" value={payerNumber} onChange={(e) => setPayerNumber(e.target.value)} />
-          <Input placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" checked={free} onChange={(e) => setFree(e.target.checked)} className="h-4 w-4 accent-primary" />
+            Free month (no payment)
+          </label>
+          {free ? null : (
+            <>
+              <Input placeholder="Txn ID" value={txnId} onChange={(e) => setTxnId(e.target.value)} />
+              <Input placeholder="Payer number (e.g. 01XXXXXXXXX)" value={payerNumber} onChange={(e) => setPayerNumber(e.target.value)} />
+            </>
+          )}
+          <Input
+            placeholder={free ? 'Reason (optional, e.g. promo month)' : 'Note (optional)'}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
           <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2 text-sm">
             <span>
-              {selected.length} × {MONTHLY_RENT} tk
+              {selected.length} × {free ? 'Free' : `${MONTHLY_RENT} tk`}
             </span>
-            <span className="font-semibold">{selected.length * MONTHLY_RENT} tk</span>
+            <span className="font-semibold">{free ? '0 tk' : `${selected.length * MONTHLY_RENT} tk`}</span>
           </div>
           <Button type="submit" className="w-full" disabled={submitting || selected.length === 0}>
             <Unlock className="h-4 w-4" />
-            {submitting ? 'Unlocking...' : 'Unlock'}
+            {submitting ? 'Unlocking...' : free ? 'Unlock free' : 'Unlock'}
           </Button>
         </form>
       </section>
@@ -576,9 +613,15 @@ function BillingConsole({ user }: { user: User }) {
                 paidList.map((item) => (
                   <tr key={item.month} className="border-b border-border/60 last:border-0">
                     <td className="py-2 pr-3 font-medium">{formatMonth(item.month)}</td>
-                    <td className="py-2 pr-3 font-mono text-xs">{item.txnId}</td>
-                    <td className="py-2 pr-3">{item.payerNumber}</td>
-                    <td className="py-2 pr-3">{item.amount} tk</td>
+                    <td className="py-2 pr-3 font-mono text-xs">{item.free ? '—' : item.txnId}</td>
+                    <td className="py-2 pr-3">{item.free ? '—' : item.payerNumber}</td>
+                    <td className="py-2 pr-3">
+                      {item.free ? (
+                        <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-xs font-medium text-sky-700 dark:text-sky-400">Free</span>
+                      ) : (
+                        `${item.amount} tk`
+                      )}
+                    </td>
                     <td className="py-2 pr-3 text-xs text-muted-foreground">
                       {formatTime(item.unlockedAt)} · {item.unlockedBy}
                     </td>
@@ -646,7 +689,7 @@ function BillingConsole({ user }: { user: User }) {
                         '—'
                       )}
                     </td>
-                    <td className="py-2 pr-3">{log.amount ? `${log.amount} tk` : '—'}</td>
+                    <td className="py-2 pr-3">{log.free ? 'Free' : log.amount ? `${log.amount} tk` : '—'}</td>
                     <td className="py-2 text-xs">
                       {log.by}
                       {log.note ? <span className="block text-muted-foreground">{log.note}</span> : null}
@@ -675,7 +718,7 @@ function StatCard({ label, value, hint, tone }: { label: string; value: string; 
       >
         {value}
       </p>
-      {hint ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{hint}</p> : null}
+      {hint ? <p className="mt-0.5 text-xs text-muted-foreground" title={hint}>{hint}</p> : null}
     </div>
   )
 }

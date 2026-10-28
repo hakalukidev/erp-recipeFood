@@ -47,3 +47,6 @@ ui-debug.log
 *~[0-9]*
 *.bak
 *.swp
+
+# unlock guide (contains team login)
+ERP-Unlock-Guide.pdf

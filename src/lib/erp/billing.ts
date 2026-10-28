@@ -29,6 +29,8 @@ export type PaidMonth = {
   unlockedAt: number
   unlockedBy: string
   note?: string
+  // Given free (e.g. a promo month): no Txn ID or payer number, amount 0.
+  free?: boolean
 }
 
 // Auto lock on unpaid months is always on. 'lock' forces the ERP locked until
@@ -55,6 +57,7 @@ export type BillingLog = {
   txnId?: string
   payerNumber?: string
   amount?: number
+  free?: boolean
   note?: string
   at: number
   by: string
@@ -115,6 +118,15 @@ export function dueMonths(today: ZonedDate, lockDay = LOCK_DAY) {
     months.push(key)
   }
   return months
+}
+
+// First month after the ones already due that still needs paying — its lock day
+// is the next payment date. Skips months paid (or given free) in advance.
+export function nextPaymentMonth(today: ZonedDate, lockDay: number, paid: Record<string, unknown>) {
+  let key = today.day >= lockDay ? addMonths(today.monthKey, 1) : today.monthKey
+  if (key < BILLING_START_MONTH) key = BILLING_START_MONTH
+  while (paid[key]) key = addMonths(key, 1)
+  return key
 }
 
 // Server time, so changing the PC clock can't dodge the lock. Re-evaluated
@@ -252,18 +264,23 @@ export function useBillingStatus(database: Database | null, timeZone?: string): 
 
 export async function unlockMonths(
   database: Database,
-  input: { months: string[]; txnId: string; payerNumber: string; note?: string; by: string }
+  input: { months: string[]; txnId: string; payerNumber: string; note?: string; by: string; free?: boolean }
 ) {
   const at = Date.now()
+  const free = Boolean(input.free)
+  const txnId = free ? '' : input.txnId
+  const payerNumber = free ? '' : input.payerNumber
+  const amount = free ? 0 : MONTHLY_RENT
   const updates: Record<string, unknown> = {}
   for (const month of input.months) {
     updates[`months/${month}`] = {
       month,
-      txnId: input.txnId,
-      payerNumber: input.payerNumber,
-      amount: MONTHLY_RENT,
+      txnId,
+      payerNumber,
+      amount,
       unlockedAt: at,
       unlockedBy: input.by,
+      ...(free ? { free } : {}),
       ...(input.note ? { note: input.note } : {}),
     } satisfies PaidMonth
   }
@@ -271,9 +288,8 @@ export async function unlockMonths(
   updates[`logs/${logId}`] = {
     action: 'unlock',
     months: input.months,
-    txnId: input.txnId,
-    payerNumber: input.payerNumber,
-    amount: MONTHLY_RENT * input.months.length,
+    ...(free ? { free } : { txnId, payerNumber }),
+    amount: amount * input.months.length,
     ...(input.note ? { note: input.note } : {}),
     at,
     by: input.by,
